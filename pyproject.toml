@@ -1,0 +1,56 @@
+[project]
+name = "DiffLab"
+version = "0.1.0"
+description = "Easily train the Diffusion Model with numerous choice of architectures and approaches"
+authors = [{ name = "Louis Roussel"}]
+license = "MIT"
+
+[tool.black]
+line-length = 120
+
+[tool.ruff]
+src = ["src"] # see https://docs.astral.sh/ruff/settings/#src
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "I", # isort
+]
+ignore = [
+    "F722", # forward-annotation-syntax-error, because of Jaxtyping
+    "E731", # do-not-assign-lambda
+]
+
+[tool.ruff.lint.isort]
+# Allow this kind of import on a single line:
+#
+#     from torch import device as Device, dtype as DType
+#
+combine-as-imports = true
+
+[tool.docformatter]
+black = true
+
+[tool.pyright]
+include = ["src/"]
+strict = ["*"]
+exclude = ["**/__pycache__"]
+reportMissingTypeStubs = "warning"
+
+[tool.coverage.run]
+branch = true
+source = ["src/"]
+
+# Also apply to HTML output, where appropriate
+[tool.coverage.report]
+ignore_errors = true # see `build-html-cov` for details
+exclude_also = [
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.typos.default]
+extend-ignore-identifiers-re = ["NDArray*", "interm", "af000ded"]
