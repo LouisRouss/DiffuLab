@@ -1,19 +1,232 @@
+from abc import abstractmethod
+from typing import Callable
+
 import torch
 import torch.nn as nn
 from torch import Tensor
 
-from networks.common import Denoiser
-from networks.nn import (
-    AttentionBlock,
+from networks.common import Denoiser, contextEmbedder
+from networks.utils.nn import (
     Downsample,
-    EmbedSequential,
     LabelEmbed,
-    ResBlock,
     Upsample,
     normalization,
     timestep_embedding,
-    zero_module,
 )
+from networks.utils.utils import checkpoint, default, zero_module
+
+
+class TimestepBlock(nn.Module):
+    """
+    Any module where forward() takes timestep embeddings as a second argument.
+    """
+
+    @abstractmethod
+    def forward(self, x: Tensor, emb: Tensor) -> Tensor:
+        """
+        Apply the module to `x` given `emb` timestep embeddings.
+        """
+
+
+class ContextBlock(nn.Module):
+    """
+    Any module where forward() takes context embeddings as a second argument.
+    """
+
+    @abstractmethod
+    def forward(self, x: Tensor, context: Tensor) -> Tensor:
+        """
+        Apply the module to `x` given `context` embeddings.
+        """
+
+
+class EmbedSequential(nn.Sequential, TimestepBlock, ContextBlock):  # type: ignore
+    """
+    A sequential module that passes timestep embeddings to the children that
+    support it as an extra input.
+    """
+
+    def forward(self, x: Tensor, emb: Tensor, context: Tensor | None = None) -> Tensor:  # type:ignore
+        for layer in self:
+            if isinstance(layer, TimestepBlock) and isinstance(layer, ContextBlock):
+                x = layer(x, emb, context)
+            elif isinstance(layer, TimestepBlock):
+                x = layer(x, emb)
+            elif isinstance(layer, ContextBlock):
+                x = layer(x, context)
+            else:
+                x = layer(x)
+        return x
+
+
+class ResBlock(TimestepBlock):
+    """
+    From https://github.com/openai/guided-diffusion under MIT license as of 2024-18-08
+
+    A residual block that can optionally change the number of channels.
+    :param channels: the number of input channels.
+    :param emb_channels: the number of timestep embedding channels.
+    :param dropout: the rate of dropout.
+    :param out_channels: if specified, the number of out channels.
+    :param use_conv: if True and out_channels is specified, use a spatial
+        convolution instead of a smaller 1x1 convolution to change the
+        channels in the skip connection.
+    :param use_checkpoint: if True, use gradient checkpointing on this module.
+    :param up: if True, use this block for upsampling.
+    :param down: if True, use this block for downsampling.
+    """
+
+    def __init__(
+        self,
+        channels: int,
+        emb_channels: int,
+        dropout: float,
+        out_channels: int | None = None,
+        use_conv: bool = False,
+        use_scale_shift_norm: bool = False,
+        use_checkpoint: bool = False,
+        up: bool = False,
+        down: bool = False,
+    ) -> None:
+        super().__init__()  # type:ignore
+        self.channels = channels
+        self.emb_channels = emb_channels
+        self.dropout = dropout
+        self.out_channels = out_channels or channels
+        self.use_conv = use_conv
+        self.use_checkpoint = use_checkpoint
+        self.use_scale_shift_norm = use_scale_shift_norm
+
+        self.in_layers = nn.Sequential(
+            normalization(channels),
+            nn.SiLU(),
+            nn.Conv2d(channels, self.out_channels, 3, padding=1),
+        )
+
+        self.updown = up or down
+
+        if up:
+            self.h_upd = Upsample(channels, False)
+            self.x_upd = Upsample(channels, False)
+        elif down:
+            self.h_upd = Downsample(channels, False)
+            self.x_upd = Downsample(channels, False)
+        else:
+            self.h_upd = self.x_upd = nn.Identity()
+
+        self.emb_layers = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(
+                emb_channels,
+                2 * self.out_channels if use_scale_shift_norm else self.out_channels,
+            ),
+        )
+        self.out_layers = nn.Sequential(
+            normalization(self.out_channels),
+            nn.SiLU(),
+            nn.Dropout(p=dropout),
+            zero_module(nn.Conv2d(self.out_channels, self.out_channels, 3, padding=1)),
+        )
+
+        if self.out_channels == channels:
+            self.skip_connection = nn.Identity()
+        elif use_conv:
+            self.skip_connection = nn.Conv2d(channels, self.out_channels, 3, padding=1)
+        else:
+            self.skip_connection = nn.Conv2d(channels, self.out_channels, 1)
+
+    def forward(self, x: Tensor, emb: Tensor) -> Tensor:
+        """
+        Apply the block to a Tensor, conditioned on a timestep embedding.
+        :param x: an [N x C x ...] Tensor of features.
+        :param emb: an [N x emb_channels] Tensor of timestep embeddings.
+        :return: an [N x C x ...] Tensor of outputs.
+        """
+        return checkpoint(self._forward, (x, emb), self.parameters(), self.use_checkpoint)
+
+    def _forward(self, x: Tensor, emb: Tensor) -> Tensor:
+        if self.updown:
+            in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
+            h = in_rest(x)
+            h = self.h_upd(h)
+            x = self.x_upd(x)
+            h = in_conv(h)
+        else:
+            h = self.in_layers(x)
+        emb_out = self.emb_layers(emb).type(h.dtype)
+        while len(emb_out.shape) < len(h.shape):
+            emb_out = emb_out[..., None]
+        if self.use_scale_shift_norm:
+            out_norm, out_rest = self.out_layers[0], self.out_layers[1:]
+            scale, shift = torch.chunk(emb_out, 2, dim=1)
+            h = out_norm(h) * (1 + scale) + shift
+            h = out_rest(h)
+        else:
+            h = h + emb_out
+            h = self.out_layers(h)
+        return self.skip_connection(x) + h
+
+
+class AttentionBlock(ContextBlock):
+    def __init__(
+        self,
+        channels: int,
+        num_heads: int = 8,
+        inner_channels: int = -1,
+        dropout: float = 0.0,
+        norm: Callable[..., nn.Module] = normalization,
+        use_checkpoint: bool = False,
+        q_bias: bool = True,
+        kv_bias: bool = True,
+    ):
+        super().__init__()  # type: ignore
+
+        self.use_checkpoint = use_checkpoint
+        self.channels = channels
+        self.inner_channels = channels if inner_channels == -1 else inner_channels
+        self.num_heads = num_heads
+        assert self.inner_channels % self.num_heads == 0, "inner_channels must be divisible by num_heads"
+        self.dim_head = self.inner_channels // num_heads
+        self.scale = self.dim_head**-0.5
+
+        self.norm = norm(channels)
+        self.attend = nn.Softmax(dim=-1)
+        self.dropout = nn.Dropout(dropout)
+
+        self.to_q = nn.Conv1d(channels, self.inner_channels, 1, bias=q_bias)
+        self.to_kv = nn.Conv1d(channels, self.inner_channels * 2, 1, bias=kv_bias)
+
+        self.to_out = nn.Sequential(nn.Linear(self.inner_channels, self.channels), nn.Dropout(dropout))
+
+    def forward(self, x: Tensor, context: Tensor | None = None) -> Tensor:
+        return checkpoint(
+            self._forward,
+            (x, context),
+            self.parameters(),
+            True if self.use_checkpoint else False,
+        )
+
+    def _forward(self, x: Tensor, context: Tensor | None = None) -> Tensor:
+        b, c, *spatial = x.shape
+        x = x.reshape(b, c, -1)
+        context = default(context, self.norm(x))
+
+        qkv = torch.cat(self.to_q(self.norm(x)), *self.to_kv(context).chunk(2, dim=1), dim=1)
+        length = qkv.shape[-1]
+        q, k, v = qkv.chunk(3, dim=1)
+
+        dots = torch.einsum(
+            "bct,bcs->bts",
+            (q * scale).view(b * self.num_heads, self.dim_head, length),  # type: ignore
+            (k * scale).view(b * self.num_heads, self.dim_head, length),  # type: ignore
+        )
+        attn = self.attend(dots.float()).type(dots.dtype)
+        attn = self.dropout(attn)
+
+        out = torch.einsum("bts,bcs->bct", attn, v.reshape(b * self.num_heads, self.dim_head, length))
+        out = out.reshape(b, -1, length)
+        out = self.to_out(out)
+        return (x + out).reshape(b, c, *spatial)
 
 
 class UNetModel(Denoiser):
@@ -64,9 +277,12 @@ class UNetModel(Denoiser):
         resblock_updown: bool = False,
         n_classes: int | None = None,
         classifier_free: bool = False,
+        context_embedder: contextEmbedder | None = None,
     ):
         super().__init__()  # type: ignore
-
+        assert (n_classes is None) != (
+            context_embedder is None
+        ), "n_classes and context_embedder cannot both be specified or both be None"
         self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -80,6 +296,8 @@ class UNetModel(Denoiser):
         self.dtype = torch.bfloat16 if use_fp16 else torch.float32
         self.num_heads = num_heads
         self.num_head_channels = num_head_channels
+        self.context_embedder = context_embedder
+        self.classifier_free = classifier_free
 
         time_embed_dim = model_channels * 4
         self.time_embed = nn.Sequential(
@@ -88,7 +306,9 @@ class UNetModel(Denoiser):
             nn.Linear(time_embed_dim, time_embed_dim),
         )
 
-        self.label_embed = LabelEmbed(n_classes, model_channels, classifier_free) if n_classes is not None else None
+        self.label_embed = (
+            LabelEmbed(n_classes, model_channels, self.classifier_free) if n_classes is not None else None
+        )
 
         ch = input_ch = int(channel_mult[0] * model_channels)
         self.input_blocks = nn.ModuleList([EmbedSequential(nn.Conv2d(in_channels, ch, 3, padding=1))])
@@ -231,10 +451,16 @@ class UNetModel(Denoiser):
             self.num_classes is not None
         ), "must specify y if and only if the model is class-conditional"
 
+        assert (context is not None) == (
+            self.context_embedder is not None
+        ), "must specify context if and only if the model is context-conditional"
+
         hs: list[Tensor] = []
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
+        if self.context_embedder is not None:
+            context = self.context_embedder(context, p)
         h = x.type(self.dtype)
         for module in self.input_blocks:
             h: Tensor = module(h, emb=emb, context=context)
