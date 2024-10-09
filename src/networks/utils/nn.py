@@ -133,23 +133,6 @@ class LabelEmbed(nn.Module):
         return self.embedding(labels)
 
 
-class PatchEmbed(nn.Module):
-    def __init__(self, image_size: int, patch_size: int, in_channels: int, embed_dim: int) -> None:
-        super().__init__()  # type: ignore
-        self.image_size = image_size
-        self.patch_size = patch_size
-        self.in_channels = in_channels
-        self.embed_dim = embed_dim
-        self.num_patches = (image_size // patch_size) ** 2
-        self.projection = nn.Conv2d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.projection(x)  # shape: (batch_size, embed_dim, num_patches, num_patches)
-        x = x.flatten(2)  # shape: (batch_size, embed_dim, num_patches^2)
-        x = x.transpose(1, 2)  # shape: (batch_size, num_patches^2, embed_dim)
-        return x
-
-
 class RotaryPositionalEmbedding(nn.Module):
     def __init__(self, dim: int = 32, base: int = 10_000) -> None:
         super().__init__()  # type: ignore

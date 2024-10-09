@@ -443,7 +443,7 @@ class UNetModel(Denoiser):
         :param x: a [N x C x ...] Tensor of noisy image.
         :param timesteps: a 1-D batch of timesteps.
         :param y: a [N x C x ...] Tensor of labels.
-        :param p: the probability of droping the ground-truth label in the label embedding.
+        :param p: the probability of dropping the ground-truth label in the label embedding.
         :param context: a [N x C x ...] Tensor of context for CrossAttention, can be images, text etc...
         :return: an [N x C x ...] Tensor of outputs.
         """

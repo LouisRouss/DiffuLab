@@ -10,21 +10,11 @@ class Denoiser(nn.Module, ABC):
         super().__init__()  # type: ignore
 
     @abstractmethod
-    def forward(
-        self,
-        x: Tensor,
-        timesteps: Tensor,
-        y: Tensor | None = None,
-        context: Tensor | None = None,
-        p: float = 0.0,
-    ) -> Tensor:
+    def forward(self, x: Tensor, timesteps: Tensor, *args, **kwargs) -> Tensor:  # type: ignore
         """
         Apply the model to an input batch.
         :param x: a [N x C x ...] Tensor of noisy image.
         :param timesteps: a 1-D batch of timesteps.
-        :param y: a [N x C x ...] Tensor of labels.
-        :param context: a [N x C x ...] Tensor of context for CrossAttention, can be images, text etc...
-        :param p: the probability of dropping the ground-truth label / context
         :return: an [N x C x ...] Tensor of outputs.
         """
 
@@ -32,6 +22,22 @@ class Denoiser(nn.Module, ABC):
 class contextEmbedder(nn.Module, ABC):
     def __init__(self):
         super().__init__()  # type: ignore
+
+    @property
+    @abstractmethod
+    def n_output(self) -> int:
+        """
+        Represents the number of output embedding the embedder is returning.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def output_size(self) -> tuple[tuple[int] | int, ...]:
+        """
+        Represents the dimension of each output embedding.
+        """
+        pass
 
     def drop_labels(
         self,
