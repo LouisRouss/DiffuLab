@@ -26,37 +26,39 @@ jobs:
               - scripts/**
               - .github/workflows/ci.yml
 
-      - name: Install Rye
+      - name: Install uv
         if: steps.changes.outputs.sources == 'true'
-        uses: eifinger/setup-rye@v2
+        uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
-          cache-prefix: "refiners-rye-cache"
+          cache-dependency-glob: "uv.lock"
 
-      - name: add Rye shims dir to PATH
+      - name: "Set up Python"
         if: steps.changes.outputs.sources == 'true'
-        run: echo "$RYE_HOME/shims" >> $GITHUB_PATH
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: "pyproject.toml"
 
-      - name: use uv
+      - name: Install the project
         if: steps.changes.outputs.sources == 'true'
-        run: rye config --set-bool behavior.use-uv=true
+        run: uv sync --all-extras --dev
 
-      - name: pin python
+      - name: fmt
         if: steps.changes.outputs.sources == 'true'
-        run: rye pin 3.10
+        run: ruff check . --select F --show-fixes
 
-      - name: rye sync
+      - name: lint
         if: steps.changes.outputs.sources == 'true'
-        run: rye sync --all-features
-
-      - name: rye fmt
-        if: steps.changes.outputs.sources == 'true'
-        run: rye fmt --check
-
-      - name: rye lint
-        if: steps.changes.outputs.sources == 'true'
-        run: rye lint
+        run: ruff check .
 
       - name: typecheck
         if: steps.changes.outputs.sources == 'true'
-        run: rye run pyright
+        run: pyright
+
+      - name: install pyright
+        if: steps.changes.outputs.sources == 'true'
+        run: uv add pyright
+      
+      - name: typecheck
+        if: steps.changes.outputs.sources == 'true'
+        run: pyright
