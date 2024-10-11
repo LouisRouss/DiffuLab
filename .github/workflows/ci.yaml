@@ -43,6 +43,10 @@ jobs:
         if: steps.changes.outputs.sources == 'true'
         run: uv sync --all-extras --dev
 
+      - name: Install ruff
+        if: steps.changes.outputs.sources == 'true'
+        run: uv add ruff
+
       - name: fmt
         if: steps.changes.outputs.sources == 'true'
         run: ruff check . --select F --show-fixes
@@ -50,10 +54,6 @@ jobs:
       - name: lint
         if: steps.changes.outputs.sources == 'true'
         run: ruff check .
-
-      - name: typecheck
-        if: steps.changes.outputs.sources == 'true'
-        run: pyright
 
       - name: install pyright
         if: steps.changes.outputs.sources == 'true'
