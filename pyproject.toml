@@ -5,11 +5,14 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "accelerate>=1.0.0",
     "einops>=0.8.0",
     "numpy>=2.1.2",
     "ruff>=0.6.9",
+    "scipy>=1.14.1",
     "torch>=2.4.1",
     "transformers>=4.45.1",
+    "wandb>=0.18.3",
 ]
 
 [tool.astral]

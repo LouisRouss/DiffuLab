@@ -1,10 +1,11 @@
 import math
 from abc import ABC, abstractmethod
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 import torch
 import torch.distributions as dist
+import torch.nn as nn
 from numpy.typing import NDArray
 from torch import Tensor
 
@@ -13,10 +14,40 @@ from networks.common import Denoiser
 
 
 class Flow(ABC):
-    def init(self, n_steps: int, method: str = "euler"):
-        self.set_steps(n_steps)
+    def init(self, n_steps: int, sampling_method: str = "euler"):
+        self.at = np.empty((n_steps), dtype=np.float32)
+        self.bt = np.empty((n_steps), dtype=np.float32)
+        self.dat = np.empty((n_steps), dtype=np.float32)
+        self.dbt = np.empty((n_steps), dtype=np.float32)
+        self.wt = np.empty((n_steps), dtype=np.float32)
 
-    def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
+        self.set_steps(n_steps)
+        self.sampling_method = sampling_method
+        self.dlambda = 2 * (self.dat / self.at - self.dbt / self.bt)
+
+    @abstractmethod
+    def set_steps(self, n_steps: int) -> None:
+        pass
+
+    @abstractmethod
+    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+        pass
+
+    def compute_loss(
+        self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor, noise: Tensor | None = None
+    ) -> Tensor:
+        model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
+        prediction = model(**model_inputs, timesteps=timesteps)
+        loss = (
+            -1
+            / 2
+            * extract_into_tensor(self.wt, timesteps, model_inputs["x"].shape)
+            * extract_into_tensor(self.dlambda, timesteps, model_inputs["x"].shape)
+            * nn.functional.mse_loss(prediction, noise)
+        )
+        return loss
+
+    def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         if noise is None:
             noise = torch.randn_like(x)
         assert noise.shape == x.shape
@@ -24,28 +55,52 @@ class Flow(ABC):
         at = extract_into_tensor(self.at, timesteps, x.shape)  # type: ignore
         bt = extract_into_tensor(self.bt, timesteps, x.shape)  # type: ignore
         z_t = at * x + bt * noise
-        return z_t
+        return z_t, noise
 
-    @abstractmethod
-    def set_steps(self, n_steps: int) -> None:
-        pass
+    @torch.no_grad()  # type: ignore
+    def denoise(
+        self,
+        model: Denoiser,
+        model_inputs: dict[str, Any],
+        data_shape: tuple[int, ...],
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Tensor:
+        x = torch.randn(data_shape, device=device, dtype=dtype)
+        timesteps: Tensor = torch.ones((data_shape[0]), device=device, dtype=dtype)
+        for n in range(self.steps):  # type: ignore
+            model_inputs["x"] = x
+            x = self.one_step_denoise(model, model_inputs, timesteps)  # type: ignore
+            timesteps -= 1 / self.steps  # type: ignore
+        return x
 
 
 class Straight(Flow):
-    def __init__(self, n_steps: int = 50, method: str = "euler"):
-        super().init(n_steps=n_steps, method=method)
+    def __init__(self, n_steps: int = 50, sampling_method: str = "euler"):
+        super().init(n_steps=n_steps, sampling_method=sampling_method)
 
     def set_steps(self, n_steps: int) -> None:
         self.at = 1 - np.linspace(0, 1, n_steps)
         self.bt = np.linspace(0, 1, n_steps)
+        self.dat = np.full((n_steps), -1, dtype=np.float32)
+        self.dbt = np.full((n_steps), 1, dtype=np.float32)
+        self.wt = self.bt[:-1] / self.at[:-1]
         self.steps = n_steps
+
+    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+        if self.sampling_method == "euler":
+            prediction = model(**model_inputs, timesteps=timesteps)
+            x = model_inputs["x"] - prediction * 1 / self.steps
+            return x
+        else:
+            raise NotImplementedError
 
 
 class EDM(Flow):
-    def __init__(self, mean: float = -1.2, std: float = 1.2, n_steps: int = 50, method: str = "euler"):
+    def __init__(self, mean: float = -1.2, std: float = 1.2, n_steps: int = 50, sampling_method: str = "euler"):
         self.mean = mean
         self.std = std
-        super().init(n_steps=n_steps, method=method)
+        super().init(n_steps=n_steps, sampling_method=sampling_method)
 
     def set_steps(self, n_steps: int) -> None:
         self.at = np.ones((n_steps))
@@ -60,94 +115,83 @@ class EDM(Flow):
         bt = torch.exp(quantile_values)  # type: ignore
         return bt.to(torch.float32).numpy()  # type: ignore
 
+    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+        if self.sampling_method == "euler":
+            prediction = model(**model_inputs, timesteps=timesteps)
+            bt = extract_into_tensor(self.bt, timesteps=timesteps, broadcast_shape=prediction.shape)
+            bt_prev = extract_into_tensor(
+                self.bt, timesteps=timesteps - (1 / self.steps), broadcast_shape=prediction.shape
+            )
+            x = model_inputs["x"] - (bt - bt_prev) * prediction
+            return x
+        # elif self.sampling_method == "ddpm":
+        #     ...
+        else:
+            raise NotImplementedError
+
 
 class Cosine(Flow):
-    def __init__(self, n_steps: int = 50, method: str = "euler"):
-        super().init(n_steps=n_steps, method=method)
+    def __init__(self, n_steps: int = 50, sampling_method: str = "euler"):
+        super().init(n_steps=n_steps, sampling_method=sampling_method)
 
     def set_steps(self, n_steps: int) -> None:
         self.at = np.cos(np.linspace(0, 1, n_steps) * math.pi / 2)
         self.bt = np.sin(np.linspace(0, 1, n_steps) * math.pi / 2)
         self.steps = n_steps
 
-
-class DDPM(Flow):
-    """
-    Largely inspired by https://github.com/openai/guided-diffusion/tree/main under MIT license as of 10/08/2024
-    """
-
-    def __init__(
-        self,
-        learn_sigma: bool = False,
-        rescale_timesteps: bool = False,
-        noise_schedule: str = "linear",
-        n_steps: int = 1000,
-        method: str = "euler",
-    ):
-        self.noise_schedule = noise_schedule
-        self.learn_sigma = learn_sigma
-        self.rescale_timesteps = rescale_timesteps
-        super().init(n_steps=n_steps, method=method)
-
-    def set_steps(self, n_steps: int) -> None:
-        betas = self.get_beta_schedule(n_steps)
-        alphas = 1.0 - betas
-        self.at = np.cumprod(alphas, axis=0)
-        self.bt = np.sqrt(1.0 - self.at)
-        self.steps = n_steps
-
-    def betas_for_alpha_bar(
-        self, alpha_bar: Callable[[float], float], n_steps: int, max_beta: float = 0.999
-    ) -> NDArray[np.float64]:
-        """
-        Create a beta schedule that discretizes the given alpha_t_bar function,
-        which defines the cumulative product of (1-beta) over time from t = [0,1].
-
-        :param num_diffusion_timesteps: the number of betas to produce.
-        :param alpha_bar: a lambda that takes an argument t from 0 to 1 and
-                        produces the cumulative product of (1-beta) up to that
-                        part of the diffusion process.
-        :param max_beta: the maximum beta to use; use values lower than 1 to
-                        prevent singularities.
-        """
-        betas: list[float] = []
-        for i in range(n_steps):
-            t1 = i / n_steps
-            t2 = (i + 1) / n_steps
-            betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
-        return np.array(betas)
-
-    def get_beta_schedule(self, n_steps: int) -> NDArray[np.float64]:
-        """
-        Get a pre-defined beta schedule for the given name.
-
-        The beta schedule library consists of beta schedules which remain similar
-        in the limit of num_diffusion_timesteps.
-        Beta schedules may be added, but should not be removed or changed once
-        they are committed to maintain backwards compatibility.
-        """
-        if self.noise_schedule == "linear":
-            # Linear schedule from Ho et al, extended to work for any number of
-            # diffusion steps.
-            scale = 1000 / n_steps
-            beta_start = scale * 0.0001
-            beta_end = scale * 0.02
-            return np.linspace(beta_start, beta_end, n_steps, dtype=np.float64)  # type: ignore
-        elif self.noise_schedule == "cosine":
-            return self.betas_for_alpha_bar(lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2, n_steps)
+    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+        if self.sampling_method == "euler":
+            prediction = model(**model_inputs, timesteps=timesteps)
+            x = model_inputs["x"] - (
+                math.pi / 2 * extract_into_tensor(self.at, timesteps, prediction.shape)
+            ) * prediction * (1 / self.steps)
+            return x
+        # elif self.sampling_method == "ddpm":
+        #     ...
         else:
-            raise NotImplementedError(f"unknown beta schedule: {self.noise_schedule}")
+            raise NotImplementedError
 
 
 class Diffuser:
-    def __init__(self, denoiser: Denoiser, method: str = "rectified_flow"):
-        self.method = method
+    def __init__(
+        self,
+        denoiser: Denoiser,
+        model_type: str = "rectified_flow",
+        edm_mean: float = -1.2,
+        edm_std: float = 1.2,
+        n_steps: int = 50,
+        sampling_method: str = "euler",
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ):
+        self.model_type = model_type
         self.denoiser = denoiser
+        self.device = device
+        self.dtype = dtype
 
-        if self.method == "rectified_flow":
-            self.flow = Straight()
+        if self.model_type == "rectified_flow":
+            self.flow = Straight(n_steps=n_steps, sampling_method=sampling_method)
 
-    def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
+        elif self.model_type == "edm":
+            self.flow = EDM(mean=edm_mean, std=edm_std, n_steps=n_steps, sampling_method=sampling_method)
+
+        elif self.model_type == "cosine":
+            self.flow = Cosine(n_steps=n_steps, sampling_method=sampling_method)
+
+        else:
+            raise NotImplementedError
+
+    def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         return self.flow.add_noise(x, timesteps, noise)
 
-    def one_step_denoise(self, model_inputs: dict[str, Any]) -> Tensor: ...
+    def one_step_denoise(self, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+        return self.flow.one_step_denoise(self.denoiser, model_inputs, timesteps)
+
+    def denoise(
+        self,
+        model_inputs: dict[str, Any],
+        data_shape: tuple[int, ...],
+        device: torch.device | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> Tensor:
+        return self.flow.denoise(self.denoiser, model_inputs, data_shape, device, dtype)
