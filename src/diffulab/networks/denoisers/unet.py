@@ -5,15 +5,15 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from networks.common import Denoiser, contextEmbedder
-from networks.utils.nn import (
+from diffulab.networks.common import ContextEmbedder, Denoiser
+from diffulab.networks.utils.nn import (
     Downsample,
     LabelEmbed,
     Upsample,
     normalization,
     timestep_embedding,
 )
-from networks.utils.utils import checkpoint, default, zero_module
+from diffulab.networks.utils.utils import checkpoint, default, zero_module
 
 
 class TimestepBlock(nn.Module):
@@ -277,7 +277,7 @@ class UNetModel(Denoiser):
         resblock_updown: bool = False,
         n_classes: int | None = None,
         classifier_free: bool = False,
-        context_embedder: contextEmbedder | None = None,
+        context_embedder: ContextEmbedder | None = None,
     ):
         super().__init__()  # type: ignore
         assert (n_classes is None) != (

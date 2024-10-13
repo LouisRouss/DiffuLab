@@ -5,8 +5,8 @@ import torch.nn as nn
 from einops import rearrange  # type: ignore
 from torch import Tensor
 
-from networks.common import Denoiser, contextEmbedder
-from networks.utils.nn import RotaryPositionalEmbedding, timestep_embedding
+from diffulab.networks.common import ContextEmbedder, Denoiser
+from diffulab.networks.utils.nn import RotaryPositionalEmbedding, timestep_embedding
 
 
 class RMSNorm(torch.nn.Module):
@@ -296,7 +296,7 @@ class MMDiT(Denoiser):
 
     def __init__(
         self,
-        context_embedder: contextEmbedder,
+        context_embedder: ContextEmbedder,
         context_dim: int = 4096,
         input_channels: int = 3,
         input_dim: int = 4096,

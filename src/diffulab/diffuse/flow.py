@@ -9,8 +9,8 @@ import torch.nn as nn
 from numpy.typing import NDArray
 from torch import Tensor
 
-from diffuse.utils import extract_into_tensor
-from networks.common import Denoiser
+from diffulab.diffuse.utils import extract_into_tensor
+from diffulab.networks.common import Denoiser
 
 
 class Flow(ABC):
@@ -31,6 +31,10 @@ class Flow(ABC):
 
     @abstractmethod
     def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def draw_timesteps(self, batch_size: int) -> Tensor:
         pass
 
     def compute_loss(
@@ -95,6 +99,9 @@ class Straight(Flow):
         else:
             raise NotImplementedError
 
+    def draw_timesteps(self, batch_size: int) -> Tensor:
+        return torch.rand((batch_size), dtype=torch.float32)
+
 
 class EDM(Flow):
     def __init__(self, mean: float = -1.2, std: float = 1.2, n_steps: int = 50, sampling_method: str = "euler"):
@@ -129,6 +136,9 @@ class EDM(Flow):
         else:
             raise NotImplementedError
 
+    def draw_timesteps(self, batch_size: int) -> Tensor:
+        return torch.rand((batch_size), dtype=torch.float32)
+
 
 class Cosine(Flow):
     def __init__(self, n_steps: int = 50, sampling_method: str = "euler"):
@@ -150,6 +160,9 @@ class Cosine(Flow):
         #     ...
         else:
             raise NotImplementedError
+
+    def draw_timesteps(self, batch_size: int) -> Tensor:
+        return torch.rand((batch_size), dtype=torch.float32)
 
 
 class Diffuser:

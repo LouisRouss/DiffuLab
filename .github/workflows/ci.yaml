@@ -1,5 +1,4 @@
 name: CI
-
 on:
   push:
     branches: ["**"]
@@ -46,6 +45,10 @@ jobs:
       - name: Install ruff
         if: steps.changes.outputs.sources == 'true'
         run: uv add ruff
+
+      - name: Activate environment
+        if: steps.changes.outputs.sources == 'true'
+        run: source .venv/bin/activate
 
       - name: fmt
         if: steps.changes.outputs.sources == 'true'

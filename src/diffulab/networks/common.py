@@ -19,7 +19,7 @@ class Denoiser(nn.Module, ABC):
         """
 
 
-class contextEmbedder(nn.Module, ABC):
+class ContextEmbedder(nn.Module, ABC):
     def __init__(self):
         super().__init__()  # type: ignore
 
