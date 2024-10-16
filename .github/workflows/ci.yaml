@@ -29,7 +29,7 @@ jobs:
         if: steps.changes.outputs.sources == 'true'
         uses: astral-sh/setup-uv@v3
         with:
-          enable-cache: false
+          enable-cache: true
           cache-dependency-glob: "uv.lock"
 
       - name: "Set up Python"
@@ -42,26 +42,14 @@ jobs:
         if: steps.changes.outputs.sources == 'true'
         run: uv sync --all-extras --dev
 
-      - name: Install ruff
-        if: steps.changes.outputs.sources == 'true'
-        run: uv add ruff
-
-      - name: Activate environment
-        if: steps.changes.outputs.sources == 'true'
-        run: source .venv/bin/activate
-
       - name: fmt
         if: steps.changes.outputs.sources == 'true'
-        run: ruff check . --select F --show-fixes
+        run: uv run ruff check . --select F --show-fixes
 
       - name: lint
         if: steps.changes.outputs.sources == 'true'
-        run: ruff check .
-
-      - name: install pyright
-        if: steps.changes.outputs.sources == 'true'
-        run: uv add pyright
+        run: uv run ruff check .
       
       - name: typecheck
         if: steps.changes.outputs.sources == 'true'
-        run: pyright
+        run: uv run pyright
