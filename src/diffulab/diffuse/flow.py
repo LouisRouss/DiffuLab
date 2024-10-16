@@ -22,7 +22,9 @@ class Flow(ABC):
         self.log_snr = np.empty((n_steps), dtype=np.float32)
         self.dlog_snr = np.empty((n_steps), dtype=np.float32)
         self.wt = np.empty((n_steps), dtype=np.float32)
+        self.timesteps: list[float] = []
         self.steps: int = n_steps
+
         self.set_steps(n_steps)
         self.sampling_method = sampling_method
 
@@ -35,11 +37,11 @@ class Flow(ABC):
         pass
 
     @abstractmethod
-    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
         pass
 
-    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
-        v = self.get_v(model, model_inputs, timesteps)
+    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], t_prev: float, t_curr: float) -> Tensor:
+        v = self.get_v(model, model_inputs, t_curr)
         if self.sampling_method == "euler":
             x_t_minus_one = model_inputs["x"] - v * 1 / self.steps
             return x_t_minus_one
@@ -74,17 +76,16 @@ class Flow(ABC):
     def denoise(
         self,
         model: Denoiser,
-        model_inputs: dict[str, Any],
         data_shape: tuple[int, ...],
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
+        model_inputs: dict[str, Any] = {},
     ) -> Tensor:
+        assert len(self.timesteps) == self.steps, "Please set the number of steps before denoising."
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
         x = torch.randn(data_shape, device=device, dtype=dtype)
-        timesteps: Tensor = torch.ones((data_shape[0]), device=device, dtype=dtype)
-        for n in range(self.steps):  # type: ignore
+        for t_curr, t_prev in zip(self.timesteps[:-1], self.timesteps[1:]):  # type: ignore
             model_inputs["x"] = x
-            x = self.one_step_denoise(model, model_inputs, timesteps)  # type: ignore
-            timesteps -= 1 / self.steps  # type: ignore
+            x = self.one_step_denoise(model, model_inputs, t_curr=t1, t_prev=t0)  # type: ignore
         return x
 
 
@@ -100,9 +101,13 @@ class Straight(Flow):
         self.log_snr = np.log(self.at**2 / self.bt**2)
         self.dlog_snr = 2 * (dat / self.at - dbt / self.bt)
         self.wt = self.bt[:-1] / self.at[:-1]
+        self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
         self.steps = n_steps
 
-    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
+        timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
         prediction = model(**model_inputs, timesteps=timesteps)
         return prediction
 
@@ -126,9 +131,13 @@ class Cosine(Flow):
             self.wt = np.exp(-self.log_snr / 2)  # for v-prediction
         else:
             raise NotImplementedError
+        self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
         self.steps = n_steps
 
-    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
+    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
+        timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
         if self.prediction_type == "v":
             prediction = model(**model_inputs, timesteps=timesteps)
             return (math.pi / 2) * prediction
@@ -186,13 +195,10 @@ class Diffuser:
         edm_std: float = 1.2,
         n_steps: int = 50,
         sampling_method: str = "euler",
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
     ):
         self.model_type = model_type
         self.denoiser = denoiser
-        self.device = device
-        self.dtype = dtype
+        self.n_steps = n_steps
 
         if self.model_type == "rectified_flow":
             self.flow = Straight(n_steps=n_steps, sampling_method=sampling_method)
@@ -206,17 +212,24 @@ class Diffuser:
         else:
             raise NotImplementedError
 
-    def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
-        return self.flow.add_noise(x, timesteps, noise)
+    def eval(self) -> None:
+        self.denoiser.eval()
 
-    def one_step_denoise(self, model_inputs: dict[str, Any], timesteps: Tensor) -> Tensor:
-        return self.flow.one_step_denoise(self.denoiser, model_inputs, timesteps)
+    def train(self) -> None:
+        self.denoiser.train()
 
-    def denoise(
+    def draw_timesteps(self, batch_size: int) -> Tensor:
+        return self.flow.draw_timesteps(batch_size=batch_size)
+
+    def compute_loss(self, model_inputs: dict[str, Any], timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
+        return self.flow.compute_loss(self.denoiser, model_inputs, timesteps, noise)
+
+    def set_steps(self, n_steps: int):
+        self.flow.set_steps(n_steps)
+
+    def generate(
         self,
-        model_inputs: dict[str, Any],
         data_shape: tuple[int, ...],
-        device: torch.device | None = None,
-        dtype: torch.dtype | None = None,
+        model_inputs: dict[str, Any] = {},
     ) -> Tensor:
-        return self.flow.denoise(self.denoiser, model_inputs, data_shape, device, dtype)
+        return self.flow.denoise(self.denoiser, data_shape, model_inputs)
