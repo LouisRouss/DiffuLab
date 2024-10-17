@@ -83,9 +83,9 @@ class Flow(ABC):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         x = torch.randn(data_shape, device=device, dtype=dtype)
-        for t_curr, t_prev in zip(self.timesteps[:-1], self.timesteps[1:]):  # type: ignore
+        for t_curr, t_prev in zip(self.timesteps[:-1], self.timesteps[1:]):
             model_inputs["x"] = x
-            x = self.one_step_denoise(model, model_inputs, t_curr=t1, t_prev=t0)  # type: ignore
+            x = self.one_step_denoise(model, model_inputs, t_curr=t_curr, t_prev=t_prev)
         return x
 
 

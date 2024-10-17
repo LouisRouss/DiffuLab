@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+import torch
 from accelerate import Accelerator  # type: ignore
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
@@ -71,7 +72,7 @@ class Trainer:
         tq_epoch = tqdm(range(self.n_epoch), disable=not self.accelerator.is_main_process, leave=False, position=0)
         logging.info("Begin training")
         for epoch in tq_epoch:
-            diffuser.train()  # type: ignore
+            diffuser.train()
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
             tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process)  # type: ignore
@@ -80,7 +81,7 @@ class Trainer:
                     optimizer.zero_grad()  # type: ignore
                     timesteps = diffuser.draw_timesteps(self.batch_size)
                     batch.update({"p": p_classifier_free_guidance})
-                    loss = diffuser.compute_loss(model_inputs=batch, timesteps=timesteps)  # type: ignore
+                    loss = diffuser.compute_loss(model_inputs=batch, timesteps=timesteps)
                     tracker.update(loss.item(), key="loss")
                     self.accelerator.backward(loss)  # type: ignore
                     optimizer.step()  # type: ignore
@@ -89,7 +90,7 @@ class Trainer:
                     tq_batch.set_description(f"Loss: {tracker.avg['loss'] :.4f}")
 
             gathered_loss: list[Tensor] = self.accelerator.gather(  # type: ignore
-                torch.tensor(tracker.avg["loss"], device=self.accelerator.device)  # type: ignore
+                torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
             )
             self.accelerator.log({"train/loss": gathered_loss.mean().item()}, step=epoch)  # type: ignore
             tracker.reset()
@@ -129,7 +130,7 @@ class Trainer:
                 if self.accelerator.is_main_process:
                     diffuser.eval()
                     (Path(save_path) / "images").mkdir(exist_ok=True)
-                    wandb_tracker = accelerator.get_tracker("wandb")  # type: ignore
+                    wandb_tracker = self.accelerator.get_tracker("wandb")  # type: ignore
                     batch: dict[str, Any] = next(iter(val_dataloader))  # type: ignore
                     images = diffuser.generate(data_shape=batch["x"], model_inputs=batch)  # type: ignore
                     images = wandb_tracker.Image(images, caption="Validation Images")  # type: ignore

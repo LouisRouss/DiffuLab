@@ -377,16 +377,30 @@ class MMDiT(Denoiser):
 
         return x[:, :, :H, :W]
 
-    def forward(self, x: Tensor, timesteps: Tensor, context: Tensor | None = None, p: float = 0.0) -> Tensor:
+    def forward(
+        self,
+        x: Tensor,
+        timesteps: Tensor,
+        context: Tensor | None = None,
+        p: float = 0.0,
+        x_context: Tensor | None = None,
+    ) -> Tensor:
+        if x_context is not None:
+            x = torch.cat([x, x_context], dim=1)
+
         emb = self.time_embed(timestep_embedding(timesteps, self.input_channels))
 
-        context_pooled, context = self.context_embedder(context, p)
-        context_pooled = self.pooled_embed(context_pooled) + emb
-        context = self.context_embed(context)
+        if context is not None:
+            context_pooled, context = self.context_embedder(context, p)
+            context_pooled = self.pooled_embed(context_pooled) + emb
+            context = self.context_embed(context)
+        else:
+            context_pooled = emb.clone()
+            context = x.clone()
 
         x = self.patchify(x)
-        x, context = self.layers(x, context)
+        x, context = self.layers(x, context_pooled, context)
 
-        x = self.last_layer(x)
+        x = self.last_layer(x, context_pooled)
         x = self.unpatchify(x)
         return x

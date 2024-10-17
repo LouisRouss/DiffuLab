@@ -196,7 +196,7 @@ class AttentionBlock(ContextBlock):
         self.to_q = nn.Conv1d(channels, self.inner_channels, 1, bias=q_bias)
         self.to_kv = nn.Conv1d(channels, self.inner_channels * 2, 1, bias=kv_bias)
 
-        self.to_out = nn.Sequential(nn.Linear(self.inner_channels, self.channels), nn.Dropout(dropout))
+        self.to_out = nn.Sequential(nn.Conv1d(self.inner_channels, self.channels, 1), nn.Dropout(dropout))
 
     def forward(self, x: Tensor, context: Tensor | None = None) -> Tensor:
         return checkpoint(
@@ -211,14 +211,14 @@ class AttentionBlock(ContextBlock):
         x = x.reshape(b, c, -1)
         context = default(context, self.norm(x))
 
-        qkv = torch.cat(self.to_q(self.norm(x)), *self.to_kv(context).chunk(2, dim=1), dim=1)
+        qkv = torch.cat((self.to_q(self.norm(x)), *self.to_kv(context).chunk(2, dim=1)), dim=1)
         length = qkv.shape[-1]
         q, k, v = qkv.chunk(3, dim=1)
 
         dots = torch.einsum(
             "bct,bcs->bts",
-            (q * scale).view(b * self.num_heads, self.dim_head, length),  # type: ignore
-            (k * scale).view(b * self.num_heads, self.dim_head, length),  # type: ignore
+            (q * self.scale).view(b * self.num_heads, self.dim_head, length),
+            (k * self.scale).view(b * self.num_heads, self.dim_head, length),
         )
         attn = self.attend(dots.float()).type(dots.dtype)
         attn = self.dropout(attn)
@@ -234,7 +234,7 @@ class UNetModel(Denoiser):
     Inspired by https://github.com/openai/guided-diffusion under MIT license as of 2024-18-08
 
     The full UNet model with attention and timestep embedding.
-    :param in_channels: channels in the input Tensor, for image colorization : Y_channels + X_channels .
+    :param in_channels: channels in the input Tensor
     :param model_channels: base channel count for the model.
     :param out_channels: channels in the output Tensor.
     :param num_res_blocks: number of residual blocks per downsample.
@@ -280,9 +280,9 @@ class UNetModel(Denoiser):
         context_embedder: ContextEmbedder | None = None,
     ):
         super().__init__()  # type: ignore
-        assert (n_classes is None) != (
-            context_embedder is None
-        ), "n_classes and context_embedder cannot both be specified or both be None"
+        assert not (
+            n_classes is not None and context_embedder is not None
+        ), "n_classes and context_embedder cannot both be specified"
         self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -298,36 +298,39 @@ class UNetModel(Denoiser):
         self.num_head_channels = num_head_channels
         self.context_embedder = context_embedder
         self.classifier_free = classifier_free
+        self.n_classes = n_classes
 
-        time_embed_dim = model_channels * 4
+        self.time_embed_dim = self.model_channels * 4
         self.time_embed = nn.Sequential(
-            nn.Linear(model_channels, time_embed_dim),
+            nn.Linear(self.model_channels, self.time_embed_dim),
             nn.SiLU(),
-            nn.Linear(time_embed_dim, time_embed_dim),
+            nn.Linear(self.time_embed_dim, self.time_embed_dim),
         )
 
         self.label_embed = (
-            LabelEmbed(n_classes, model_channels, self.classifier_free) if n_classes is not None else None
+            LabelEmbed(self.n_classes, self.time_embed_dim, self.classifier_free)
+            if self.n_classes is not None
+            else None
         )
 
-        ch = input_ch = int(channel_mult[0] * model_channels)
+        ch = input_ch = int(self.channel_mult[0] * self.model_channels)
         self.input_blocks = nn.ModuleList([EmbedSequential(nn.Conv2d(in_channels, ch, 3, padding=1))])
         self._feature_size = ch
         input_block_chans = [ch]
         ds = 1
-        for level, mult in enumerate(channel_mult):
+        for level, mult in enumerate(self.channel_mult):
             for _ in range(num_res_blocks):
                 layers: list[nn.Module] = [
                     ResBlock(
                         ch,
-                        time_embed_dim,
+                        self.time_embed_dim,
                         dropout,
-                        out_channels=int(mult * model_channels),
+                        out_channels=int(mult * self.model_channels),
                         use_checkpoint=use_checkpoint,
                         use_scale_shift_norm=use_scale_shift_norm,
                     )
                 ]
-                ch = int(mult * model_channels)
+                ch = int(mult * self.model_channels)
                 if ds in attention_resolutions:
                     layers.append(
                         AttentionBlock(
@@ -340,13 +343,13 @@ class UNetModel(Denoiser):
                 self.input_blocks.append(EmbedSequential(*layers))
                 self._feature_size += ch
                 input_block_chans.append(ch)
-            if level != len(channel_mult) - 1:
+            if level != len(self.channel_mult) - 1:
                 out_ch = ch
                 self.input_blocks.append(
                     EmbedSequential(
                         ResBlock(
                             ch,
-                            time_embed_dim,
+                            self.time_embed_dim,
                             dropout,
                             out_channels=out_ch,
                             use_checkpoint=use_checkpoint,
@@ -365,7 +368,7 @@ class UNetModel(Denoiser):
         self.middle_block = EmbedSequential(
             ResBlock(
                 ch,
-                time_embed_dim,
+                self.time_embed_dim,
                 dropout,
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
@@ -378,7 +381,7 @@ class UNetModel(Denoiser):
             ),
             ResBlock(
                 ch,
-                time_embed_dim,
+                self.time_embed_dim,
                 dropout,
                 use_checkpoint=use_checkpoint,
                 use_scale_shift_norm=use_scale_shift_norm,
@@ -387,13 +390,13 @@ class UNetModel(Denoiser):
         self._feature_size += ch
 
         self.output_blocks = nn.ModuleList([])
-        for level, mult in list(enumerate(channel_mult))[::-1]:
+        for level, mult in list(enumerate(self.channel_mult))[::-1]:
             for i in range(num_res_blocks + 1):
                 ich = input_block_chans.pop()
                 layers = [
                     ResBlock(
                         ch + ich,
-                        time_embed_dim,
+                        self.time_embed_dim,
                         dropout,
                         out_channels=int(model_channels * mult),
                         use_checkpoint=use_checkpoint,
@@ -415,7 +418,7 @@ class UNetModel(Denoiser):
                     layers.append(
                         ResBlock(
                             ch,
-                            time_embed_dim,
+                            self.time_embed_dim,
                             dropout,
                             out_channels=out_ch,
                             use_checkpoint=use_checkpoint,
@@ -436,31 +439,49 @@ class UNetModel(Denoiser):
         )
 
     def forward(
-        self, x: Tensor, timesteps: Tensor, y: Tensor | None = None, context: Tensor | None = None, p: float = 0.0
+        self,
+        x: Tensor,
+        timesteps: Tensor,
+        y: Tensor | None = None,
+        context: Tensor | None = None,
+        p: float = 0.0,
+        x_context: Tensor | None = None,
     ) -> Tensor:
         """
         Apply the model to an input batch.
         :param x: a [N x C x ...] Tensor of noisy image.
         :param timesteps: a 1-D batch of timesteps.
-        :param y: a [N x C x ...] Tensor of labels.
+        :param y: a [N x C x ...] Tensor of labels (embedding computed and added with timestep embedding).
         :param p: the probability of dropping the ground-truth label in the label embedding.
         :param context: a [N x C x ...] Tensor of context for CrossAttention, can be images, text etc...
+        :param x_context: a [N x C x ...] Tensor of context for the input image that will be concatenated with the noisy data
         :return: an [N x C x ...] Tensor of outputs.
         """
+        assert (
+            list(x.shape[1:]) == self.image_size
+        ), f"Input shape {x.shape[1:]} does not match model image size {self.image_size}"
+
         assert (y is not None) == (
-            self.num_classes is not None
+            self.n_classes is not None
         ), "must specify y if and only if the model is class-conditional"
 
         assert (context is not None) == (
             self.context_embedder is not None
         ), "must specify context if and only if the model is context-conditional"
 
+        if p > 0:
+            assert self.classifier_free, "probability of dropping for classifier free guidance is only available if model is set up to be classifier free"
+            assert (
+                self.n_classes
+            ), "probability of dropping for classifier free guidance is only available if a number of classes is set"
         hs: list[Tensor] = []
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
         if self.context_embedder is not None:
             context = self.context_embedder(context, p)
+        if x_context is not None:
+            x = torch.cat([x, x_context], dim=1)
         h = x.type(self.dtype)
         for module in self.input_blocks:
             h: Tensor = module(h, emb=emb, context=context)

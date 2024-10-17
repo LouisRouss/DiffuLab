@@ -118,7 +118,7 @@ class LabelEmbed(nn.Module):
         :param p: the probability of dropping a label.
         :return: an [N] tensor of modified labels.
         """
-        return torch.where(torch.rand_like(labels) < p, self.num_classes, labels)
+        return torch.where(torch.rand(labels.size(), device=labels.device) < p, self.num_classes, labels)
 
     def forward(self, labels: Tensor, p: float = 0) -> Tensor:
         """
