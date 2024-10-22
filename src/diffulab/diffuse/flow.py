@@ -2,7 +2,6 @@ import math
 from abc import ABC, abstractmethod
 from typing import Any
 
-import numpy as np
 import torch
 
 # import torch.distributions as dist
@@ -11,22 +10,43 @@ import torch.nn as nn
 # from numpy.typing import NDArray
 from torch import Tensor
 
-from diffulab.diffuse.utils import extract_into_tensor
-from diffulab.networks.common import Denoiser
+from diffulab.networks.denoisers.common import Denoiser
 
 
 class Flow(ABC):
     def init(self, n_steps: int, sampling_method: str = "euler"):
-        self.at = np.empty((n_steps), dtype=np.float32)
-        self.bt = np.empty((n_steps), dtype=np.float32)
-        self.log_snr = np.empty((n_steps), dtype=np.float32)
-        self.dlog_snr = np.empty((n_steps), dtype=np.float32)
-        self.wt = np.empty((n_steps), dtype=np.float32)
         self.timesteps: list[float] = []
         self.steps: int = n_steps
-
         self.set_steps(n_steps)
         self.sampling_method = sampling_method
+
+    @abstractmethod
+    def at(self, timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def bt(self, timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def dat(self, timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def dbt(self, timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def log_snr(self, timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def dlog_snr(self, timesteps: Tensor) -> Tensor:
+        pass
+
+    @abstractmethod
+    def wt(self, timesteps: Tensor) -> Tensor:
+        pass
 
     @abstractmethod
     def set_steps(self, n_steps: int) -> None:
@@ -56,10 +76,10 @@ class Flow(ABC):
         loss = (
             -1
             / 2
-            * extract_into_tensor(self.wt, timesteps, model_inputs["x"].shape)
-            * extract_into_tensor(self.dlog_snr, timesteps, model_inputs["x"].shape)
-            * nn.functional.mse_loss(prediction, noise)
-        )
+            * self.wt(timesteps)
+            * self.dlog_snr(timesteps)
+            * nn.functional.mse_loss(prediction, noise, reduction="none").mean(dim=list(range(1, prediction.dim())))
+        ).mean()
         return loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
@@ -67,8 +87,8 @@ class Flow(ABC):
             noise = torch.randn_like(x)
         assert noise.shape == x.shape
         assert timesteps.shape[0] == x.shape[0]
-        at = extract_into_tensor(self.at, timesteps, x.shape)  # type: ignore
-        bt = extract_into_tensor(self.bt, timesteps, x.shape)  # type: ignore
+        at = self.at(timesteps).view(-1, *([1] * (x.dim() - 1))).to(x.device)
+        bt = self.bt(timesteps).view(-1, *([1] * (x.dim() - 1))).to(x.device)
         z_t = at * x + bt * noise
         return z_t, noise
 
@@ -94,15 +114,29 @@ class Straight(Flow):
         super().init(n_steps=n_steps, sampling_method=sampling_method)
 
     def set_steps(self, n_steps: int) -> None:
-        self.at = 1 - np.linspace(0, 1, n_steps)
-        self.bt = np.linspace(0, 1, n_steps)
-        dat = np.full((n_steps), -1, dtype=np.float32)
-        dbt = np.full((n_steps), 1, dtype=np.float32)
-        self.log_snr = np.log(self.at**2 / self.bt**2)
-        self.dlog_snr = 2 * (dat / self.at - dbt / self.bt)
-        self.wt = self.bt[:-1] / self.at[:-1]
         self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
         self.steps = n_steps
+
+    def at(self, timesteps: Tensor) -> Tensor:
+        return 1 - timesteps
+
+    def bt(self, timesteps: Tensor) -> Tensor:
+        return timesteps
+
+    def dat(self, timesteps: Tensor) -> Tensor:
+        return torch.full_like(timesteps, -1)
+
+    def dbt(self, timesteps: Tensor) -> Tensor:
+        return torch.full_like(timesteps, 1)
+
+    def log_snr(self, timesteps: Tensor) -> Tensor:
+        return torch.log(self.at(timesteps) ** 2 / self.bt(timesteps) ** 2)
+
+    def dlog_snr(self, timesteps: Tensor) -> Tensor:
+        return 2 * (self.dat(timesteps) / self.at(timesteps) - self.dbt(timesteps) / self.bt(timesteps))
+
+    def wt(self, timesteps: Tensor) -> Tensor:
+        return self.bt(timesteps) / self.at(timesteps)
 
     def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
         device = next(model.parameters()).device
@@ -121,18 +155,32 @@ class Cosine(Flow):
         super().init(n_steps=n_steps, sampling_method=sampling_method)
 
     def set_steps(self, n_steps: int) -> None:
-        self.at = np.cos(np.linspace(0, 1, n_steps) * math.pi / 2)
-        self.bt = np.sin(np.linspace(0, 1, n_steps) * math.pi / 2)
-        dat = -math.pi / 2 * np.sin(np.linspace(0, 1, n_steps) * math.pi / 2)
-        dbt = math.pi / 2 * np.cos(np.linspace(0, 1, n_steps) * math.pi / 2)
-        self.log_snr = np.log(self.at**2 / self.bt**2)
-        self.dlog_snr = 2 * (dat / self.at - dbt / self.bt)
-        if self.prediction_type == "v":
-            self.wt = np.exp(-self.log_snr / 2)  # for v-prediction
-        else:
-            raise NotImplementedError
         self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
         self.steps = n_steps
+
+    def at(self, timesteps: Tensor) -> Tensor:
+        return torch.cos(timesteps * math.pi / 2)
+
+    def bt(self, timesteps: Tensor) -> Tensor:
+        return torch.sin(timesteps * math.pi / 2)
+
+    def dat(self, timesteps: Tensor) -> Tensor:
+        return -math.pi / 2 * torch.sin(timesteps * math.pi / 2)
+
+    def dbt(self, timesteps: Tensor) -> Tensor:
+        return math.pi / 2 * torch.cos(timesteps * math.pi / 2)
+
+    def log_snr(self, timesteps: Tensor) -> Tensor:
+        return torch.log(self.at(timesteps) ** 2 / self.bt(timesteps) ** 2)
+
+    def dlog_snr(self, timesteps: Tensor) -> Tensor:
+        return 2 * (self.dat(timesteps) / self.at(timesteps) - self.dbt(timesteps) / self.bt(timesteps))
+
+    def wt(self, timesteps: Tensor, prediction_type: str = "v") -> Tensor:
+        if prediction_type == "v":
+            return torch.exp(-self.log_snr(timesteps) / 2)
+        else:
+            raise NotImplementedError
 
     def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
         device = next(model.parameters()).device

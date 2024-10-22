@@ -5,7 +5,8 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from diffulab.networks.common import ContextEmbedder, Denoiser
+from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.embedders.common import ContextEmbedder
 from diffulab.networks.utils.nn import (
     Downsample,
     LabelEmbed,
@@ -272,7 +273,6 @@ class UNetModel(Denoiser):
         use_checkpoint: bool = False,
         use_fp16: bool = False,
         num_heads: int = 1,
-        num_head_channels: int = -1,
         use_scale_shift_norm: bool = False,
         resblock_updown: bool = False,
         n_classes: int | None = None,
@@ -295,7 +295,6 @@ class UNetModel(Denoiser):
         self.use_checkpoint = use_checkpoint
         self.dtype = torch.bfloat16 if use_fp16 else torch.float32
         self.num_heads = num_heads
-        self.num_head_channels = num_head_channels
         self.context_embedder = context_embedder
         self.classifier_free = classifier_free
         self.n_classes = n_classes
@@ -458,8 +457,8 @@ class UNetModel(Denoiser):
         :return: an [N x C x ...] Tensor of outputs.
         """
         assert (
-            list(x.shape[1:]) == self.image_size
-        ), f"Input shape {x.shape[1:]} does not match model image size {self.image_size}"
+            list(x.shape[2:]) == self.image_size
+        ), f"Input shape {x.shape[2:]} does not match model image size {self.image_size}"
 
         assert (y is not None) == (
             self.n_classes is not None

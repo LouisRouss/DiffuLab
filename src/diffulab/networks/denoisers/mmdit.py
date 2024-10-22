@@ -5,7 +5,8 @@ import torch.nn as nn
 from einops import rearrange  # type: ignore
 from torch import Tensor
 
-from diffulab.networks.common import ContextEmbedder, Denoiser
+from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.embedders.common import ContextEmbedder
 from diffulab.networks.utils.nn import RotaryPositionalEmbedding, timestep_embedding
 
 

@@ -130,7 +130,8 @@ class LabelEmbed(nn.Module):
         if p > 0:
             assert self.classifier_free_guidance, "Label dropout is only supported with classifier-free guidance."
             labels = self.drop_labels(labels, p)
-        return self.embedding(labels)
+        embeddings = self.embedding(labels).squeeze(1)
+        return embeddings
 
 
 class RotaryPositionalEmbedding(nn.Module):

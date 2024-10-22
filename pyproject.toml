@@ -7,7 +7,9 @@ requires-python = ">=3.10"
 dependencies = [
     "accelerate>=1.0.0",
     "einops>=0.8.0",
+    "ema-pytorch>=0.7.3",
     "numpy>=2.1.2",
+    "open-clip-torch>=2.27.1",
     "pyright>=1.1.385",
     "ruff>=0.6.9",
     "scipy>=1.14.1",
