@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -39,10 +40,10 @@ class ContextEmbedder(nn.Module, ABC):
         return torch.where(torch.rand_like(labels) < p, self.num_classes, labels)
 
     @abstractmethod
-    def forward(self, context: Tensor, p: float):
+    def forward(self, context: Any, p: float) -> tuple[Tensor, ...]:
         """
         Apply the model to an input batch.
-        :param context: a [N x C x ...] Tensor of context.
+        :param context: context, can be a tensor or a list of str for example.
         :param p: the probability of dropping the context.
         :return: an [N x C x ...] Tensor of outputs.
         """
