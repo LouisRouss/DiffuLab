@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 import torch
+import wandb
 from accelerate import Accelerator  # type: ignore
 from ema_pytorch import EMA  # type: ignore
 from torch import Tensor
@@ -65,7 +66,7 @@ class Trainer:
         ema_denoiser: EMA | None = None,
     ) -> None:
         optimizer.zero_grad()  # type: ignore
-        timesteps = diffuser.draw_timesteps(self.batch_size).to(self.accelerator.device)
+        timesteps = diffuser.draw_timesteps(batch["x"].shape[0]).to(self.accelerator.device)
         batch.update({"p": p_classifier_free_guidance})
         loss = diffuser.compute_loss(model_inputs=batch, timesteps=timesteps)
         tracker.update(loss.item(), key="loss")
@@ -76,6 +77,9 @@ class Trainer:
         if ema_denoiser is not None:
             ema_denoiser.update()  # type: ignore
 
+    def move_dict_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
+        return {k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
+
     @torch.no_grad()  # type: ignore
     def validation_step(
         self,
@@ -84,7 +88,8 @@ class Trainer:
         tracker: AverageMeter,
         ema_eval: Denoiser | None = None,
     ) -> None:
-        timesteps = diffuser.draw_timesteps(self.batch_size).to(self.accelerator.device)
+        timesteps = diffuser.draw_timesteps(val_batch["x"].shape[0]).to(self.accelerator.device)
+        val_batch = self.move_dict_to_device(val_batch)
         val_loss = (
             diffuser.compute_loss(model_inputs=val_batch, timesteps=timesteps)
             if not self.use_ema
@@ -95,6 +100,7 @@ class Trainer:
     def save_model(
         self,
         optimizer: Optimizer,
+        diffuser: Diffuser,
         ema_denoiser: Denoiser | None = None,
         scheduler: LRScheduler | None = None,
     ) -> None:
@@ -119,14 +125,13 @@ class Trainer:
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
         (Path(self.save_path) / "images").mkdir(exist_ok=True)
-        wandb_tracker = self.accelerator.get_tracker("wandb")  # type: ignore
         batch: dict[str, Any] = next(iter(val_dataloader))  # type: ignore
         images = (
             diffuser.generate(data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
             if not self.use_ema
             else diffuser.flow.denoise(model=ema_eval, data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
         )
-        images = wandb_tracker.Image(images, caption="Validation Images")  # type: ignore
+        images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch)  # type: ignore
         diffuser.set_steps(original_steps)
 
@@ -149,7 +154,7 @@ class Trainer:
                 beta=self.ema_rate,
                 update_after_step=self.ema_update_after_step,
                 update_every=self.ema_update_every,
-            )
+            ).to(self.accelerator.device)
         else:
             ema_denoiser = None
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
@@ -170,7 +175,7 @@ class Trainer:
             diffuser.train()
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
-            tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process)  # type: ignore
+            tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
             for batch in tq_batch:
                 with self.accelerator.accumulate(diffuser.denoiser):  # type: ignore
                     self.training_step(
@@ -217,7 +222,7 @@ class Trainer:
                 self.accelerator.log({"val/loss": gathered_val_loss.mean().item()}, step=epoch)  # type: ignore
                 if gathered_val_loss.mean().item() < best_val_loss:  # type: ignore
                     best_val_loss = gathered_val_loss
-                    self.save_model(optimizer, ema_denoiser, scheduler)  # type: ignore
+                    self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
                 tracker.reset()
 
                 if log_validation_images:

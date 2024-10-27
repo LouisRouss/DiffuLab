@@ -2,7 +2,7 @@ class AverageMeter(object):
     """Computes and stores the average and current value"""
 
     def __init__(self):
-        self.keys: set[str] = set()
+        self.keys: list[str] = []
         self.avg: dict[str, float] = {}
         self.sum: dict[str, float] = {}
         self.count: dict[str, int] = {}
@@ -19,7 +19,7 @@ class AverageMeter(object):
             self.count[key] += n
             self.avg[key] = self.sum[key] / self.count[key]
         else:
-            self.keys.update(key)
+            self.keys.append(key)
             self.sum[key] = val * n
             self.count[key] = n
             self.avg[key] = self.sum[key] / self.count[key]
