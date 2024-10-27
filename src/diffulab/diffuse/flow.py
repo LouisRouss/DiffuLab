@@ -6,9 +6,8 @@ import torch
 
 # import torch.distributions as dist
 import torch.nn as nn
-
-# from numpy.typing import NDArray
 from torch import Tensor
+from tqdm import tqdm
 
 from diffulab.networks.denoisers.common import Denoiser
 
@@ -60,8 +59,15 @@ class Flow(ABC):
     def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
         pass
 
-    def one_step_denoise(self, model: Denoiser, model_inputs: dict[str, Any], t_prev: float, t_curr: float) -> Tensor:
-        v = self.get_v(model, model_inputs, t_curr)
+    def one_step_denoise(
+        self, model: Denoiser, model_inputs: dict[str, Any], t_prev: float, t_curr: float, guidance_scale: float
+    ) -> Tensor:
+        assert guidance_scale >= 0, "guidance_scale must be positive"
+        assert guidance_scale <= 10, "guidance_scale must be less than or equal to 10"
+        v = self.get_v(model, {**model_inputs, "p": 0}, t_curr)
+        if guidance_scale < 10:
+            v_dropped = self.get_v(model, {**model_inputs, "p": guidance_scale}, t_curr)
+            v = v + guidance_scale * (v - v_dropped)
         if self.sampling_method == "euler":
             x_t_minus_one = model_inputs["x"] - v * 1 / self.steps
             return x_t_minus_one
@@ -98,14 +104,24 @@ class Flow(ABC):
         model: Denoiser,
         data_shape: tuple[int, ...],
         model_inputs: dict[str, Any] = {},
+        use_tqdm: bool = True,
+        clamp_x: bool = True,
+        guidance_scale: float = 10,
     ) -> Tensor:
-        assert len(self.timesteps) == self.steps, "Please set the number of steps before denoising."
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         x = torch.randn(data_shape, device=device, dtype=dtype)
-        for t_curr, t_prev in zip(self.timesteps[:-1], self.timesteps[1:]):
+        for t_curr, t_prev in tqdm(
+            zip(self.timesteps[:-1], self.timesteps[1:]),
+            desc="generating image",
+            total=self.steps,
+            disable=not use_tqdm,
+            leave=False,
+        ):
             model_inputs["x"] = x
-            x = self.one_step_denoise(model, model_inputs, t_curr=t_curr, t_prev=t_prev)
+            x = self.one_step_denoise(model, model_inputs, t_curr=t_curr, t_prev=t_prev, guidance_scale=guidance_scale)
+            if clamp_x:
+                x = torch.clamp(x, 0, 1)
         return x
 
 
