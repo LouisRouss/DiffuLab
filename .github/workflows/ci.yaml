@@ -27,28 +27,28 @@ jobs:
 
       - name: Install uv
         if: steps.changes.outputs.sources == 'true'
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-          cache-dependency-glob: "uv.lock"
+          cache-prefix: diffulab-uv-cache
 
       - name: "Set up Python"
         if: steps.changes.outputs.sources == 'true'
         uses: actions/setup-python@v5
         with:
-          python-version-file: "pyproject.toml"
+          python-version-file: ".python-version"
 
       - name: Install the project
         if: steps.changes.outputs.sources == 'true'
-        run: uv sync --all-extras --dev
+        run: uv sync --all-extras 
 
       - name: fmt
         if: steps.changes.outputs.sources == 'true'
-        run: uv run ruff check . --select F --show-fixes
+        run: uv run ruff format --check
 
       - name: lint
         if: steps.changes.outputs.sources == 'true'
-        run: uv run ruff check .
+        run: uv run ruff check 
       
       - name: typecheck
         if: steps.changes.outputs.sources == 'true'

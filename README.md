@@ -4,7 +4,8 @@
 - [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
 - [x] add some context embedders
 - [ ] doc string and comment
-- [ ] Complete the different init files
+- [ ] add resume training function to the Trainer
+- [x] Complete the different init files
 - [ ] fix EDM sampling through F-prediction
 - [ ] add DDPM/DDIM in flows
 - [x] add guidance and other parameters in flow.generate()

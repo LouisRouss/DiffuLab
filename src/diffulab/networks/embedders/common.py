@@ -1,10 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-import torch
 import torch.nn as nn
 from torch import Tensor
-
 
 class ContextEmbedder(nn.Module, ABC):
     def __init__(self):
@@ -25,19 +23,20 @@ class ContextEmbedder(nn.Module, ABC):
         Represents the dimension of each output embedding.
         """
         pass
-
-    def drop_labels(
+    
+    @abstractmethod
+    def drop_context(
         self,
-        labels: Tensor,
+        drop_context: Any,
         p: float,
-    ) -> Tensor:
+    ) -> Any:
         """
-        Randomly drop labels from a batch.
-        :param labels: an [N] tensor of labels.
-        :param p: the probability of dropping a label.
-        :return: an [N] tensor of modified labels.
+        Randomly drop drop_context from a batch.
+        :param drop_context: an [N] sequence of context.
+        :param p: the probability of dropping a context.
+        :return: an [N] sequence of modified context.
         """
-        return torch.where(torch.rand_like(labels) < p, self.num_classes, labels)
+        pass
 
     @abstractmethod
     def forward(self, context: Any, p: float) -> tuple[Tensor, ...]:

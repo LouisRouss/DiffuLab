@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -12,7 +13,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
-from diffulab.diffuse.flow import Diffuser
+from diffulab.diffuse.diffusion import Diffuser
 from diffulab.networks.denoisers.common import Denoiser
 from diffulab.training.utils import AverageMeter
 
@@ -52,6 +53,7 @@ class Trainer:
         )
         self.save_path = Path(save_path) / project_name
         Path(self.save_path).mkdir(parents=True, exist_ok=True)
+        os.environ["WANDB_DIR"] = str(self.save_path / "wandb")
         self.accelerator.init_trackers(project_name=project_name, config=run_config, init_kwargs=init_kwargs)  # type: ignore
 
     def training_step(
@@ -93,7 +95,7 @@ class Trainer:
         val_loss = (
             diffuser.compute_loss(model_inputs=val_batch, timesteps=timesteps)
             if not self.use_ema
-            else diffuser.flow.compute_loss(model=ema_eval, model_inputs=val_batch, timesteps=timesteps)  # type: ignore
+            else diffuser.diffusion.compute_loss(model=ema_eval, model_inputs=val_batch, timesteps=timesteps)  # type: ignore
         )
         tracker.update(val_loss.item(), key="val_loss")
 
@@ -108,7 +110,8 @@ class Trainer:
         self.accelerator.save(unwrapped_denoiser.state_dict(), self.save_path / "denoiser.pth")  # type: ignore
         self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pth")  # type: ignore
         if ema_denoiser is not None:
-            self.accelerator.save(ema_denoiser.ema_model.state_dict(), self.save_path / "ema.pth")  # type: ignore
+            unwrapped_ema: Denoiser = self.accelerator.unwrap_model(ema_denoiser)  # type: ignore
+            self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pth")  # type: ignore
         if scheduler is not None:
             self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pth")  # type: ignore
 
@@ -124,12 +127,11 @@ class Trainer:
         diffuser.eval()
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
-        (Path(self.save_path) / "images").mkdir(exist_ok=True)
         batch: dict[str, Any] = next(iter(val_dataloader))  # type: ignore
         images = (
             diffuser.generate(data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
             if not self.use_ema
-            else diffuser.flow.denoise(model=ema_eval, data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
+            else diffuser.diffusion.denoise(model=ema_eval, data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
         )
         images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch)  # type: ignore
@@ -147,6 +149,8 @@ class Trainer:
         train_embedder: bool = False,
         p_classifier_free_guidance: float = 0,
         val_steps: int = 25,
+        ema_ckpt: str | None = None,
+        epoch_start: int = 0,
     ):
         if self.use_ema:
             ema_denoiser = EMA(
@@ -155,6 +159,9 @@ class Trainer:
                 update_after_step=self.ema_update_after_step,
                 update_every=self.ema_update_every,
             ).to(self.accelerator.device)
+            if ema_ckpt:
+                ema_denoiser.ema_model.load_state_dict(torch.load(ema_ckpt, weights_only=True))  # type: ignore
+            ema_denoiser = self.accelerator.prepare(ema_denoiser)  # type: ignore
         else:
             ema_denoiser = None
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
@@ -169,7 +176,9 @@ class Trainer:
                 param.requires_grad = False
 
         tracker = AverageMeter()
-        tq_epoch = tqdm(range(self.n_epoch), disable=not self.accelerator.is_main_process, leave=False, position=0)
+        tq_epoch = tqdm(
+            range(epoch_start, self.n_epoch), disable=not self.accelerator.is_main_process, leave=False, position=0
+        )
         logging.info("Begin training")
         for epoch in tq_epoch:
             diffuser.train()
@@ -178,17 +187,18 @@ class Trainer:
             tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
             for batch in tq_batch:
                 with self.accelerator.accumulate(diffuser.denoiser):  # type: ignore
-                    self.training_step(
-                        diffuser=diffuser,
-                        optimizer=optimizer,  # type: ignore
-                        batch=batch,
-                        tracker=tracker,
-                        p_classifier_free_guidance=p_classifier_free_guidance,
-                        scheduler=scheduler,  # type: ignore
-                        per_batch_scheduler=per_batch_scheduler,
-                        ema_denoiser=ema_denoiser,
-                    )
-                    tq_batch.set_description(f"Loss: {tracker.avg['loss'] :.4f}")
+                    with self.accelerator.autocast():
+                        self.training_step(
+                            diffuser=diffuser,
+                            optimizer=optimizer,  # type: ignore
+                            batch=batch,
+                            tracker=tracker,
+                            p_classifier_free_guidance=p_classifier_free_guidance,
+                            scheduler=scheduler,  # type: ignore
+                            per_batch_scheduler=per_batch_scheduler,
+                            ema_denoiser=ema_denoiser,  # type: ignore
+                        )
+                        tq_batch.set_description(f"Loss: {tracker.avg['loss'] :.4f}")
 
             gathered_loss: list[Tensor] = self.accelerator.gather(  # type: ignore
                 torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
@@ -209,12 +219,13 @@ class Trainer:
                     position=1,
                 )
                 for val_batch in tq_val_batch:
-                    self.validation_step(
-                        diffuser=diffuser,
-                        val_batch=val_batch,
-                        tracker=tracker,
-                        ema_eval=ema_eval,  # type: ignore
-                    )
+                    with self.accelerator.autocast():
+                        self.validation_step(
+                            diffuser=diffuser,
+                            val_batch=val_batch,
+                            tracker=tracker,
+                            ema_eval=ema_eval,  # type: ignore
+                        )
                     tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss'] :.4f}")
                 gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
                     torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
@@ -228,7 +239,8 @@ class Trainer:
                 if log_validation_images:
                     logging.info("creating validation images")
                     if self.accelerator.is_main_process:
-                        self.log_images(diffuser, val_dataloader, epoch, ema_eval, val_steps)  # type: ignore
+                        with self.accelerator.autocast():
+                            self.log_images(diffuser, val_dataloader, epoch, ema_eval, val_steps)  # type: ignore
 
             self.accelerator.wait_for_everyone()
 

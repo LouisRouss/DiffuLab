@@ -76,7 +76,7 @@ class SD3TextEmbedder(ContextEmbedder):
         last_hidden_state: Tensor = self.t5(**inputs_t5)["last_hidden_state"]  # [batch_size, n_ctx, 4096]
         return last_hidden_state
 
-    def get_embeddings(self, context: list[str], p: float) -> dict[str, Tensor]:
+    def get_embeddings(self, context: list[str]) -> dict[str, Tensor]:
         outputs: dict[str, Tensor] = {}
         if self.load_l14:
             outputs_l14 = self.get_l14_embeddings(context)  # [batch_size, n_ctx, 768]
@@ -118,13 +118,13 @@ class SD3TextEmbedder(ContextEmbedder):
                 with (path_to_save / f"{begins + i + b}.txt").open("r") as f:
                     f.write(context[i + b])
 
+    def drop_conditions(self, context: list[str], p: float) -> list[str]:
+        return ["" if random.random() < p else c for c in context]
+
     def forward(self, context: list[str], p: float) -> tuple[Tensor, ...]:
         assert self.load_l14 and self.load_g14 and self.load_t5
-
-        # For classifier free guidance
-        context = ["" if random.random() < p else c for c in context]
-
-        embeddings = self.get_embeddings(context, p)
+        context = self.drop_conditions(context, p)
+        embeddings = self.get_embeddings(context)
         pooled = torch.cat([embeddings["l14_pooled"], embeddings["g14_pooled"]], dim=-1)
         full_encoding_clip = torch.cat(
             [

@@ -20,6 +20,9 @@ dependencies = [
     "wandb>=0.18.3",
 ]
 
+[tool.uv.sources]
+diffulab = {workspace = true}
+
 [tool.astral]
 package = "src" 
 
@@ -46,5 +49,8 @@ ignore = [
 #
 combine-as-imports = true
 
-[tool.docformatter]
-black = true
+[tool.pyright]
+include = ["src/diffulab", "tests/"]
+strict = ["*"]
+exclude = ["**/__pycache__"]
+reportMissingTypeStubs = "warning"

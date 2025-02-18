@@ -6,13 +6,12 @@ import torch
 from numpy.typing import NDArray
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
-from torchvision.transforms.functional import pil_to_tensor  # type: ignore
 
 from diffulab.diffuse.flow import Diffuser
 from diffulab.networks.denoisers.unet import UNetModel
 from diffulab.training.trainer import Trainer
 
-BATCH_SIZE = 512
+BATCH_SIZE = 128
 EPOCHS = 1000
 LR = 1e-4
 
@@ -68,13 +67,14 @@ def train():
     denoiser = UNetModel(
         image_size=[32, 32],
         in_channels=3,
-        model_channels=64,
+        model_channels=192,
         out_channels=3,
         num_res_blocks=2,
-        attention_resolutions=[32, 16, 8],
-        num_heads=4,
+        attention_resolutions=[8, 16],
+        num_heads=3,
         resblock_updown=True,
         n_classes=10,
+        use_scale_shift_norm=True,
         classifier_free=True,
     )
 
@@ -85,7 +85,7 @@ def train():
         n_epoch=EPOCHS,
         batch_size=BATCH_SIZE,
         gradient_accumulation_step=1,
-        precision_type="no",
+        precision_type="fp16",
         project_name="cifar10",
         use_ema=True,
         ema_update_after_step=len(train_loader),
@@ -98,7 +98,6 @@ def train():
         train_loader,
         val_loader,
         log_validation_images=True,
-        p_classifier_free_guidance=0.2,
     )
 
 
