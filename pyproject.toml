@@ -5,19 +5,13 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "accelerate>=1.0.0",
-    "einops>=0.8.0",
-    "ema-pytorch>=0.7.3",
-    "numpy>=2.1.2",
-    "open-clip-torch>=2.27.1",
-    "pyright>=1.1.385",
-    "ruff>=0.6.9",
-    "scipy>=1.14.1",
-    "sentencepiece>=0.2.0",
-    "tiktoken>=0.8.0",
-    "torch>=2.4.1",
-    "transformers>=4.45.1",
-    "wandb>=0.18.3",
+    "accelerate>=1.4.0",
+    "einops>=0.8.1",
+    "ema-pytorch>=0.7.7",
+    "open-clip-torch>=2.30.0",
+    "torch>=2.6.0",
+    "transformers>=4.49.0",
+    "wandb>=0.19.6",
 ]
 
 [tool.uv.sources]
@@ -30,8 +24,9 @@ package = "src"
 line-length = 120
 
 [tool.ruff]
-src = ["src"] # see https://docs.astral.sh/ruff/settings/#src
+src = ["src", "examples"]
 line-length = 120
+format-on-save = true
 
 [tool.ruff.lint]
 select = [
@@ -43,14 +38,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-# Allow this kind of import on a single line:
-#
-#     from torch import device as Device, dtype as DType
-#
 combine-as-imports = true
 
 [tool.pyright]
-include = ["src/diffulab", "tests/"]
+include = ["src/diffulab", "tests/", "examples/"]
 strict = ["*"]
 exclude = ["**/__pycache__"]
 reportMissingTypeStubs = "warning"
