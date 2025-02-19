@@ -4,6 +4,7 @@ from typing import Any
 import torch.nn as nn
 from torch import Tensor
 
+
 class ContextEmbedder(nn.Module, ABC):
     def __init__(self):
         super().__init__()  # type: ignore
@@ -23,7 +24,7 @@ class ContextEmbedder(nn.Module, ABC):
         Represents the dimension of each output embedding.
         """
         pass
-    
+
     @abstractmethod
     def drop_context(
         self,

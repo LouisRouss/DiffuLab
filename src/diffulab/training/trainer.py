@@ -6,14 +6,14 @@ from typing import Any, Iterable
 
 import torch
 import wandb
-from accelerate import Accelerator  # type: ignore
-from ema_pytorch import EMA  # type: ignore
+from accelerate import Accelerator  # type: ignore [stub file not found]
+from ema_pytorch import EMA  # type: ignore [stub file not found]
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
-from diffulab.diffuse.diffusion import Diffuser
+from diffulab.diffuse.diffuser import Diffuser
 from diffulab.networks.denoisers.common import Denoiser
 from diffulab.training.utils import AverageMeter
 
@@ -67,17 +67,17 @@ class Trainer:
         per_batch_scheduler: bool = False,
         ema_denoiser: EMA | None = None,
     ) -> None:
-        optimizer.zero_grad()  # type: ignore
+        optimizer.zero_grad()
         timesteps = diffuser.draw_timesteps(batch["x"].shape[0]).to(self.accelerator.device)
         batch.update({"p": p_classifier_free_guidance})
         loss = diffuser.compute_loss(model_inputs=batch, timesteps=timesteps)
         tracker.update(loss.item(), key="loss")
         self.accelerator.backward(loss)  # type: ignore
-        optimizer.step()  # type: ignore
+        optimizer.step()
         if scheduler is not None and per_batch_scheduler:
-            scheduler.step()  # type: ignore
+            scheduler.step()  
         if ema_denoiser is not None:
-            ema_denoiser.update()  # type: ignore
+            ema_denoiser.update() 
 
     def move_dict_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
         return {k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
