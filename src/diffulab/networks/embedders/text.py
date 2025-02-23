@@ -113,7 +113,7 @@ class SD3TextEmbedder(ContextEmbedder):
             for b in range(batch_size):
                 torch.save(  # type: ignore
                     {"pooled": embeddings[0][b], "full_encoding": embeddings[1][b]},
-                    path_to_save / f"{begins + i  + b}.pth",
+                    path_to_save / f"{begins + i + b}.pth",
                 )
                 with (path_to_save / f"{begins + i + b}.txt").open("r") as f:
                     f.write(context[i + b])

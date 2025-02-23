@@ -1,22 +1,20 @@
-from typing import Any
-
 import torch
-
 import torch.nn as nn
 from torch import Tensor
+from tqdm import tqdm
 
 from diffulab.diffuse.diffusion import Diffusion
-from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.denoisers.common import Denoiser, ModelInput
 
 
-# Maybe replace function at, bt etc ... By actually precomputing the values and storing them for every timestep
+# replace function at, bt etc ... By actually precomputing the values and storing them for every timestep
 # more efficient
 class Flow(Diffusion):
     def __init__(self, n_steps: int = 50, sampling_method: str = "euler", schedule: str = "linear"):
-        super().init(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
+        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
         self.set_steps(n_steps, schedule=schedule)
 
-    def set_steps(self, n_steps: int, schedule: str = "linear") -> None: 
+    def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         if schedule == "linear":
             self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
             self.steps = n_steps
@@ -44,7 +42,7 @@ class Flow(Diffusion):
     def wt(self, timesteps: Tensor) -> Tensor:
         return self.bt(timesteps) / self.at(timesteps)
 
-    def get_v(self, model: Denoiser, model_inputs: dict[str, Any], t_curr: float) -> Tensor:
+    def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
@@ -58,13 +56,13 @@ class Flow(Diffusion):
     def one_step_denoise(
         self,
         model: Denoiser,
-        model_inputs: dict[str, Any],
+        model_inputs: ModelInput,
         t_prev: float,
         t_curr: float,
         guidance_scale: float,
         clamp_x: bool,
     ) -> Tensor:
-        v = self.get_v(model, {**model_inputs, "p": 0}, t_curr)
+        v = self.get_v(model, ModelInput({**model_inputs, "p": 0}), t_curr)
         if guidance_scale > 0:
             v_dropped = self.get_v(model, {**model_inputs, "p": 1}, t_curr)
             v = v + guidance_scale * (v - v_dropped)
@@ -77,7 +75,7 @@ class Flow(Diffusion):
         return x_t_minus_one
 
     def compute_loss(
-        self, model: Denoiser, model_inputs: dict[str, Tensor], timesteps: Tensor, noise: Tensor | None = None
+        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
     ) -> Tensor:
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
         prediction = model(**model_inputs, timesteps=timesteps)
@@ -99,3 +97,35 @@ class Flow(Diffusion):
         bt = self.bt(timesteps).view(-1, *([1] * (x.dim() - 1))).to(x.device)
         z_t = at * x + bt * noise
         return z_t, noise
+
+    @torch.inference_mode()
+    def denoise(
+        self,
+        model: Denoiser,
+        data_shape: tuple[int, ...],
+        model_inputs: ModelInput,
+        use_tqdm: bool = True,
+        clamp_x: bool = True,
+        guidance_scale: float = 10,
+    ) -> Tensor:
+        assert self.timesteps
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
+        x = torch.randn(data_shape, device=device, dtype=dtype)
+        for t_curr, t_prev in tqdm(
+            zip(self.timesteps[:-1], self.timesteps[1:]),
+            desc="generating image",
+            total=self.steps,
+            disable=not use_tqdm,
+            leave=False,
+        ):
+            model_inputs["x"] = x
+            x = self.one_step_denoise(
+                model,
+                model_inputs,
+                t_curr=t_curr,
+                t_prev=t_prev,
+                guidance_scale=guidance_scale,
+                clamp_x=clamp_x,
+            )
+        return x

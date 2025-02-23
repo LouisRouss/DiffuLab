@@ -1,15 +1,14 @@
 from typing import Any
 from torch import Tensor
+from diffulab.diffuse.diffusion import Diffusion
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
-from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.diffuse.modelizations.flow import Flow
 
 
 class Diffuser:
-    model_registry = {
-        "rectified_flow": Flow,
-        "ddpm": GaussianDiffusion
-    }
+    model_registry: dict[str, type[Diffusion]] = {"rectified_flow": Flow, "ddpm": GaussianDiffusion}
+
     def __init__(
         self,
         denoiser: Denoiser,
@@ -38,15 +37,15 @@ class Diffuser:
     def draw_timesteps(self, batch_size: int) -> Tensor:
         return self.diffusion.draw_timesteps(batch_size=batch_size)
 
-    def compute_loss(self, model_inputs: dict[str, Any], timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
+    def compute_loss(self, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
         return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise)
 
     def set_steps(self, n_steps: int, **extra_args: dict[str, Any]) -> None:
-        self.diffusion.set_steps(n_steps, **extra_args) # type: ignore
+        self.diffusion.set_steps(n_steps, **extra_args)  # type: ignore
 
     def generate(
         self,
         data_shape: tuple[int, ...],
-        model_inputs: dict[str, Any] = {},
+        model_inputs: ModelInput,
     ) -> Tensor:
         return self.diffusion.denoise(self.denoiser, data_shape, model_inputs)

@@ -14,6 +14,11 @@ dependencies = [
     "wandb>=0.19.6",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.9.7",
+]
+
 [tool.uv.sources]
 diffulab = {workspace = true}
 
@@ -26,7 +31,6 @@ line-length = 120
 [tool.ruff]
 src = ["src", "examples"]
 line-length = 120
-format-on-save = true
 
 [tool.ruff.lint]
 select = [

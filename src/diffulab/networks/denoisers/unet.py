@@ -280,9 +280,9 @@ class UNetModel(Denoiser):
         context_embedder: ContextEmbedder | None = None,
     ):
         super().__init__()  # type: ignore
-        assert not (
-            n_classes is not None and context_embedder is not None
-        ), "n_classes and context_embedder cannot both be specified"
+        assert not (n_classes is not None and context_embedder is not None), (
+            "n_classes and context_embedder cannot both be specified"
+        )
         self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
@@ -456,23 +456,25 @@ class UNetModel(Denoiser):
         :param x_context: a [N x C x ...] Tensor of context for the input image that will be concatenated with the noisy data
         :return: an [N x C x ...] Tensor of outputs.
         """
-        assert (
-            list(x.shape[2:]) == self.image_size
-        ), f"Input shape {x.shape[2:]} does not match model image size {self.image_size}"
+        assert list(x.shape[2:]) == self.image_size, (
+            f"Input shape {x.shape[2:]} does not match model image size {self.image_size}"
+        )
 
-        assert (y is not None) == (
-            self.n_classes is not None
-        ), "must specify y if and only if the model is class-conditional"
+        assert (y is not None) == (self.n_classes is not None), (
+            "must specify y if and only if the model is class-conditional"
+        )
 
-        assert (context is not None) == (
-            self.context_embedder is not None
-        ), "must specify context if and only if the model is context-conditional"
+        assert (context is not None) == (self.context_embedder is not None), (
+            "must specify context if and only if the model is context-conditional"
+        )
 
         if p > 0:
-            assert self.classifier_free, "probability of dropping for classifier free guidance is only available if model is set up to be classifier free"
-            assert (
-                self.n_classes
-            ), "probability of dropping for classifier free guidance is only available if a number of classes is set"
+            assert self.classifier_free, (
+                "probability of dropping for classifier free guidance is only available if model is set up to be classifier free"
+            )
+            assert self.n_classes, (
+                "probability of dropping for classifier free guidance is only available if a number of classes is set"
+            )
         hs: list[Tensor] = []
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
         if self.label_embed is not None:

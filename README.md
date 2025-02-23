@@ -2,12 +2,13 @@
 
 - [x] Correct github CI
 - [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
-- [x] add some context embedders
+- [ ] add some context embedders
+- [ ] code from scratch DiT (to be tested)
 - [ ] doc string and comment
 - [ ] add resume training function to the Trainer
 - [ ] Complete the different init files
 - [ ] fix EDM sampling through F-prediction
-- [ ] add DDPM/DDIM in flows
+- [ ] add DDIM to Gaussian Diffusion
 - [ ] add guidance (both classifier free and classifier) and other parameters in .generate()
 - [ ] Train our models on toy datasets for different tasks 
 - [ ] Add possibility to train LORA/DORA

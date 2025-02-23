@@ -7,7 +7,7 @@ from numpy.typing import NDArray
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
-from diffulab.diffuse.diffusion import Diffuser
+from diffulab.diffuse.diffuser import Diffuser
 from diffulab.networks.denoisers.unet import UNetModel
 from diffulab.training.trainer import Trainer
 

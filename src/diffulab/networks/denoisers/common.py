@@ -2,7 +2,13 @@ from abc import ABC, abstractmethod
 
 import torch.nn as nn
 from torch import Tensor
+from typing import NotRequired, Required, TypedDict
 
+class ModelInput(TypedDict, total=False):
+    x: Required[Tensor] # input tensor
+    p: NotRequired[float] # probabilily of label dropping
+    y : NotRequired[Tensor] # class labels
+    context : NotRequired[Tensor] # context information, can be text image etc
 
 class Denoiser(nn.Module, ABC):
     def __init__(self):

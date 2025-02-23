@@ -1,3 +1,5 @@
+# Recoded from scratch, if you see any error please report it to the author of the repository
+
 from dataclasses import dataclass
 
 import torch
@@ -8,7 +10,6 @@ from torch import Tensor
 from diffulab.networks.denoisers.common import Denoiser
 from diffulab.networks.embedders.common import ContextEmbedder
 from diffulab.networks.utils.nn import RotaryPositionalEmbedding, timestep_embedding
-
 
 class RMSNorm(torch.nn.Module):
     """
@@ -300,6 +301,7 @@ class MMDiT(Denoiser):
         context_embedder: ContextEmbedder,
         context_dim: int = 4096,
         input_channels: int = 3,
+        output_channels: int | None = None,
         input_dim: int = 4096,
         hidden_dim: int = 4096,
         embedding_dim: int = 4096,
@@ -315,6 +317,9 @@ class MMDiT(Denoiser):
 
         self.patch_size = patch_size
         self.input_channels = input_channels
+        if not output_channels:
+            output_channels = input_channels
+        self.output_channels = output_channels
         self.context_embedder = context_embedder
 
         self.pooled_embed = nn.Sequential(
@@ -344,7 +349,7 @@ class MMDiT(Denoiser):
             ]
         )
 
-        self.last_layer = LastLayer(hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.input_channels)
+        self.last_layer = LastLayer(hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels)
 
     def patchify(self, x: Tensor) -> Tensor:
         """

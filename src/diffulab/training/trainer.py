@@ -14,7 +14,7 @@ from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
 from diffulab.diffuse.diffuser import Diffuser
-from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.utils import AverageMeter
 
 HOME_PATH = Path.home()
@@ -36,9 +36,9 @@ class Trainer:
         ema_update_after_step: int = 100,
         ema_update_every: int = 1,
     ):
-        assert (
-            HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml"
-        ).exists(), "please run `accelerate config` first in the CLI and save the config at the default location"
+        assert (HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml").exists(), (
+            "please run `accelerate config` first in the CLI and save the config at the default location"
+        )
         self.n_epoch = n_epoch
         self.batch_size = batch_size
         self.use_ema = use_ema
@@ -60,7 +60,7 @@ class Trainer:
         self,
         diffuser: Diffuser,
         optimizer: Optimizer,
-        batch: dict[str, Any],
+        batch: ModelInput,
         tracker: AverageMeter,
         p_classifier_free_guidance: float = 0,
         scheduler: LRScheduler | None = None,
@@ -75,18 +75,21 @@ class Trainer:
         self.accelerator.backward(loss)  # type: ignore
         optimizer.step()
         if scheduler is not None and per_batch_scheduler:
-            scheduler.step()  
+            scheduler.step()
         if ema_denoiser is not None:
-            ema_denoiser.update() 
+            ema_denoiser.update()
 
-    def move_dict_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
-        return {k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
+    def move_dict_to_device(self, batch: ModelInput) -> ModelInput:
+        return ModelInput(**{
+            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+            for k, v in batch.items()  # type: ignore
+        })
 
     @torch.no_grad()  # type: ignore
     def validation_step(
         self,
         diffuser: Diffuser,
-        val_batch: dict[str, Any],
+        val_batch: ModelInput,
         tracker: AverageMeter,
         ema_eval: Denoiser | None = None,
     ) -> None:
@@ -141,8 +144,8 @@ class Trainer:
         self,
         diffuser: Diffuser,
         optimizer: Optimizer,
-        train_dataloader: Iterable[dict[str, Any]],
-        val_dataloader: Iterable[dict[str, Any]] | None = None,
+        train_dataloader: Iterable[ModelInput],
+        val_dataloader: Iterable[ModelInput] | None = None,
         scheduler: LRScheduler | None = None,
         per_batch_scheduler: bool = False,
         log_validation_images: bool = False,
@@ -198,7 +201,7 @@ class Trainer:
                             per_batch_scheduler=per_batch_scheduler,
                             ema_denoiser=ema_denoiser,  # type: ignore
                         )
-                        tq_batch.set_description(f"Loss: {tracker.avg['loss'] :.4f}")
+                        tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
 
             gathered_loss: list[Tensor] = self.accelerator.gather(  # type: ignore
                 torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
@@ -226,7 +229,7 @@ class Trainer:
                             tracker=tracker,
                             ema_eval=ema_eval,  # type: ignore
                         )
-                    tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss'] :.4f}")
+                    tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss']:.4f}")
                 gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
                     torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
                 )
