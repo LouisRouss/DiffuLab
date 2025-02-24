@@ -9,7 +9,7 @@ from diffulab.networks.denoisers.common import Denoiser, ModelInput
 
 
 class Diffuser:
-    model_registry: dict[str, type[Diffusion]] = {"rectified_flow": Flow, "ddpm": GaussianDiffusion}
+    model_registry: dict[str, type[Diffusion]] = {"rectified_flow": Flow, "gaussian_diffusion": GaussianDiffusion}
 
     def __init__(
         self,

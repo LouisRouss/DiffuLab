@@ -4,11 +4,12 @@
 - [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
 - [ ] add some context embedders
 - [ ] code from scratch DiT (to be tested)
+- [ ] add mixed precision training (currently not working)
 - [ ] doc string and comment
 - [ ] add resume training function to the Trainer
 - [ ] Complete the different init files
-- [ ] fix EDM sampling through F-prediction
-- [ ] add DDIM to Gaussian Diffusion
+- [ ] add EDM
+- [x] add DDIM to Gaussian Diffusion
 - [ ] add guidance (both classifier free and classifier) and other parameters in .generate()
 - [ ] Train our models on toy datasets for different tasks 
 - [ ] Add possibility to train LORA/DORA

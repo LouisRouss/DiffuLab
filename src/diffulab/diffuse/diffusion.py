@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Any
 
-import torch
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
@@ -51,5 +50,6 @@ class Diffusion(ABC):
     ) -> Tensor:
         pass
 
+    @abstractmethod
     def draw_timesteps(self, batch_size: int) -> Tensor:
-        return torch.rand((batch_size), dtype=torch.float32)
+        pass

@@ -78,14 +78,14 @@ def train():
         classifier_free=True,
     )
 
-    diffuser = Diffuser(denoiser, model_type="rectified_flow", n_steps=1000, sampling_method="euler")
-    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LR)  # type: ignore
+    diffuser = Diffuser(denoiser, model_type="gaussian_diffusion", n_steps=1000, sampling_method="ddpm")
+    optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LR)
 
     trainer = Trainer(
         n_epoch=EPOCHS,
         batch_size=BATCH_SIZE,
         gradient_accumulation_step=1,
-        precision_type="fp16",
+        precision_type="no",
         project_name="cifar10",
         use_ema=True,
         ema_update_after_step=len(train_loader),

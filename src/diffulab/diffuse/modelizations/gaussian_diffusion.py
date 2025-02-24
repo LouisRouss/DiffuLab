@@ -188,6 +188,9 @@ class GaussianDiffusion(Diffusion):
         logprobs_y = logprobs[torch.arange(y.size(0)), y]
         return torch.autograd.grad(logprobs_y.sum(), x)[0]
 
+    def draw_timesteps(self, batch_size: int) -> Tensor:
+        return torch.randint(0, self.steps, (batch_size,), dtype=torch.int32)
+
     def one_step_denoise(
         self,
         model: Denoiser,

@@ -42,6 +42,9 @@ class Flow(Diffusion):
     def wt(self, timesteps: Tensor) -> Tensor:
         return self.bt(timesteps) / self.at(timesteps)
 
+    def draw_timesteps(self, batch_size: int) -> Tensor:
+        return torch.rand((batch_size), dtype=torch.float32)
+
     def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
