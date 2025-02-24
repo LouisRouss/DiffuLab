@@ -11,6 +11,7 @@ from diffulab.networks.denoisers.common import Denoiser
 from diffulab.networks.embedders.common import ContextEmbedder
 from diffulab.networks.utils.nn import RotaryPositionalEmbedding, timestep_embedding
 
+
 class RMSNorm(torch.nn.Module):
     """
     Root Mean Square Layer Normalization (RMSNorm) module.
@@ -349,7 +350,9 @@ class MMDiT(Denoiser):
             ]
         )
 
-        self.last_layer = LastLayer(hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels)
+        self.last_layer = LastLayer(
+            hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
+        )
 
     def patchify(self, x: Tensor) -> Tensor:
         """

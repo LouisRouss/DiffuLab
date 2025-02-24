@@ -11,7 +11,7 @@ from diffulab.diffuse.diffusion import Diffusion
 from diffulab.diffuse.utils import extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 
-# In part adapted from https://github.com/openai/guided-diffusion/blob/main/guided_diffusion/gaussian_diffusion.py
+# In part inspired from https://github.com/openai/guided-diffusion/blob/main/guided_diffusion/gaussian_diffusion.py
 
 
 class MeanType(enum.Enum):
@@ -31,7 +31,7 @@ class GaussianDiffusion(Diffusion):
     def __init__(
         self,
         n_steps: int = 50,
-        sampling_method: str = "euler",
+        sampling_method: str = "ddpm",
         schedule: str = "linear",
         mean_type: str = "epsilon",
         variance_type: str = "fixed_small",
@@ -105,6 +105,16 @@ class GaussianDiffusion(Diffusion):
         mean = self.posterior_mean_coef1[t] * x_start + self.posterior_mean_coef2[t] * x
         return mean
 
+    def _get_x_prev_from_mean_var(self, mean: Tensor, var: Tensor, t: int) -> Tensor:
+        if t > 0:
+            return mean + torch.randn_like(mean) * var.sqrt()
+        else:  # no noise for ultimate timestep
+            return mean
+
+    def _get_eps_from_xstart(self, x_start: Tensor, x: Tensor, t: int) -> Tensor:
+        eps = (1.0 / (1 - self.alphas_bar[t]).sqrt()) * (x - self.sqrt_alphas_bar[t] * x_start)
+        return eps
+
     def _get_p_mean_var(
         self, prediction: Tensor, x: Tensor, t: int, clamp_x: bool = False
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -151,11 +161,23 @@ class GaussianDiffusion(Diffusion):
 
         return mean, var, log_var, x_start  # type: ignore
 
-    def _get_x_prev_from_mean_var(self, mean: Tensor, var: Tensor, t: int) -> Tensor:
-        if t > 0:
-            return mean + torch.randn_like(mean) * var.sqrt()
-        else:  # no noise for ultimate timestep
-            return mean
+    def _get_mean_for_ddim_guidance(
+        self, x: Tensor, x_start: Tensor, t: int, grad: Tensor
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        eps = self._get_eps_from_xstart(x, x_start, t)
+        eps = eps - (1 - self.alphas_bar[t]).sqrt() * grad
+
+        x_start = self._get_x_start_from_eps(eps, x, t)
+        mean = self._get_mean_from_x_start(x, x_start, t)
+
+        return mean, x_start, eps
+
+    def _sample_x_prev_ddim(self, x: Tensor, eps: Tensor, t: int) -> Tensor:
+        x_prev = (
+            self.alphas_bar_prev[t].sqrt() * ((x - (1 - self.alphas_bar[t]).sqrt() * eps) / self.sqrt_alphas_bar[t])
+            + (1 - self.alphas_bar_prev[t]).sqrt() * eps
+        )
+        return x_prev
 
     def classifier_grad(
         self, x: Tensor, y: Tensor, t: Tensor, classifier: Callable[[Tensor, Tensor], Tensor]
@@ -185,7 +207,7 @@ class GaussianDiffusion(Diffusion):
             prediction_uncond = model({**model_inputs, "p": 1}, timestep=timesteps)
             prediction = prediction + guidance_scale * (prediction - prediction_uncond)
 
-        mean, var, _, _ = self._get_p_mean_var(prediction, model_inputs["x"], t, clamp_x)
+        mean, var, _, x_start = self._get_p_mean_var(prediction, model_inputs["x"], t, clamp_x)
 
         if not classifier_free and guidance_scale > 0:
             assert classifier is not None
@@ -195,9 +217,20 @@ class GaussianDiffusion(Diffusion):
                 grad = guidance_scale * self.classifier_grad(prediction, model_inputs["context"], timesteps, classifier)
             else:
                 raise ValueError("No context or label provided for the classifier")
-            mean = mean + grad
 
-        x_prev = self._get_x_prev_from_mean_var(mean, var, t)
+            if self.sampling_method == "ddpm":
+                mean = mean + grad
+                x_prev = self._get_x_prev_from_mean_var(mean, var, t)
+            elif self.sampling_method == "ddim":
+                mean, x_start, eps = self._get_mean_for_ddim_guidance(model_inputs["x"], x_start, t, grad)
+                x_prev = self._sample_x_prev_ddim(model_inputs["x"], eps, t)
+            else:
+                raise NotImplementedError(
+                    f"Classifier guidance not implemented for sampling method: {self.sampling_method}"
+                )
+        else:
+            x_prev = self._get_x_prev_from_mean_var(mean, var, t)
+
         return x_prev
 
     # maybe change it to avoid inplace change of the dict
@@ -252,11 +285,3 @@ class GaussianDiffusion(Diffusion):
             + (1 - extract_into_tensor(self.alphas_bar, timesteps, noise.shape)).sqrt() * noise
         )
         return x_t, noise
-
-
-if __name__ == "__main__":
-    gaussian_diffusion = GaussianDiffusion(n_steps=50, sampling_method="euler", schedule="linear")
-    print(gaussian_diffusion.timesteps)
-    print(gaussian_diffusion.betas)
-    print(gaussian_diffusion.alphas)
-    print(gaussian_diffusion.alphas_bar)

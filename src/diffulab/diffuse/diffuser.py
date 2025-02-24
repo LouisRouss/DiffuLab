@@ -1,9 +1,11 @@
 from typing import Any
+
 from torch import Tensor
+
 from diffulab.diffuse.diffusion import Diffusion
+from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-from diffulab.diffuse.modelizations.flow import Flow
 
 
 class Diffuser:
