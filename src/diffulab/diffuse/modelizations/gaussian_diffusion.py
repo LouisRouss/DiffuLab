@@ -43,7 +43,6 @@ class GaussianDiffusion(Diffusion):
             raise ValueError(f"variance_type must be one of {[e.value for e in ModelVarType]}")
         self.mean_type = mean_type
         self.var_type = variance_type
-        self.set_steps(n_steps, schedule=schedule)
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         self.timesteps: list[float] = torch.linspace(n_steps, 0, n_steps + 1, dtype=torch.int32).tolist()  # type: ignore
@@ -204,7 +203,7 @@ class GaussianDiffusion(Diffusion):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t, device=device, dtype=dtype)
-        prediction = model({**model_inputs, "p": 0}, timestep=timesteps)
+        prediction = model({**model_inputs, "p": 0}, timesteps=timesteps)
 
         if classifier_free and guidance_scale > 0:
             prediction_uncond = model({**model_inputs, "p": 1}, timestep=timesteps)

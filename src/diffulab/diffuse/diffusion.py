@@ -11,6 +11,7 @@ class Diffusion(ABC):
         self.timesteps: list[float] = []
         self.steps: int = n_steps
         self.sampling_method = sampling_method
+        self.set_steps(n_steps, schedule=schedule)
 
     @abstractmethod
     def set_steps(self, n_steps: int, schedule: str) -> None:
