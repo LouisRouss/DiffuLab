@@ -49,5 +49,19 @@ class Diffuser:
         self,
         data_shape: tuple[int, ...],
         model_inputs: ModelInput,
+        use_tqdm: bool = True,
+        clamp_x: bool = True,
+        guidance_scale: float = 10,
+        n_steps: int | None = None,
+        **kwargs: dict[str, Any],
     ) -> Tensor:
-        return self.diffusion.denoise(self.denoiser, data_shape, model_inputs)
+        return self.diffusion.denoise(
+            self.denoiser,
+            data_shape,
+            model_inputs,
+            use_tqdm=use_tqdm,
+            clamp_x=clamp_x,
+            guidance_scale=guidance_scale,
+            n_steps=n_steps,
+            **kwargs,
+        )

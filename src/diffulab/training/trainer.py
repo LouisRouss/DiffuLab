@@ -126,20 +126,17 @@ class Trainer:
         val_dataloader: Iterable[dict[str, Any]],
         epoch: int,
         ema_eval: Diffuser | None = None,
-        # val_steps: int = 25,
+        val_steps: int = 25,
     ) -> None:
         diffuser.eval()
-        # original_steps = diffuser.n_steps
-        # diffuser.set_steps(val_steps)
         batch: dict[str, Any] = next(iter(val_dataloader))  # type: ignore
         images = (
-            diffuser.generate(data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
+            diffuser.generate(data_shape=batch["x"].shape, model_inputs=batch, n_steps=val_steps)  # type: ignore
             if not self.use_ema
             else diffuser.diffusion.denoise(model=ema_eval, data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
         )
         images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
-        # diffuser.set_steps(original_steps)
 
     def train(
         self,

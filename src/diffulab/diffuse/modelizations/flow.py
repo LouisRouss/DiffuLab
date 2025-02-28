@@ -15,6 +15,7 @@ class Flow(Diffusion):
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         if schedule == "linear":
+            self.schedule = schedule
             self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
             self.steps = n_steps
         else:
@@ -109,8 +110,11 @@ class Flow(Diffusion):
         use_tqdm: bool = True,
         clamp_x: bool = True,
         guidance_scale: float = 10,
+        n_steps: int | None = None,
     ) -> Tensor:
-        assert self.timesteps
+        if n_steps:
+            original_steps = self.steps
+            self.set_steps(n_steps, schedule=self.schedule)
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         x = torch.randn(data_shape, device=device, dtype=dtype)
@@ -130,4 +134,6 @@ class Flow(Diffusion):
                 guidance_scale=guidance_scale,
                 clamp_x=clamp_x,
             )
+        if n_steps:
+            self.set_steps(original_steps, schedule=self.schedule)  # reset the steps # type: ignore
         return x
