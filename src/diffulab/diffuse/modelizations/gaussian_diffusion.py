@@ -203,10 +203,10 @@ class GaussianDiffusion(Diffusion):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t, device=device, dtype=dtype)
-        prediction = model({**model_inputs, "p": 0}, timesteps=timesteps)
+        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps)
 
         if classifier_free and guidance_scale > 0:
-            prediction_uncond = model({**model_inputs, "p": 1}, timestep=timesteps)
+            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps)
             prediction = prediction + guidance_scale * (prediction - prediction_uncond)
 
         mean, var, _, x_start = self._get_p_mean_var(prediction, model_inputs["x"], t, clamp_x)
