@@ -3,12 +3,12 @@
 - [x] Correct github CI
 - [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
 - [x] add DDIM to Gaussian Diffusion
+- [x] double check logging on wandb is working during training
 - [ ] add possibility to change timestep for sample DDPM
 - [ ] add guidance to rectified flow    
 - [ ] Complete the different init files
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
-- [ ] double check logging on wandb is working during training
 - [ ] add resume training function to the Trainer
 - [ ] add some context embedders
 - [ ] code from scratch DiT (to be tested)

@@ -53,8 +53,6 @@ class Flow(Diffusion):
             x_t_minus_one: Tensor = model_inputs["x"] - v * (t_curr - t_prev)
         else:  # different methods to be implemented maybe in the generic class instead
             raise NotImplementedError
-        if clamp_x:
-            x_t_minus_one = x_t_minus_one.clamp(0, 1)
         return x_t_minus_one
 
     def compute_loss(
@@ -84,7 +82,7 @@ class Flow(Diffusion):
         data_shape: tuple[int, ...],
         model_inputs: ModelInput,
         use_tqdm: bool = True,
-        clamp_x: bool = True,
+        clamp_x: bool = False,
         guidance_scale: float = 0,
         n_steps: int | None = None,
     ) -> Tensor:
