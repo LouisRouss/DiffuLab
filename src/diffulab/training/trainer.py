@@ -187,27 +187,27 @@ class Trainer:
             diffuser.train()
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
-            # tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
-            # for batch in tq_batch:
-            #     with self.accelerator.accumulate(diffuser.denoiser):  # type: ignore
-            #         with self.accelerator.autocast():
-            #             self.training_step(
-            #                 diffuser=diffuser,
-            #                 optimizer=optimizer,  # type: ignore
-            #                 batch=batch,
-            #                 tracker=tracker,
-            #                 p_classifier_free_guidance=p_classifier_free_guidance,
-            #                 scheduler=scheduler,  # type: ignore
-            #                 per_batch_scheduler=per_batch_scheduler,
-            #                 ema_denoiser=ema_denoiser,  # type: ignore
-            #             )
-            #             tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
+            tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
+            for batch in tq_batch:
+                with self.accelerator.accumulate(diffuser.denoiser):  # type: ignore
+                    with self.accelerator.autocast():
+                        self.training_step(
+                            diffuser=diffuser,
+                            optimizer=optimizer,  # type: ignore
+                            batch=batch,
+                            tracker=tracker,
+                            p_classifier_free_guidance=p_classifier_free_guidance,
+                            scheduler=scheduler,  # type: ignore
+                            per_batch_scheduler=per_batch_scheduler,
+                            ema_denoiser=ema_denoiser,  # type: ignore
+                        )
+                        tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
 
-            # gathered_loss: list[Tensor] = self.accelerator.gather(  # type: ignore
-            #     torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
-            # )
-            # self.accelerator.log({"train/loss": gathered_loss.mean().item()}, step=epoch)  # type: ignore
-            # tracker.reset()
+            gathered_loss: list[Tensor] = self.accelerator.gather(  # type: ignore
+                torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
+            )
+            self.accelerator.log({"train/loss": gathered_loss.mean().item()}, step=epoch)  # type: ignore
+            tracker.reset()
 
             if val_dataloader is not None:
                 diffuser.eval()  # type: ignore
@@ -215,29 +215,29 @@ class Trainer:
                     ema_eval = ema_denoiser.eval()  # type: ignore
                 else:
                     ema_eval = None
-                # tq_val_batch = tqdm(
-                #     val_dataloader,  # type: ignore
-                #     disable=not self.accelerator.is_main_process,
-                #     leave=False,
-                #     position=1,
-                # )
-                # for val_batch in tq_val_batch:
-                #     with self.accelerator.autocast():
-                #         self.validation_step(
-                #             diffuser=diffuser,
-                #             val_batch=val_batch,
-                #             tracker=tracker,
-                #             ema_eval=ema_eval,  # type: ignore
-                #         )
-                #     tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss']:.4f}")
-                # gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
-                #     torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
-                # )
-                # self.accelerator.log({"val/loss": gathered_val_loss.mean().item()}, step=epoch)  # type: ignore
-                # if gathered_val_loss.mean().item() < best_val_loss:  # type: ignore
-                #     best_val_loss = gathered_val_loss
-                #     self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
-                # tracker.reset()
+                tq_val_batch = tqdm(
+                    val_dataloader,  # type: ignore
+                    disable=not self.accelerator.is_main_process,
+                    leave=False,
+                    position=1,
+                )
+                for val_batch in tq_val_batch:
+                    with self.accelerator.autocast():
+                        self.validation_step(
+                            diffuser=diffuser,
+                            val_batch=val_batch,
+                            tracker=tracker,
+                            ema_eval=ema_eval,  # type: ignore
+                        )
+                    tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss']:.4f}")
+                gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
+                    torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
+                )
+                self.accelerator.log({"val/loss": gathered_val_loss.mean().item()}, step=epoch)  # type: ignore
+                if gathered_val_loss.mean().item() < best_val_loss:  # type: ignore
+                    best_val_loss = gathered_val_loss
+                    self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
+                tracker.reset()
 
                 if log_validation_images:
                     logging.info("creating validation images")
