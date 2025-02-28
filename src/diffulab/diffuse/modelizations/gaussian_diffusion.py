@@ -283,7 +283,7 @@ class GaussianDiffusion(Diffusion):
         assert noise.shape == x.shape
         assert timesteps.shape[0] == x.shape[0]
         x_t = (
-            1 / extract_into_tensor(self.sqrt_alphas_bar, timesteps, x.shape) * x
+            extract_into_tensor(self.sqrt_alphas_bar, timesteps, x.shape) * x
             + (1 - extract_into_tensor(self.alphas_bar, timesteps, noise.shape)).sqrt() * noise
         )
         return x_t, noise

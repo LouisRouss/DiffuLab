@@ -138,7 +138,7 @@ class Trainer:
             else diffuser.diffusion.denoise(model=ema_eval, data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
         )
         images = wandb.Image(images, caption="Validation Images")
-        self.accelerator.log({"val/images": images}, step=epoch)  # type: ignore
+        self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
         diffuser.set_steps(original_steps)
 
     def train(
@@ -204,10 +204,12 @@ class Trainer:
                         )
                         tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
 
-            gathered_loss: list[Tensor] = self.accelerator.gather(  # type: ignore
+            gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
                 torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
             )
-            self.accelerator.log({"train/loss": gathered_loss.mean().item()}, step=epoch)  # type: ignore
+            self.accelerator.log(  # type: ignore
+                {"train/loss": gathered_loss.mean().item()}, step=epoch + 1
+            )
             tracker.reset()
 
             if val_dataloader is not None:
@@ -234,7 +236,9 @@ class Trainer:
                 gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
                     torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
                 )
-                self.accelerator.log({"val/loss": gathered_val_loss.mean().item()}, step=epoch)  # type: ignore
+                self.accelerator.log(  # type: ignore
+                    {"val/loss": gathered_val_loss.mean().item()}, step=epoch + 1
+                )
                 if gathered_val_loss.mean().item() < best_val_loss:  # type: ignore
                     best_val_loss = gathered_val_loss
                     self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore

@@ -3,7 +3,7 @@
 - [x] Correct github CI
 - [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
 - [x] add DDIM to Gaussian Diffusion
-- [x] add guidance (both classifier free and classifier)
+- [ ] add guidance to rectified flow    
 - [ ] Complete the different init files
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
