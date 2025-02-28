@@ -1,5 +1,4 @@
 import torch
-import torch.nn as nn
 from torch import Tensor
 from tqdm import tqdm
 
@@ -27,21 +26,6 @@ class Flow(Diffusion):
     def bt(self, timesteps: Tensor) -> Tensor:
         return timesteps
 
-    def dat(self, timesteps: Tensor) -> Tensor:
-        return torch.full_like(timesteps, -1)
-
-    def dbt(self, timesteps: Tensor) -> Tensor:
-        return torch.full_like(timesteps, 1)
-
-    def log_snr(self, timesteps: Tensor) -> Tensor:
-        return torch.log(self.at(timesteps) ** 2 / self.bt(timesteps) ** 2)
-
-    def dlog_snr(self, timesteps: Tensor) -> Tensor:
-        return 2 * (self.dat(timesteps) / self.at(timesteps) - self.dbt(timesteps) / self.bt(timesteps))
-
-    def wt(self, timesteps: Tensor) -> Tensor:
-        return self.bt(timesteps) / self.at(timesteps)
-
     def draw_timesteps(self, batch_size: int) -> Tensor:
         return torch.rand((batch_size), dtype=torch.float32)
 
@@ -50,11 +34,7 @@ class Flow(Diffusion):
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
         prediction = model(**model_inputs, timesteps=timesteps)
-        # return prediction - model_inputs["x"]
-        v = prediction * self.dlog_snr(timesteps) * self.bt(timesteps) * (1 / 2) + model_inputs["x"] * self.dat(
-            timesteps
-        ) / self.at(timesteps)
-        return v
+        return prediction
 
     def one_step_denoise(
         self,
@@ -81,14 +61,10 @@ class Flow(Diffusion):
         self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
     ) -> Tensor:
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
-        prediction = model(**model_inputs, timesteps=timesteps)
-        loss = (
-            -1
-            / 2
-            * self.wt(timesteps)
-            * self.dlog_snr(timesteps)
-            * nn.functional.mse_loss(prediction, noise, reduction="none").mean(dim=list(range(1, prediction.dim())))
-        ).mean()
+        prediction: torch.Tensor = model(**model_inputs, timesteps=timesteps)
+        losses = (prediction - (model_inputs["x"] - noise)) ** 2
+        losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
+        loss = losses.mean()
         return loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:

@@ -78,7 +78,7 @@ def train():
         classifier_free=True,
     )
 
-    diffuser = Diffuser(denoiser, model_type="gaussian_diffusion", n_steps=1000, sampling_method="ddpm")
+    diffuser = Diffuser(denoiser, model_type="rectified_flow", n_steps=1000, sampling_method="euler")
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LR)
 
     trainer = Trainer(

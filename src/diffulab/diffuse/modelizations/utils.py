@@ -1,6 +1,3 @@
-import numpy as np
-
-
 def space_timesteps(num_timesteps: int, section_counts: str | int, ddim: bool = False) -> set[int]:
     if ddim:
         assert isinstance(section_counts, int)
