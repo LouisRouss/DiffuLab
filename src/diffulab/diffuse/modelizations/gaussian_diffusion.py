@@ -243,7 +243,7 @@ class GaussianDiffusion(Diffusion):
         model_inputs: ModelInput,
         use_tqdm: bool = True,
         clamp_x: bool = True,
-        guidance_scale: float = 10,
+        guidance_scale: float = 0,
         n_steps: int | None = None,
         classifier_free: bool = True,
         classifier: Callable[[Tensor, Tensor], Tensor] | None = None,

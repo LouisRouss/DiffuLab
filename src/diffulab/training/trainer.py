@@ -133,7 +133,12 @@ class Trainer:
         images = (
             diffuser.generate(data_shape=batch["x"].shape, model_inputs=batch, n_steps=val_steps)  # type: ignore
             if not self.use_ema
-            else diffuser.diffusion.denoise(model=ema_eval, data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
+            else diffuser.diffusion.denoise(
+                model=ema_eval,  # type: ignore
+                data_shape=batch["x"].shape,
+                model_inputs=batch,  # type: ignore
+                n_steps=val_steps,
+            )
         )
         images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore

@@ -85,7 +85,7 @@ class Flow(Diffusion):
         model_inputs: ModelInput,
         use_tqdm: bool = True,
         clamp_x: bool = True,
-        guidance_scale: float = 10,
+        guidance_scale: float = 0,
         n_steps: int | None = None,
     ) -> Tensor:
         if n_steps:
