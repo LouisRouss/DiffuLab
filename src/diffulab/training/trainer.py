@@ -54,6 +54,7 @@ class Trainer:
         self.save_path = Path(save_path) / project_name
         Path(self.save_path).mkdir(parents=True, exist_ok=True)
         os.environ["WANDB_DIR"] = str(self.save_path / "wandb")
+        Path(os.environ["WANDB_DIR"]).mkdir(parents=True, exist_ok=True)
         self.accelerator.init_trackers(project_name=project_name, config=run_config, init_kwargs=init_kwargs)  # type: ignore
 
     def training_step(

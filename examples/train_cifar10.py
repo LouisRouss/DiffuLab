@@ -56,7 +56,7 @@ class Cifar10(Dataset[dict[str, Tensor]]):
 def train():
     data_path = "/home/louis/datasets/cifar-10-batches-py"
     batches_to_load_train = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4"]
-    batches_to_load_val = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4"]
+    batches_to_load_val = ["data_batch_5"]
 
     train_dataset = Cifar10(data_path, batches_to_load_train)
     val_dataset = Cifar10(data_path, batches_to_load_val)
