@@ -69,7 +69,7 @@ class Flow(Diffusion):
             v_dropped = self.get_v(model, {**model_inputs, "p": 1}, t_curr)
             v = v + guidance_scale * (v - v_dropped)
         if self.sampling_method == "euler":
-            x_t_minus_one: Tensor = model_inputs["x"] - v * (t_prev - t_curr)
+            x_t_minus_one: Tensor = model_inputs["x"] - v * (t_curr - t_prev)
         else:  # different methods to be implemented maybe in the generic class instead
             raise NotImplementedError
         if clamp_x:

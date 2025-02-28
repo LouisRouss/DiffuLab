@@ -5,7 +5,6 @@
 - [x] add DDIM to Gaussian Diffusion
 - [x] add guidance (both classifier free and classifier)
 - [ ] Complete the different init files
-- [ ] add EDM
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
 - [ ] double check logging on wandb is working during training
@@ -13,6 +12,7 @@
 - [ ] add some context embedders
 - [ ] code from scratch DiT (to be tested)
 - [ ] doc string and comment
+- [ ] add EDM
 - [ ] Train our models on toy datasets for different tasks 
 - [ ] Add possibility to train LORA/DORA
 - [ ] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)
