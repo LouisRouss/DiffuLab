@@ -8,10 +8,11 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
 from diffulab.diffuse.diffuser import Diffuser
+from diffulab.networks.denoisers.common import Denoiser
 from diffulab.networks.denoisers.unet import UNetModel
 from diffulab.training.trainer import Trainer
 
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 EPOCHS = 200
 LR = 1e-4
 
@@ -49,6 +50,7 @@ class Cifar10(Dataset[dict[str, Tensor]]):
     def __getitem__(self, idx: int):
         image = self.images[idx].astype(np.float32) / 255.0
         image = image.transpose(2, 0, 1)
+        image = (image - 0.5) / 0.5
         label = self.labels[idx]
         return {"x": image, "y": label}
 
@@ -70,13 +72,19 @@ def train():
         model_channels=192,
         out_channels=3,
         num_res_blocks=2,
-        attention_resolutions=[8, 16],
+        attention_resolutions=[4, 8, 16],
         num_heads=3,
         resblock_updown=True,
         n_classes=10,
         use_scale_shift_norm=True,
         classifier_free=True,
     )
+
+    # Print number of trainable parameters
+    def count_parameters(model: Denoiser) -> int:
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    print(f"Number of trainable parameters: {count_parameters(denoiser):,}")
 
     diffuser = Diffuser(denoiser, model_type="rectified_flow", n_steps=50, sampling_method="euler")
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LR)

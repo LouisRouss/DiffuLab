@@ -1,3 +1,5 @@
+# In part inspired from https://github.com/openai/guided-diffusion/blob/main/guided_diffusion/gaussian_diffusion.py under MIT license as of 2025-03-02
+
 import enum
 import math
 from typing import Callable
@@ -10,8 +12,6 @@ from tqdm import tqdm
 from diffulab.diffuse.diffusion import Diffusion
 from diffulab.diffuse.utils import extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-
-# In part inspired from https://github.com/openai/guided-diffusion/blob/main/guided_diffusion/gaussian_diffusion.py
 
 
 class MeanType(enum.Enum):
