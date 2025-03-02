@@ -70,8 +70,9 @@ class SD3TextEmbedder(ContextEmbedder):
 
     def get_t5_embeddings(self, context: list[str]) -> Tensor:
         inputs_t5_list: dict[str, list[int]] = self.tokenizer_t5(context)  # type: ignore
-        inputs_t5 = {
-            key: torch.tensor(value, dtype=torch.long, device=self.device) for key, value in inputs_t5_list.items()
+        inputs_t5: dict[str, Tensor] = {
+            key: torch.tensor(value, dtype=torch.long, device=self.device)
+            for key, value in inputs_t5_list.items()  # type: ignore
         }
         last_hidden_state: Tensor = self.t5(**inputs_t5)["last_hidden_state"]  # [batch_size, n_ctx, 4096]
         return last_hidden_state

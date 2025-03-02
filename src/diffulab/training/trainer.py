@@ -81,10 +81,12 @@ class Trainer:
             ema_denoiser.update()
 
     def move_dict_to_device(self, batch: ModelInput) -> ModelInput:
-        return ModelInput(**{
-            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-            for k, v in batch.items()  # type: ignore
-        })
+        return ModelInput(
+            **{
+                k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+                for k, v in batch.items()  # type: ignore
+            }
+        )
 
     @torch.no_grad()  # type: ignore
     def validation_step(

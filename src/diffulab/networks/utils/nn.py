@@ -149,13 +149,13 @@ class RotaryPositionalEmbedding(nn.Module):
         self.register_buffer(name="sin", tensor=torch.empty(0))
 
     def _cache(self, seq_len: int) -> None:
-        if seq_len < self.cos.shape[0]:
+        if seq_len <= self.cos.shape[0]:
             return
-        t = torch.arange(seq_len, device=self.device, dtype=torch.float32)
-        freqs = torch.outer(t, self.theta)
+        t = torch.arange(seq_len, dtype=torch.float32)
+        freqs = torch.outer(t, self.theta)  # type: ignore
         embs = torch.cat([freqs, freqs], dim=-1)
-        self.cos = embs.cos().to(self.dtype)
-        self.sin = embs.sin().to(self.dtype)
+        self.cos: Tensor = embs.cos().to(torch.float32)
+        self.sin: Tensor = embs.sin().to(torch.float32)
 
     def _neg_half(self, x: Tensor) -> Tensor:
         return torch.cat([-x[:, :, :, self.dim // 2 :], x[:, :, :, : self.dim // 2]], dim=-1)
@@ -163,6 +163,8 @@ class RotaryPositionalEmbedding(nn.Module):
     def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         seq_len = q.shape[1]
         self._cache(seq_len)
+        cos = self.cos.to(device=q.device, dtype=q.dtype)
+        sin = self.sin.to(device=q.device, dtype=q.dtype)
 
         # [batch_size, seq_length, num_heads, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
         q = q.transpose(1, 2)
@@ -171,13 +173,13 @@ class RotaryPositionalEmbedding(nn.Module):
         # Q rotation
         q_rope, q_pass = q[..., : self.dim], q[..., self.dim :]
         q_neg_half = self._neg_half(q_rope)
-        q_rope = (q_rope * self.cos[:seq_len]) + (q_neg_half * self.sin[:seq_len])
+        q_rope = (q_rope * cos[:seq_len]) + (q_neg_half * sin[:seq_len])
         q_rot = torch.cat((q_rope, q_pass), dim=-1)
 
         # K rotation
         k_rope, k_pass = k[..., : self.dim], k[..., self.dim :]
         k_neg_half = self._neg_half(k_rope)
-        k_rope = (k_rope * self.cos[:seq_len]) + (k_neg_half * self.sin[:seq_len])
+        k_rope = (k_rope * cos[:seq_len]) + (k_neg_half * sin[:seq_len])
         k_rot = torch.cat((k_rope, k_pass), dim=-1)
 
         # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
