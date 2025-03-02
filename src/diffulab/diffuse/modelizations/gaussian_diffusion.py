@@ -244,7 +244,6 @@ class GaussianDiffusion(Diffusion):
         use_tqdm: bool = True,
         clamp_x: bool = True,
         guidance_scale: float = 0,
-        n_steps: int | None = None,
         classifier_free: bool = True,
         classifier: Callable[[Tensor, Tensor], Tensor] | None = None,
     ) -> Tensor:
@@ -252,8 +251,6 @@ class GaussianDiffusion(Diffusion):
             model_inputs["x"] = torch.randn(
                 data_shape, device=next(model.parameters()).device, dtype=next(model.parameters()).dtype
             )
-        n_steps = n_steps or self.steps
-
         for t in tqdm(
             list(range(self.steps))[::-1],
             desc="generating image",

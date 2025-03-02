@@ -48,7 +48,6 @@ class Diffusion(ABC):
         use_tqdm: bool = True,
         clamp_x: bool = True,
         guidance_scale: float = 0,
-        n_steps: int | None = None,
     ) -> Tensor:
         pass
 

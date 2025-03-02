@@ -52,7 +52,6 @@ class Diffuser:
         use_tqdm: bool = True,
         clamp_x: bool = True,
         guidance_scale: float = 0,
-        n_steps: int | None = None,
         **kwargs: dict[str, Any],
     ) -> Tensor:
         return self.diffusion.denoise(
@@ -62,6 +61,5 @@ class Diffuser:
             use_tqdm=use_tqdm,
             clamp_x=clamp_x,
             guidance_scale=guidance_scale,
-            n_steps=n_steps,
             **kwargs,
         )

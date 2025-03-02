@@ -5,7 +5,7 @@
 - [x] add DDIM to Gaussian Diffusion
 - [x] double check logging on wandb is working during training
 - [ ] add possibility to change timestep for sample DDPM
-- [ ] add guidance to rectified flow    
+- [ ] correct guidance to rectified flow    
 - [ ] Complete the different init files
 - [ ] add reflow algorithm
 - [ ] add mixed precision training

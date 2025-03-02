@@ -60,7 +60,7 @@ class Flow(Diffusion):
     ) -> Tensor:
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
         prediction: torch.Tensor = model(**model_inputs, timesteps=timesteps)
-        losses = (prediction - (model_inputs["x"] - noise)) ** 2
+        losses = ((noise - model_inputs["x"]) - prediction) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
         return loss
@@ -84,11 +84,7 @@ class Flow(Diffusion):
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
-        n_steps: int | None = None,
     ) -> Tensor:
-        if n_steps:
-            original_steps = self.steps
-            self.set_steps(n_steps, schedule=self.schedule)
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         x = torch.randn(data_shape, device=device, dtype=dtype)
@@ -108,6 +104,4 @@ class Flow(Diffusion):
                 guidance_scale=guidance_scale,
                 clamp_x=clamp_x,
             )
-        if n_steps:
-            self.set_steps(original_steps, schedule=self.schedule)  # reset the steps # type: ignore
         return x
