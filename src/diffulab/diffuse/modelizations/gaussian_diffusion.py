@@ -31,6 +31,7 @@ class GaussianDiffusion(Diffusion):
     def __init__(
         self,
         n_steps: int = 50,
+        original_steps: int = 1000,
         sampling_method: str = "ddpm",
         schedule: str = "linear",
         mean_type: str = "epsilon",

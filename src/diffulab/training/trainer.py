@@ -126,7 +126,7 @@ class Trainer:
         val_dataloader: Iterable[dict[str, Any]],
         epoch: int,
         ema_eval: Diffuser | None = None,
-        val_steps: int = 25,
+        val_steps: int = 50,
     ) -> None:
         diffuser.eval()
         batch: dict[str, Any] = next(iter(val_dataloader))  # type: ignore

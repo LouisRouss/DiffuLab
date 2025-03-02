@@ -1,23 +1,64 @@
+<p align="center">
+    <img src="images/diffulab.png" alt="DiffuLab Logo" width="352" height="352" style="max-width: 100%;">
+</p>
+
+# DiffuLab: Easily Train Diffusion Models from Scratch
+
+## Installation
+
+The easiest way to use DiffuLab is with [Astral UV](https://docs.astral.sh/uv/):
+
+```bash
+git clone git@github.com:LouisRouss/DiffuLab.git
+cd DiffuLab
+uv sync
+```
+
+## Concept of the Library
+
+DiffuLab is designed to provide a simple and flexible way to train diffusion models while allowing full customization of its core components. The library is structured around three major building blocks:
+
+1. **Architecture** (e.g., U-Net, DiT)
+2. **Formalization** (e.g., Rectified Flow, DDPM, EDM)
+3. **Sampler for inference**
+
+This project is in its early stages, and contributions are highly encouraged. The initial goal is to implement fundamental features and ensure they work seamlessly. Future updates will introduce additional functionalities, such as:
+- Adapters
+- Fine-tuning with LoRA
+- Feature injection into the architecture for specialized inference scenarios
+
+## Launching a Training Session
+
+To start training a model, follow the provided [examples](examples/). Before running any training, make sure to configure `accelerate` in your terminal:
+
+```bash
+accelerate config
+```
+
+After setting up, you can launch training scripts as demonstrated in the examples directory.
+
+---
+
+Stay tuned for updates and feel free to contribute!
+
+
 # To-Do List
 
-- [x] Correct github CI
-- [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
-- [x] add DDIM to Gaussian Diffusion
-- [x] double check logging on wandb is working during training
+Here is a To-Do list, feel welcome to help to any point along this list. The already done code may not be error free so don't hesitate to also openPR to correct it.
+
 - [ ] add possibility to change timestep for sample DDPM (currently doesnt work)
-- [ ] correct guidance to rectified flow    
 - [ ] Complete the different init files
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
 - [ ] add resume training function to the Trainer
 - [ ] add some context embedders
-- [ ] code from scratch DiT (to be tested)
+- [ ] Make the implementation of the DiT architecture more versatile
 - [ ] doc string and comment
 - [ ] add EDM
 - [ ] Train our models on toy datasets for different tasks 
 - [ ] Add possibility to train LORA/DORA
 - [ ] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)
-- [ ] add different timesteps schedule in flows
-- [ ] Test ajout differential transformer dans mmDiT
-- [ ] Voir pour ajouter https://arxiv.org/pdf/2406.02507
+- [ ] add different sampler
+- [ ] Try out Differential Transformers
+- [ ] Check to add https://arxiv.org/pdf/2406.02507
 - [ ] inject lessons learned from nvidia https://developer.nvidia.com/blog/rethinking-how-to-train-diffusion-models/
