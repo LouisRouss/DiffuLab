@@ -4,7 +4,7 @@
 - [x] Add the possibility to noise only part of the data (for image conditioning for instance, palette style)
 - [x] add DDIM to Gaussian Diffusion
 - [x] double check logging on wandb is working during training
-- [ ] add possibility to change timestep for sample DDPM
+- [ ] add possibility to change timestep for sample DDPM (currently doesnt work)
 - [ ] correct guidance to rectified flow    
 - [ ] Complete the different init files
 - [ ] add reflow algorithm
