@@ -12,6 +12,7 @@ The easiest way to use DiffuLab is with [Astral UV](https://docs.astral.sh/uv/):
 git clone git@github.com:LouisRouss/DiffuLab.git
 cd DiffuLab
 uv sync
+uv pip install -e .
 ```
 
 ## Concept of the Library
@@ -46,16 +47,17 @@ Stay tuned for updates and feel free to contribute!
 
 Here is a To-Do list, feel welcome to help to any point along this list. The already done code may not be error free so don't hesitate to also openPR to correct it.
 
-- [ ] add possibility to change timestep for sample DDPM (currently doesnt work)
+- [x] add possibility to change timestep for sample DDPM
+- [x] doc string and comment
 - [ ] Complete the different init files
+- [ ] add resume training function to the Trainer
+- [ ] Make the implementation of the DiT architecture more versatile
+- [ ] add sampler abstraction and use it instead of str sampling method in the different classes
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
-- [ ] add resume training function to the Trainer
 - [ ] add some context embedders
-- [ ] Make the implementation of the DiT architecture more versatile
-- [ ] doc string and comment
 - [ ] add EDM
-- [ ] Train our models on toy datasets for different tasks 
+- [ ] Train our models on toy datasets for different tasks (conditional generation, Image to Image ...)
 - [ ] Add possibility to train LORA/DORA
 - [ ] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)
 - [ ] add different sampler

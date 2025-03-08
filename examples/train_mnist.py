@@ -99,7 +99,7 @@ def train():
         gradient_accumulation_step=1,
         precision_type="no",
         project_name="mnist",
-        use_ema=False,
+        use_ema=True,
     )
 
     trainer.train(
