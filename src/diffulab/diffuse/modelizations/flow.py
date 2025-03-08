@@ -9,8 +9,11 @@ from diffulab.networks.denoisers.common import Denoiser, ModelInput
 # replace function at, bt etc ... By actually precomputing the values and storing them for every timestep
 # more efficient
 class Flow(Diffusion):
-    def __init__(self, n_steps: int = 50, sampling_method: str = "euler", schedule: str = "linear"):
+    def __init__(
+        self, n_steps: int = 50, sampling_method: str = "euler", schedule: str = "linear", logits_normal: bool = False
+    ):
         super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
+        self.logits_normal = logits_normal
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         if schedule == "linear":
@@ -27,7 +30,11 @@ class Flow(Diffusion):
         return timesteps
 
     def draw_timesteps(self, batch_size: int) -> Tensor:
-        return torch.rand((batch_size), dtype=torch.float32)
+        if not self.logits_normal:
+            return torch.rand((batch_size), dtype=torch.float32)
+        else:
+            nt = torch.randn((batch_size), dtype=torch.float32)
+            return torch.sigmoid(nt)
 
     def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         device = next(model.parameters()).device

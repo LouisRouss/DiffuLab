@@ -81,12 +81,10 @@ class Trainer:
             ema_denoiser.update()
 
     def move_dict_to_device(self, batch: ModelInput) -> ModelInput:
-        return ModelInput(
-            **{
-                k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-                for k, v in batch.items()  # type: ignore
-            }
-        )
+        return ModelInput(**{
+            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+            for k, v in batch.items()  # type: ignore
+        })
 
     @torch.no_grad()  # type: ignore
     def validation_step(
@@ -143,6 +141,7 @@ class Trainer:
                 model_inputs=batch,  # type: ignore
             )
         )
+        images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
         diffuser.set_steps(original_steps)
@@ -158,7 +157,7 @@ class Trainer:
         log_validation_images: bool = False,
         train_embedder: bool = False,
         p_classifier_free_guidance: float = 0,
-        val_steps: int = 25,
+        val_steps: int = 50,
         ema_ckpt: str | None = None,
         epoch_start: int = 0,
     ):

@@ -1,4 +1,4 @@
-# Recoded from scratch, if you see any error please report it to the author of the repository
+# Recoded from scratch from https://arxiv.org/pdf/2403.03206, if you see any error please report it to the author of the repository
 
 from dataclasses import dataclass
 
@@ -336,19 +336,17 @@ class MMDiT(Denoiser):
         self.context_embed = nn.Linear(context_embedder.output_size[1], context_dim)  # type: ignore
         self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
 
-        self.layers = nn.Sequential(
-            *[
-                MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                for _ in range(depth)
-            ]
-        )
+        self.layers = nn.Sequential(*[
+            MMDiTBlock(
+                context_dim=context_dim,
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            for _ in range(depth)
+        ])
 
         self.last_layer = LastLayer(
             hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels

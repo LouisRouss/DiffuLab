@@ -100,13 +100,7 @@ def train():
         ema_update_every=1,
     )
 
-    trainer.train(
-        diffuser,
-        optimizer,  # type: ignore
-        train_loader,
-        val_loader,
-        log_validation_images=True,
-    )
+    trainer.train(diffuser, optimizer, train_loader, val_loader, log_validation_images=True, val_steps=50)
 
 
 if __name__ == "__main__":
