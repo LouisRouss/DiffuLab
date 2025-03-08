@@ -10,6 +10,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from diffulab.diffuse.diffusion import Diffusion
+from diffulab.diffuse.modelizations.utils import space_timesteps
 from diffulab.diffuse.utils import extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 
@@ -30,8 +31,7 @@ class ModelVarType(enum.Enum):
 class GaussianDiffusion(Diffusion):
     def __init__(
         self,
-        n_steps: int = 50,
-        original_steps: int = 1000,
+        n_steps: int = 1000,
         sampling_method: str = "ddpm",
         schedule: str = "linear",
         mean_type: str = "epsilon",
@@ -44,11 +44,11 @@ class GaussianDiffusion(Diffusion):
             raise ValueError(f"variance_type must be one of {[e.value for e in ModelVarType]}")
         self.mean_type = mean_type
         self.var_type = variance_type
+        self.training_steps = n_steps
 
-    def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
-        self.timesteps: list[float] = torch.linspace(n_steps, 0, n_steps + 1, dtype=torch.int32).tolist()  # type: ignore
-        self.steps = n_steps
-        self.betas = self._get_variance_schedule(n_steps, schedule)
+        self.sampling_steps_set = False
+
+    def set_diffusion_parameters(self, betas: Tensor) -> None:
         self.alphas = 1 - self.betas
         self.alphas_bar = self.alphas.cumprod(dim=0)
         self.alphas_bar_prev = torch.cat([torch.tensor([1.0], dtype=torch.float64), self.alphas_bar[:-1]])
@@ -64,6 +64,33 @@ class GaussianDiffusion(Diffusion):
         )
         self.posterior_mean_coef1 = self.betas * (self.alphas_bar_prev).sqrt() / (1.0 - self.alphas_bar)
         self.posterior_mean_coef2 = (1.0 - self.alphas_bar_prev) * self.alphas.sqrt() / (1.0 - self.alphas_bar)
+
+    def set_steps(
+        self,
+        n_steps: int,
+        schedule: str = "ddpm",
+        section_counts: int | str | None = None,
+    ) -> None:
+        if n_steps != self.training_steps:
+            section_counts = section_counts or n_steps
+        self.steps = n_steps
+
+        self.betas = self._get_variance_schedule(self.training_steps, schedule)
+        self.set_diffusion_parameters(self.betas)
+        self.timestep_map: list[int] = []
+
+        if section_counts:
+            timesteps_to_use = space_timesteps(
+                num_timesteps=self.training_steps, section_counts=section_counts, ddim=schedule == "ddim"
+            )
+            last_alpha_bar = torch.tensor(1.0)
+            new_betas: list[Tensor] = []
+            for i, alpha_bar in enumerate(self.alphas_bar):
+                if i in timesteps_to_use:
+                    new_betas.append(1 - alpha_bar / last_alpha_bar)
+                    last_alpha_bar = alpha_bar
+                    self.timestep_map.append(i)
+            self.set_diffusion_parameters(torch.tensor(new_betas))
 
     def _get_variance_schedule(self, n_steps: int, variance_schedule: str = "linear") -> Tensor:
         if variance_schedule == "linear":
@@ -204,6 +231,9 @@ class GaussianDiffusion(Diffusion):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t, device=device, dtype=dtype)
+        if self.timestep_map:
+            map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=timesteps.dtype)
+            timesteps = map_tensor[timesteps]
         prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps)
 
         if classifier_free and guidance_scale > 0:
@@ -274,6 +304,9 @@ class GaussianDiffusion(Diffusion):
         self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
     ) -> Tensor:
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
+        if self.timestep_map:
+            map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=timesteps.dtype)
+            timesteps = map_tensor[timesteps]
         prediction = model(**model_inputs, timesteps=timesteps)
         loss = nn.functional.mse_loss(prediction, noise, reduction="mean")
         return loss
