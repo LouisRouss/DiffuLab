@@ -7,10 +7,9 @@ from numpy.typing import NDArray
 from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
-from diffulab.diffuse.diffuser import Diffuser
-from diffulab.networks.denoisers.common import Denoiser
-from diffulab.networks.denoisers.unet import UNetModel
-from diffulab.training.trainer import Trainer
+from diffulab.diffuse import Diffuser
+from diffulab.networks.denoisers import Denoiser, UNetModel
+from diffulab.training import Trainer
 
 BATCH_SIZE = 256
 EPOCHS = 100

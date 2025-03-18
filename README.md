@@ -49,14 +49,12 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 
 - [x] add possibility to change timestep for sample DDPM
 - [x] doc string and comment
-- [ ] Complete the different init files
-- [ ] add resume training function to the Trainer
 - [ ] Make the implementation of the DiT architecture more versatile
-- [ ] add sampler abstraction and use it instead of str sampling method in the different classes
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
 - [ ] add some context embedders
 - [ ] add EDM
+- [ ] think about how to add a sampler abstraction and use it in the different Diffusion classes
 - [ ] Train our models on toy datasets for different tasks (conditional generation, Image to Image ...)
 - [ ] Add possibility to train LORA/DORA
 - [ ] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)

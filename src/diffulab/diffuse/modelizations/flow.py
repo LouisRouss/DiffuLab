@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from tqdm import tqdm
 
-from diffulab.diffuse.diffusion import Diffusion
+from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 
 

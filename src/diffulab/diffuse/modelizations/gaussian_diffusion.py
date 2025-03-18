@@ -7,7 +7,7 @@ import torch.nn as nn
 from torch import Tensor
 from tqdm import tqdm
 
-from diffulab.diffuse.diffusion import Diffusion
+from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.utils import space_timesteps
 from diffulab.diffuse.utils import extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
@@ -82,16 +82,17 @@ class GaussianDiffusion(Diffusion):
         mean_type: str = "epsilon",
         variance_type: str = "fixed_small",
     ):
-        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
         if mean_type not in MeanType._value2member_map_:
             raise ValueError(f"mean_type must be one of {[e.value for e in MeanType]}")
         if variance_type not in ModelVarType._value2member_map_:
             raise ValueError(f"variance_type must be one of {[e.value for e in ModelVarType]}")
+        if sampling_method not in ["ddpm", "ddim"]:
+            raise ValueError("sampling method must be one of ['ddpm', 'ddim']")
+
+        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
         self.mean_type = mean_type
         self.var_type = variance_type
         self.training_steps = n_steps
-
-        self.sampling_steps_set = False
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:
         """

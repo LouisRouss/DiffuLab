@@ -1,4 +1,4 @@
-from diffulab.diffuse.diffusion import Diffusion
+from diffulab.diffuse.modelizations.diffusion import Diffusion
 
 
 class EDM(Diffusion):
