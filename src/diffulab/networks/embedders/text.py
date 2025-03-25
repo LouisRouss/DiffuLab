@@ -77,18 +77,20 @@ class SD3TextEmbedder(ContextEmbedder):
         last_hidden_state: Tensor = self.t5(**inputs_t5)["last_hidden_state"]  # [batch_size, n_ctx, 4096]
         return last_hidden_state
 
-    def get_embeddings(self, context: list[str]) -> dict[str, Tensor]:
+    def get_embeddings(
+        self, context_l14: list[str], context_g14: list[str], context_t5: list[str]
+    ) -> dict[str, Tensor]:
         outputs: dict[str, Tensor] = {}
         if self.load_l14:
-            outputs_l14 = self.get_l14_embeddings(context)  # [batch_size, n_ctx, 768]
+            outputs_l14 = self.get_l14_embeddings(context_l14)  # [batch_size, n_ctx, 768]
             outputs["l14"] = outputs_l14[0]
             outputs["l14_pooled"] = outputs_l14[1]
         if self.load_g14:
-            outputs_g14 = self.get_g14_embeddings(context)  # [batch_size, n_ctx, 1280]
+            outputs_g14 = self.get_g14_embeddings(context_g14)  # [batch_size, n_ctx, 1280]
             outputs["g14"] = outputs_g14[0]
             outputs["g14_pooled"] = outputs_g14[1]
         if self.load_t5:
-            outputs_t5 = self.get_t5_embeddings(context)  # [batch_size, n_ctx, 4096]
+            outputs_t5 = self.get_t5_embeddings(context_t5)  # [batch_size, n_ctx, 4096]
             outputs["t5"] = outputs_t5
         return outputs
 
@@ -119,13 +121,16 @@ class SD3TextEmbedder(ContextEmbedder):
                 with (path_to_save / f"{begins + i + b}.txt").open("r") as f:
                     f.write(context[i + b])
 
-    def drop_conditions(self, context: list[str], p: float) -> list[str]:
-        return ["" if random.random() < p else c for c in context]
+    def drop_conditions(self, context: list[str], p: float) -> tuple[list[str], list[str], list[str]]:
+        context_l14 = ["" if random.random() < p else c for c in context]
+        context_g14 = ["" if random.random() < p else c for c in context]
+        context_t5 = ["" if random.random() < p else c for c in context]
+        return context_l14, context_g14, context_t5
 
     def forward(self, context: list[str], p: float) -> tuple[Tensor, ...]:
         assert self.load_l14 and self.load_g14 and self.load_t5
-        context = self.drop_conditions(context, p)
-        embeddings = self.get_embeddings(context)
+        context_l14, context_g14, context_t5 = self.drop_conditions(context, p)
+        embeddings = self.get_embeddings(context_l14, context_g14, context_t5)
         pooled = torch.cat([embeddings["l14_pooled"], embeddings["g14_pooled"]], dim=-1)
         full_encoding_clip = torch.cat(
             [

@@ -257,8 +257,8 @@ class MMDiTBlock(nn.Module):
         )
 
     def forward(self, input: Tensor, y: Tensor, context: Tensor):
-        modulation_input = self.modulation_input(input)
-        modulation_context = self.modulation_context(context)
+        modulation_input = self.modulation_input(y)
+        modulation_context = self.modulation_context(y)
 
         modulated_input = (modulation_input.alpha * self.input_norm_1(input)) + modulation_input.beta
         modulated_context = (modulation_context.alpha * self.context_norm_1(context)) + modulation_context.beta
@@ -396,14 +396,9 @@ class MMDiT(Denoiser):
             x = torch.cat([x, x_context], dim=1)
 
         emb = self.time_embed(timestep_embedding(timesteps, self.input_channels))
-
-        if context is not None:
-            context_pooled, context = self.context_embedder(context, p)
-            context_pooled = self.pooled_embed(context_pooled) + emb
-            context = self.context_embed(context)
-        else:
-            context_pooled = emb.clone()
-            context = x.clone()
+        context_pooled, context = self.context_embedder(context, p)
+        context_pooled = self.pooled_embed(context_pooled) + emb
+        context = self.context_embed(context)
 
         x = self.patchify(x)
         x, context = self.layers(x, context_pooled, context)
