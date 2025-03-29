@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="images/diffulab.png" alt="DiffuLab Logo" width="352" height="352" style="max-width: 100%;">
+    <img src="images/diffulab.png" alt="DiffuLab Logo" width="400" height="302" style="max-width: 100%;">
 </p>
 
 # DiffuLab: Easily Train Diffusion Models from Scratch
