@@ -4,8 +4,8 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch import Tensor
 from jaxtyping import Float
+from torch import Tensor
 
 
 class GroupNorm32(nn.GroupNorm):
