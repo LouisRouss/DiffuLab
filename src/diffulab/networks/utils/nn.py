@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+from jaxtyping import Float
 
 
 class GroupNorm32(nn.GroupNorm):
@@ -160,7 +161,16 @@ class RotaryPositionalEmbedding(nn.Module):
     def _neg_half(self, x: Tensor) -> Tensor:
         return torch.cat([-x[:, :, :, self.dim // 2 :], x[:, :, :, : self.dim // 2]], dim=-1)
 
-    def forward(self, q: Tensor, k: Tensor, v: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
+    def forward(
+        self,
+        q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+    ) -> Tuple[
+        Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        Float[Tensor, "batch_size seq_len n_heads head_dim"],
+    ]:
         seq_len = q.shape[1]
         self._cache(seq_len)
         cos = self.cos.to(device=q.device, dtype=q.dtype)

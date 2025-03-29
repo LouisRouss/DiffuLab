@@ -50,9 +50,10 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 - [x] add possibility to change timestep for sample DDPM
 - [x] doc string and comment
 - [x] Make the implementation of the DiT architecture more versatile
-- [ ] Check DiT is working (both mm and basic)
+- [x] Check DiT is working (both mm and basic)
 - [ ] create unit tests and add them to the CI 
-- [ ] add some context embedders
+- [ ] add gradient checkpointing to DiT
+- [ ] add some more context embedders
 - [ ] add reflow algorithm
 - [ ] add mixed precision training
 - [ ] add EDM

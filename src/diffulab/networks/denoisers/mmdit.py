@@ -1,11 +1,12 @@
 # Recoded from scratch from https://arxiv.org/pdf/2403.03206, if you see any error please report it to the author of the repository
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn as nn
 from einops import rearrange
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser
@@ -18,13 +19,13 @@ class RMSNorm(torch.nn.Module):
     Root Mean Square Layer Normalization (RMSNorm) module.
 
     Args:
-        dim (int): The dimension of the input tensor to be normalized.
+        - dim (int): The dimension of the input tensor to be normalized.
 
     Attributes:
-        scale (torch.nn.Parameter): A learnable scaling parameter of shape (dim,).
+        - scale (torch.nn.Parameter): A learnable scaling parameter of shape (dim,).
 
     Methods:
-        forward(x: Tensor) -> Tensor:
+        - forward(x: Tensor) -> Tensor:
             Applies RMS normalization to the input tensor.
 
     Example:
@@ -37,7 +38,7 @@ class RMSNorm(torch.nn.Module):
         super().__init__()  # type: ignore
         self.scale = nn.Parameter(torch.ones(dim))
 
-    def forward(self, x: Tensor):
+    def forward(self, x: Float[Tensor, "... dim"]) -> Float[Tensor, "... dim"]:
         x_dtype = x.dtype
         x = x.float()
         rrms = torch.rsqrt(torch.mean(x**2, dim=-1, keepdim=True) + 1e-6)
@@ -56,14 +57,20 @@ class QKNorm(nn.Module):
         key_norm (RMSNorm): The RMS normalization layer for the key tensor.
 
     Methods:
-        forward(q: Tensor, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
+        - forward(q: Tensor, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
             Applies RMS normalization to the query and key tensors, and ensures they have the same type as the value tensor.
             Args:
-                q (Tensor): The query tensor.
-                k (Tensor): The key tensor.
-                v (Tensor): The value tensor.
+                - q (Tensor): The query tensor.
+                - k (Tensor): The key tensor.
+                - v (Tensor): The value tensor.
             Returns:
-                tuple[Tensor, Tensor]: The normalized query and key tensors, both converted to the type of the value tensor.
+                - tuple[Tensor, Tensor]: The normalized query and key tensors, both converted to the type of the value tensor.
+    Example:
+        >>> qknorm = QKNorm(dim=512)
+        >>> query_tensor = torch.randn(10, 25, 512)
+        >>> key_tensor = torch.randn(10, 25, 512)
+        >>> value_tensor = torch.randn(10, 25, 512)
+        >>> normalized_query, normalized_key = qknorm(query_tensor, key_tensor, value_tensor)
     """
 
     def __init__(self, dim: int):
@@ -71,7 +78,12 @@ class QKNorm(nn.Module):
         self.query_norm = RMSNorm(dim)
         self.key_norm = RMSNorm(dim)
 
-    def forward(self, q: Tensor, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(
+        self,
+        q: Float[Tensor, "batch_size seq_len dim"],
+        k: Float[Tensor, "batch_size seq_len dim"],
+        v: Float[Tensor, "batch_size seq_len dim"],
+    ) -> tuple[Float[Tensor, "batch_size seq_len dim"], Float[Tensor, "batch_size seq_len dim"]]:
         q = self.query_norm(q)
         k = self.key_norm(k)
         return q.to(v), k.to(v)
@@ -83,7 +95,7 @@ class DiTAttention(nn.Module):
 
     Args:
         input_dim (int): Dimension of the input.
-        dim (int): Dimension of the model.
+        dim (int): Inner Attention dimension.
         num_heads (int): Number of attention heads.
         partial_rotary_factor (float, optional): Factor for partial rotary embeddings. Default is 0.5.
         base (int, optional): Base for rotary positional embeddings. Default is 10000.
@@ -108,6 +120,11 @@ class DiTAttention(nn.Module):
 
             Returns:
                 Tensor: output tensor.
+    Example:
+        >>> dit_attention = DiTAttention(input_dim=512, dim=512, num_heads=8)
+        >>> input_tensor = torch.randn(10, 25, 512)
+        >>> output_tensor = dit_attention(input_tensor)
+        >>> print(output_tensor.shape)  # Output: torch.Size([10, 25, 512])
     """
 
     def __init__(
@@ -132,7 +149,7 @@ class DiTAttention(nn.Module):
 
         self.proj_out = nn.Linear(dim, input_dim)
 
-    def forward(self, input: Tensor) -> Tensor:
+    def forward(self, input: Float[Tensor, "batch_size seq_len dim"]) -> Float[Tensor, "batch_size seq_len dim"]:
         input_q, input_k, input_v = self.qkv(input).chunk(3, dim=-1)
         input_q, input_k = self.qk_norm(input_q, input_k, input_v)
 
@@ -161,7 +178,7 @@ class MMDiTAttention(nn.Module):
     Args:
         context_dim (int): Dimension of the context input.
         input_dim (int): Dimension of the input.
-        dim (int): Dimension of the model.
+        dim (int): Inner Attention dimension.
         num_heads (int): Number of attention heads.
         partial_rotary_factor (float, optional): Factor for partial rotary embeddings. Default is 0.5.
         base (int, optional): Base for rotary positional embeddings. Default is 10000.
@@ -190,6 +207,14 @@ class MMDiTAttention(nn.Module):
 
             Returns:
                 tuple[Tensor, Tensor]: Tuple containing the output tensors for input and context.
+
+    Example:
+        >>> mmdit_attention = MMDiTAttention(context_dim=512, input_dim=512, dim=512, num_heads=8)
+        >>> input_tensor = torch.randn(10, 25, 512)
+        >>> context_tensor = torch.randn(10, 32, 512)
+        >>> output_input, output_context = mmdit_attention(input_tensor, context_tensor)
+        >>> print(output_input.shape)  # Output: torch.Size([10, 25, 512])
+        >>> print(output_context.shape)  # Output: torch.Size([10, 32, 512])
     """
 
     def __init__(
@@ -222,7 +247,7 @@ class MMDiTAttention(nn.Module):
         self,
         input: Float[Tensor, "batch_size seq_len input_dim"],
         context: Float[Tensor, "batch_size seq_len context_dim"],
-    ) -> tuple[Tensor, Tensor]:
+    ) -> tuple[Float[Tensor, "batch_size seq_len input_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
         input_q, input_k, input_v = self.qkv_input(input).chunk(3, dim=-1)
         context_q, context_k, context_v = self.qkv_context(context).chunk(3, dim=-1)
 
@@ -275,13 +300,19 @@ class Modulation(nn.Module):
 
     Args:
         dim (int): The dimension of the input tensor.
+
+    Example:
+        >>> modulation = Modulation(dim=512)
+        >>> input_tensor = torch.randn(10, 512)
+        >>> output = modulation(input_tensor)
+        >>> print(output.alpha.shape)  # Output: torch.Size([10, 512])
     """
 
     def __init__(self, dim: int):
         super().__init__()  # type: ignore
         self.lin = nn.Linear(dim, 6 * dim, bias=True)
 
-    def forward(self, vec: Tensor) -> ModulationOut:
+    def forward(self, vec: Float[Tensor, "... dim"]) -> ModulationOut:
         out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(6, dim=-1)
 
         return ModulationOut(*out)
@@ -308,6 +339,13 @@ class DiTBlock(nn.Module):
                 context (Tensor): The context tensor.
             Returns:
                 Tuple[Tensor, Tensor]: The processed input tensor.
+
+    Example:
+        >>> dit_block = DiTBlock(input_dim=512, hidden_dim=512, embedding_dim=512, num_heads=8, mlp_ratio=4)
+        >>> input_tensor = torch.randn(10, 25, 512)
+        >>> y = torch.randn(10, 512)
+        >>> output_tensor = dit_block(input_tensor, y)
+        >>> print(output_tensor.shape)  # Output: torch.Size([10, 25, 512])
     """
 
     def __init__(self, input_dim: int, hidden_dim: int, embedding_dim: int, num_heads: int, mlp_ratio: int):
@@ -360,6 +398,15 @@ class MMDiTBlock(nn.Module):
                 context (Tensor): The context tensor.
             Returns:
                 Tuple[Tensor, Tensor]: The modulated input and context tensors.
+
+    Example:
+        >>> mmdit_block = MMDiTBlock(context_dim=512, input_dim=512, hidden_dim=512, embedding_dim=512, num_heads=8, mlp_ratio=4)
+        >>> input_tensor = torch.randn(10, 25, 512)
+        >>> y = torch.randn(10, 512)
+        >>> context_tensor = torch.randn(10, 32, 512)
+        >>> output_input, output_context = mmdit_block(input_tensor, y, context_tensor)
+        >>> print(output_input.shape)  # Output: torch.Size([10, 25, 512])
+        >>> print(output_context.shape)  # Output: torch.Size([10, 32, 512])
     """
 
     def __init__(
@@ -439,7 +486,7 @@ class ModulatedLastLayer(nn.Module):
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
-    def forward(self, x: Tensor, vec: Tensor) -> Tensor:
+    def forward(self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size dim"]) -> Tensor:
         shift, scale = self.adaLN_modulation(vec).chunk(2, dim=1)
         x = (1 + scale[:, None, :]) * self.norm_final(x) + shift[:, None, :]
         x = self.linear(x)
@@ -539,7 +586,9 @@ class MMDiT(Denoiser):
             for _ in range(depth)
         ])
 
-    def patchify(self, x: Tensor) -> Tensor:
+    def patchify(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size num_patches patch_dim"]:
         """
         Convert image tensor into patches using convolutional projection.
         Args:
@@ -555,7 +604,9 @@ class MMDiT(Denoiser):
 
         return x
 
-    def unpatchify(self, x: Float[Tensor, "batch_size seq_len patch_dim"]) -> Tensor:
+    def unpatchify(
+        self, x: Float[Tensor, "batch_size seq_len patch_dim"]
+    ) -> Float[Tensor, "batch_size channels height width"]:
         """
         Convert patches back into the original image tensor.
         Args:
@@ -577,15 +628,15 @@ class MMDiT(Denoiser):
 
     def mmdit_forward(
         self,
-        x: Tensor,
-        timesteps: Tensor,
-        context: Tensor | None = None,
+        x: Float[Tensor, "batch_size channels height width"],
+        timesteps: Float[Tensor, "batch_size"],
+        initial_context: Any | None = None,
         p: float = 0.0,
     ) -> Tensor:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         x = self.patchify(x)
         emb = self.time_embed(timestep_embedding(timesteps, self.input_channels))
-        context_pooled, context = self.context_embedder(context, p)
+        context_pooled, context = self.context_embedder(initial_context, p)
         context_pooled = self.mlp_pooled_context(context_pooled) + emb
         context = self.context_embed(context)
         # Pass through each layer sequentially
@@ -598,10 +649,10 @@ class MMDiT(Denoiser):
 
     def simple_dit_forward(
         self,
-        x: Tensor,
-        timestep: Tensor,
+        x: Float[Tensor, "batch_size channels height width"],
+        timestep: Float[Tensor, "batch_size"],
         p: float = 0.0,
-        y: Tensor | None = None,
+        y: Int[Tensor, "batch_size"] | None = None,
     ):
         if p > 0:
             assert self.n_classes, (
@@ -624,14 +675,14 @@ class MMDiT(Denoiser):
 
     def forward(
         self,
-        x: Tensor,
-        timesteps: Tensor,
-        context: Tensor | None = None,
+        x: Float[Tensor, "batch_size channels height width"],
+        timesteps: Float[Tensor, "batch_size"],
+        initial_context: Any | None = None,
         p: float = 0.0,
-        y: Tensor | None = None,
+        y: Int[Tensor, "batch_size"] | None = None,
         x_context: Tensor | None = None,
     ) -> Tensor:
-        assert not (context is not None and y is not None), "x_context and y cannot both be specified"
+        assert not (initial_context is not None and y is not None), "initial_context and y cannot both be specified"
         if p > 0:
             assert self.classifier_free, (
                 "probability of dropping for classifier free guidance is only available if model is set up to be classifier free"
@@ -641,4 +692,4 @@ class MMDiT(Denoiser):
         if self.simple_dit:
             return self.simple_dit_forward(x, timesteps, p, y)
         else:
-            return self.mmdit_forward(x, timesteps, context, p)
+            return self.mmdit_forward(x, timesteps, initial_context, p)

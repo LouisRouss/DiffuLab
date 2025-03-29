@@ -127,7 +127,7 @@ class SD3TextEmbedder(ContextEmbedder):
         context_t5 = ["" if random.random() < p else c for c in context]
         return context_l14, context_g14, context_t5
 
-    def forward(self, context: list[str], p: float) -> tuple[Tensor, ...]:
+    def forward(self, context: list[str], p: float) -> tuple[Tensor, Tensor]:
         assert self.load_l14 and self.load_g14 and self.load_t5
         context_l14, context_g14, context_t5 = self.drop_conditions(context, p)
         embeddings = self.get_embeddings(context_l14, context_g14, context_t5)

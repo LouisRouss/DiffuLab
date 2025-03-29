@@ -1,8 +1,9 @@
 from abc import abstractmethod
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float, Int
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser
@@ -439,12 +440,12 @@ class UNetModel(Denoiser):
 
     def forward(
         self,
-        x: Tensor,
-        timesteps: Tensor,
-        y: Tensor | None = None,
-        context: Tensor | None = None,
+        x: Float[Tensor, "batch_size channels height width"],
+        timesteps: Float[Tensor, "batch_size"],
+        y: Int[Tensor, "batch_size"] | None = None,
+        context: Any | None = None,
         p: float = 0.0,
-        x_context: Tensor | None = None,
+        x_context: Float[Tensor, "batch_size channels height width"] | None = None,
     ) -> Tensor:
         """
         Apply the model to an input batch.
