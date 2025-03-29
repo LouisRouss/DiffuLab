@@ -19,7 +19,7 @@ class ContextEmbedder(nn.Module, ABC):
 
     @property
     @abstractmethod
-    def output_size(self) -> tuple[tuple[int] | int, ...]:
+    def output_size(self) -> tuple[int, ...]:
         """
         Represents the dimension of each output embedding.
         """

@@ -151,7 +151,7 @@ class RotaryPositionalEmbedding(nn.Module):
     def _cache(self, seq_len: int) -> None:
         if seq_len <= self.cos.shape[0]:
             return
-        t = torch.arange(seq_len, dtype=torch.float32)
+        t = torch.arange(seq_len, dtype=torch.float32, device=self.theta.device)  # type: ignore
         freqs = torch.outer(t, self.theta)  # type: ignore
         embs = torch.cat([freqs, freqs], dim=-1)
         self.cos: Tensor = embs.cos().to(torch.float32)
