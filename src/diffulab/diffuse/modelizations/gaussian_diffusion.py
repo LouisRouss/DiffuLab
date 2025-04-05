@@ -609,6 +609,7 @@ class GaussianDiffusion(Diffusion):
             )
         return model_inputs["x"]
 
+    ### Need to add compute loss for different parameterization + variance learned
     def compute_loss(
         self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
     ) -> Tensor:
