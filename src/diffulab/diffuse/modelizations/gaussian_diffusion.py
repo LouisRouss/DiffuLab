@@ -197,7 +197,7 @@ class GaussianDiffusion(Diffusion):
             scale = 1000 / n_steps
             beta_start = scale * 0.0001
             beta_end = scale * 0.02
-            return torch.linspace(beta_start, beta_end, n_steps, dtype=torch.float64)
+            return torch.linspace(beta_start, beta_end, n_steps, dtype=torch.float64, requires_grad=False)
         elif variance_schedule == "cosine":
             return self._betas_for_alpha_bar(
                 n_steps,
@@ -228,9 +228,9 @@ class GaussianDiffusion(Diffusion):
             t1 = i / n_steps
             t2 = (i + 1) / n_steps
             betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
-        return torch.tensor(betas, dtype=torch.float64)
+        return torch.tensor(betas, dtype=torch.float64, requires_grad=False)
 
-    def _get_x_start_from_x_prev(self, x_prev: Tensor, x: Tensor, t: int) -> Tensor:
+    def _get_x_start_from_x_prev(self, x_prev: Tensor, x: Tensor, t: Tensor) -> Tensor:
         """
         Computes the initial state (x_0) given the previous state (x_{t-1}) and current state (x_t).
         It uses precomputed coefficients to solve for x_0 based on the Gaussian diffusion model's
@@ -238,15 +238,16 @@ class GaussianDiffusion(Diffusion):
         Args:
             x_prev (Tensor): The state at the previous timestep (x_{t-1}).
             x (Tensor): The state at the current timestep (x_t).
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
         Returns:
             Tensor: The inferred initial clean state (x_0) based on the provided states.
         """
-
-        x_start = (1.0 / self.posterior_mean_coef1[t]) * x_prev + (1.0 / self.posterior_mean_coef2[t]) * x
+        x_start = (1.0 / extract_into_tensor(self.posterior_mean_coef1, t, x_prev.shape)) * x_prev + (
+            1.0 / extract_into_tensor(self.posterior_mean_coef2, t, x.shape)
+        ) * x
         return x_start
 
-    def _get_x_start_from_eps(self, eps: Tensor, x: Tensor, t: int) -> Tensor:
+    def _get_x_start_from_eps(self, eps: Tensor, x: Tensor, t: Tensor) -> Tensor:
         """
         Computes the initial state (x_0) from the current state (x_t) and the predicted noise (epsilon).
         This method uses the diffusion model's forward process parameters to invert the noise
@@ -255,17 +256,17 @@ class GaussianDiffusion(Diffusion):
         Args:
             eps (Tensor): The predicted noise component (epsilon).
             x (Tensor): The current noisy state at timestep t (x_t).
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
         Returns:
             Tensor: The inferred initial clean state (x_0) based on the current state and predicted noise.
         """
 
-        x_start = (1.0 / self.sqrt_alphas_bar[t]) * x - (
-            (1.0 - self.alphas_bar[t]).sqrt() / self.sqrt_alphas_bar[t]
+        x_start = (1.0 / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)) * x - (
+            (1.0 - extract_into_tensor(self.alphas_bar, t, eps.shape)).sqrt() / self.sqrt_alphas_bar[t]
         ) * eps
         return x_start
 
-    def _get_mean_from_x_start(self, x: Tensor, x_start: Tensor, t: int) -> Tensor:
+    def _get_mean_from_x_start(self, x: Tensor, x_start: Tensor, t: Tensor) -> Tensor:
         """
         Computes the mean of the posterior distribution q(x_{t-1} | x_t, x_0) given the current state and inferred initial state.
         This function calculates the mean of the posterior distribution using pre-computed coefficients that
@@ -274,15 +275,18 @@ class GaussianDiffusion(Diffusion):
         Args:
             x (Tensor): The current state at timestep t (x_t).
             x_start (Tensor): The inferred or predicted initial clean state (x_0).
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
         Returns:
             Tensor: The mean of the posterior distribution q(x_{t-1} | x_t, x_0).
         """
 
-        mean = self.posterior_mean_coef1[t] * x_start + self.posterior_mean_coef2[t] * x
+        mean = (
+            extract_into_tensor(self.posterior_mean_coef1, t, x_start.shape) * x_start
+            + extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x
+        )
         return mean
 
-    def _get_x_prev_from_mean_var(self, mean: Tensor, var: Tensor, t: int) -> Tensor:
+    def _get_x_prev_from_mean_var(self, mean: Tensor, log_var: Tensor, t: Tensor) -> Tensor:
         """
         Computes the previous state (x_{t-1}) from the posterior mean and variance.
         This method samples the previous state from the posterior distribution p(x_{t-1}|x_t)
@@ -292,17 +296,20 @@ class GaussianDiffusion(Diffusion):
         Args:
             mean (Tensor): The posterior mean of p(x_{t-1}|x_t).
             var (Tensor): The posterior variance of p(x_{t-1}|x_t).
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
         Returns:
             Tensor: The sampled previous state (x_{t-1}) from the posterior distribution.
         """
+        # Create a mask where t > 0 is True, and t == 0 is False
+        t_mask = (t > 0).float().view(-1, *([1] * (mean.dim() - 1)))
 
-        if t > 0:
-            return mean + torch.randn_like(mean) * var.sqrt()
-        else:  # no noise for ultimate timestep
-            return mean
+        # Generate noise with the same shape as mean
+        noise = torch.randn_like(mean)
 
-    def _get_eps_from_xstart(self, x_start: Tensor, x: Tensor, t: int) -> Tensor:
+        # Apply noise only where t > 0, using the mask to conditionally add noise
+        return mean + t_mask * noise * torch.exp(0.5 * log_var)
+
+    def _get_eps_from_xstart(self, x_start: Tensor, x: Tensor, t: Tensor) -> Tensor:
         """
         Computes the noise component (epsilon) from the initial state and current state.
         This method is the inverse of _get_x_start_from_eps, calculating the noise that would
@@ -310,16 +317,17 @@ class GaussianDiffusion(Diffusion):
         Args:
             x_start (Tensor): The inferred or known initial clean state (x_0).
             x (Tensor): The current noisy state at timestep t (x_t).
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
         Returns:
             Tensor: The noise component (epsilon) that was added to x_start to produce x.
         """
-
-        eps = (1.0 / (1 - self.alphas_bar[t]).sqrt()) * (x - self.sqrt_alphas_bar[t] * x_start)
+        eps = (1.0 / (1 - extract_into_tensor(self.alphas_bar, t, x.shape)).sqrt()) * (
+            x - extract_into_tensor(self.sqrt_alphas_bar, t, x_start.shape) * x_start
+        )
         return eps
 
     def _get_p_mean_var(
-        self, prediction: Tensor, x: Tensor, t: int, clamp_x: bool = False
+        self, prediction: Tensor, x: Tensor, t: Tensor, clamp_x: bool = False
     ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         """
         Computes the posterior mean and variance for the reverse diffusion step.
@@ -331,7 +339,7 @@ class GaussianDiffusion(Diffusion):
             prediction (Tensor): The raw output from the denoising model. Could be noise prediction,
                 x_start prediction, or x_prev prediction depending on self.mean_type.
             x (Tensor): The current noisy state at timestep t (x_t).
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
             clamp_x (bool, optional): Whether to clamp the predicted x_start to [-1, 1] range
                 for numerical stability. Defaults to False.
         Returns:
@@ -364,18 +372,21 @@ class GaussianDiffusion(Diffusion):
 
         # extract variance
         if self.var_type == ModelVarType.FIXED_SMALL.value:
-            var, log_var = self.posterior_variance[t], self.posterior_log_variance_clipped[t]
+            var, log_var = (
+                extract_into_tensor(self.posterior_variance, t, x.shape),
+                extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape),
+            )
         elif self.var_type == ModelVarType.FIXED_LARGE.value:
             var, log_var = (
                 torch.cat([self.posterior_variance[1:2], self.betas[1:]]),
                 torch.cat([self.posterior_log_variance_clipped[1:2], self.betas[1:]]),
             )
-            var, log_var = var[t], log_var[t]
+            var, log_var = extract_into_tensor(var, t, x.shape), extract_into_tensor(log_var, t, x.shape)
         elif self.var_type == ModelVarType.LEARNED.value:
             var = log_var.exp()  # type: ignore
         elif self.var_type == ModelVarType.LEARNED_RANGE.value:
-            min_log = self.posterior_log_variance_clipped[t]
-            max_log = self.betas[t].log()
+            min_log = extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
+            max_log = extract_into_tensor(self.betas, t, x.shape).log()
             log_var = (log_var + 1) / 2  # type: ignore
             log_var = log_var * max_log + (1 - log_var) * min_log
             var = log_var.exp()
@@ -385,7 +396,7 @@ class GaussianDiffusion(Diffusion):
         return mean, var, log_var, x_start  # type: ignore
 
     def _get_mean_for_ddim_guidance(
-        self, x: Tensor, x_start: Tensor, t: int, grad: Tensor
+        self, x: Tensor, x_start: Tensor, t: Tensor, grad: Tensor
     ) -> tuple[Tensor, Tensor, Tensor]:
         """
         Calculates the adjusted mean for DDIM with gradient guidance.
@@ -395,7 +406,7 @@ class GaussianDiffusion(Diffusion):
         Args:
             x (Tensor): The current noisy state at timestep t.
             x_start (Tensor): The predicted initial clean state.
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
             grad (Tensor): The gradient used for guidance, typically from a classifier.
         Returns:
             tuple[Tensor, Tensor, Tensor]: A tuple containing:
@@ -404,14 +415,14 @@ class GaussianDiffusion(Diffusion):
                 - eps (Tensor): The adjusted noise prediction after applying the guidance.
         """
         eps = self._get_eps_from_xstart(x, x_start, t)
-        eps = eps - (1 - self.alphas_bar[t]).sqrt() * grad
+        eps = eps - (1 - extract_into_tensor(self.alphas_bar, t, grad.shape)).sqrt() * grad
 
         x_start = self._get_x_start_from_eps(eps, x, t)
         mean = self._get_mean_from_x_start(x, x_start, t)
 
         return mean, x_start, eps
 
-    def _sample_x_prev_ddim(self, x: Tensor, eps: Tensor, t: int) -> Tensor:
+    def _sample_x_prev_ddim(self, x: Tensor, eps: Tensor, t: Tensor) -> Tensor:
         """
         Performs a deterministic DDIM update from state x_t to x_{t-1}.
         This method implements the Denoising Diffusion Implicit Models (DDIM) update rule,
@@ -420,17 +431,20 @@ class GaussianDiffusion(Diffusion):
         Args:
             x (Tensor): The current state x_t at timestep t.
             eps (Tensor): The predicted noise component (epsilon) at timestep t.
-            t (int): The current timestep index.
+            t (Tensor): The current timestep indices as a tensor.
         Returns:
             Tensor: The previous state x_{t-1} after the deterministic DDIM update.
         References:
             Song, J. et al. "Denoising Diffusion Implicit Models" (2020)
             https://arxiv.org/abs/2010.02502
         """
-
         x_prev = (
-            self.alphas_bar_prev[t].sqrt() * ((x - (1 - self.alphas_bar[t]).sqrt() * eps) / self.sqrt_alphas_bar[t])
-            + (1 - self.alphas_bar_prev[t]).sqrt() * eps
+            extract_into_tensor(self.alphas_bar_prev, t, x.shape).sqrt()
+            * (
+                (x - (1 - extract_into_tensor(self.alphas_bar, t, x.shape)).sqrt() * eps)
+                / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)
+            )
+            + (1 - extract_into_tensor(self.alphas_bar_prev, t, eps.shape)).sqrt() * eps
         )
         return x_prev
 
@@ -527,7 +541,7 @@ class GaussianDiffusion(Diffusion):
             prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps)
             prediction = prediction + guidance_scale * (prediction - prediction_uncond)
 
-        mean, var, _, x_start = self._get_p_mean_var(prediction, model_inputs["x"], t, clamp_x)
+        mean, _, log_var, x_start = self._get_p_mean_var(prediction, model_inputs["x"], timesteps, clamp_x)
 
         if not classifier_free and guidance_scale > 0:
             assert classifier is not None
@@ -540,16 +554,16 @@ class GaussianDiffusion(Diffusion):
 
             if self.sampling_method == "ddpm":
                 mean = mean + grad
-                x_prev = self._get_x_prev_from_mean_var(mean, var, t)
+                x_prev = self._get_x_prev_from_mean_var(mean, log_var, timesteps)
             elif self.sampling_method == "ddim":
-                mean, x_start, eps = self._get_mean_for_ddim_guidance(model_inputs["x"], x_start, t, grad)
-                x_prev = self._sample_x_prev_ddim(model_inputs["x"], eps, t)
+                mean, x_start, eps = self._get_mean_for_ddim_guidance(model_inputs["x"], x_start, timesteps, grad)
+                x_prev = self._sample_x_prev_ddim(model_inputs["x"], eps, timesteps)
             else:
                 raise NotImplementedError(
                     f"Classifier guidance not implemented for sampling method: {self.sampling_method}"
                 )
         else:
-            x_prev = self._get_x_prev_from_mean_var(mean, var, t)
+            x_prev = self._get_x_prev_from_mean_var(mean, log_var, timesteps)
 
         return x_prev
 
