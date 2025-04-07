@@ -235,7 +235,7 @@ class Trainer:
         diffuser: Diffuser,
         val_dataloader: Iterable[dict[str, Any]],
         epoch: int,
-        ema_eval: Diffuser | None = None,
+        ema_eval: Denoiser | None = None,
         val_steps: int = 50,
     ) -> None:
         """

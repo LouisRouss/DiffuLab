@@ -530,8 +530,7 @@ class GaussianDiffusion(Diffusion):
               training steps is being used.
         """
         device = next(model.parameters()).device
-        dtype = next(model.parameters()).dtype
-        timesteps = torch.full((model_inputs["x"].shape[0],), t, device=device, dtype=dtype)
+        timesteps = torch.full((model_inputs["x"].shape[0],), t, device=device, dtype=torch.int32)
         if self.timestep_map:
             map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=timesteps.dtype)
             timesteps = map_tensor[timesteps]
