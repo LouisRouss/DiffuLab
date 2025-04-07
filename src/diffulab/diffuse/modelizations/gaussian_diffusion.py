@@ -262,7 +262,8 @@ class GaussianDiffusion(Diffusion):
         """
 
         x_start = (1.0 / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)) * x - (
-            (1.0 - extract_into_tensor(self.alphas_bar, t, eps.shape)).sqrt() / self.sqrt_alphas_bar[t]
+            (1.0 - extract_into_tensor(self.alphas_bar, t, eps.shape)).sqrt()
+            / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)
         ) * eps
         return x_start
 
@@ -533,11 +534,13 @@ class GaussianDiffusion(Diffusion):
         timesteps = torch.full((model_inputs["x"].shape[0],), t, device=device, dtype=torch.int32)
         if self.timestep_map:
             map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=timesteps.dtype)
-            timesteps = map_tensor[timesteps]
-        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps)
+            timesteps_model = map_tensor[timesteps]
+        else:
+            timesteps_model = timesteps
+        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps_model)
 
         if classifier_free and guidance_scale > 0:
-            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps)
+            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)
             prediction = prediction + guidance_scale * (prediction - prediction_uncond)
 
         mean, _, log_var, x_start = self._get_p_mean_var(prediction, model_inputs["x"], timesteps, clamp_x)
@@ -545,9 +548,11 @@ class GaussianDiffusion(Diffusion):
         if not classifier_free and guidance_scale > 0:
             assert classifier is not None
             if "y" in model_inputs:
-                grad = guidance_scale * self.classifier_grad(prediction, model_inputs["y"], timesteps, classifier)
+                grad = guidance_scale * self.classifier_grad(prediction, model_inputs["y"], timesteps_model, classifier)
             elif "context" in model_inputs:
-                grad = guidance_scale * self.classifier_grad(prediction, model_inputs["context"], timesteps, classifier)
+                grad = guidance_scale * self.classifier_grad(
+                    prediction, model_inputs["context"], timesteps_model, classifier
+                )
             else:
                 raise ValueError("No context or label provided for the classifier")
 
