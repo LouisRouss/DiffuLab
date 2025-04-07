@@ -89,10 +89,10 @@ class GaussianDiffusion(Diffusion):
         if sampling_method not in ["ddpm", "ddim"]:
             raise ValueError("sampling method must be one of ['ddpm', 'ddim']")
 
-        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
         self.mean_type = mean_type
         self.var_type = variance_type
         self.training_steps = n_steps
+        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:
         """

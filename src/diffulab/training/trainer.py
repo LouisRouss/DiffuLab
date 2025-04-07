@@ -158,12 +158,10 @@ class Trainer:
             ModelInput: A new dictionary with the same structure as the input, but with all
                 tensor values moved to the accelerator's device.
         """
-        return ModelInput(
-            **{
-                k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-                for k, v in batch.items()  # type: ignore
-            }
-        )
+        return ModelInput(**{
+            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+            for k, v in batch.items()  # type: ignore
+        })
 
     @torch.no_grad()  # type: ignore
     def validation_step(
