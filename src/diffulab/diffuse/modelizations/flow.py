@@ -288,7 +288,7 @@ class Flow(Diffusion):
             using the velocity field predicted by the model at each timestep. The process
             follows the timestep sequence defined during initialization, moving from t=1
             (pure noise) to t=0 (clean data).
-            The dictionnary model_inputs is updated in place with the current sample state
+            The dictionary model_inputs is updated in place with the current sample state
         """
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
