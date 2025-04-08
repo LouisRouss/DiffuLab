@@ -215,9 +215,10 @@ class Flow(Diffusion):
             between the true velocity (noise - x_t) and the predicted velocity, averaged over
             all dimensions and then over the batch.
         """
+        x_0 = model_inputs["x"].clone()
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
         prediction: torch.Tensor = model(**model_inputs, timesteps=timesteps)
-        losses = ((noise - model_inputs["x"]) - prediction) ** 2
+        losses = ((noise - x_0) - prediction) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
         return loss
