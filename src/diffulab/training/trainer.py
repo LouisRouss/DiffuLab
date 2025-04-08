@@ -272,7 +272,7 @@ class Trainer:
             else diffuser.diffusion.denoise(
                 model=ema_eval,  # type: ignore
                 data_shape=x.shape,
-                model_inputs=batch,  # type: ignore
+                model_inputs=batch,
             )
         )
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
