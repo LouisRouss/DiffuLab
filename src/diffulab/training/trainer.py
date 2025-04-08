@@ -262,15 +262,16 @@ class Trainer:
             - Images are logged to wandb with the key 'val/images'.
         """
         diffuser.eval()
-        batch: dict[str, Any] = next(iter(val_dataloader))  # type: ignore
+        batch: ModelInput = next(iter(val_dataloader))  # type: ignore
+        x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
         images = (
-            diffuser.generate(data_shape=batch["x"].shape, model_inputs=batch)  # type: ignore
+            diffuser.generate(data_shape=x.shape, model_inputs=batch)  # type: ignore
             if not self.use_ema
             else diffuser.diffusion.denoise(
                 model=ema_eval,  # type: ignore
-                data_shape=batch["x"].shape,
+                data_shape=x.shape,
                 model_inputs=batch,  # type: ignore
             )
         )

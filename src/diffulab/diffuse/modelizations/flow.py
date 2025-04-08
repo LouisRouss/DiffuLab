@@ -288,10 +288,12 @@ class Flow(Diffusion):
             using the velocity field predicted by the model at each timestep. The process
             follows the timestep sequence defined during initialization, moving from t=1
             (pure noise) to t=0 (clean data).
+            The dictionnary model_inputs is updated in place with the current sample state
         """
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
-        x = torch.randn(data_shape, device=device, dtype=dtype)
+        if "x" not in model_inputs:
+            model_inputs["x"] = torch.randn(data_shape, device=device, dtype=dtype)
         for t_curr, t_prev in tqdm(
             zip(self.timesteps[:-1], self.timesteps[1:]),
             desc="generating image",
@@ -299,8 +301,7 @@ class Flow(Diffusion):
             disable=not use_tqdm,
             leave=False,
         ):
-            model_inputs["x"] = x
-            x = self.one_step_denoise(
+            model_inputs["x"] = self.one_step_denoise(
                 model,
                 model_inputs,
                 t_curr=t_curr,
@@ -308,5 +309,5 @@ class Flow(Diffusion):
                 guidance_scale=guidance_scale,
             )
         if clamp_x:
-            x = x.clamp(-1, 1)
-        return x
+            model_inputs["x"] = model_inputs["x"].clamp(-1, 1)
+        return model_inputs["x"]

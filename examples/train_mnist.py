@@ -12,7 +12,7 @@ from diffulab.networks.denoisers import Denoiser, UNetModel
 from diffulab.training import Trainer
 
 BATCH_SIZE = 256
-EPOCHS = 100
+EPOCHS = 10
 LR = 1e-4
 
 

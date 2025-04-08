@@ -604,6 +604,8 @@ class GaussianDiffusion(Diffusion):
             classifier (Callable[[Tensor, Tensor], Tensor] | None, optional): External classifier function to use
                 for guidance when classifier_free is False. Accepts input tensor and timesteps, returns gradients.
                 Defaults to None.
+        Notes:
+            The model_inputs dictionary is modified in place with the current sample state.
         """
         if "x" not in model_inputs:
             model_inputs["x"] = torch.randn(
