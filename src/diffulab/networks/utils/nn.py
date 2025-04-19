@@ -136,6 +136,10 @@ class LabelEmbed(nn.Module):
 
 
 class RotaryPositionalEmbedding(nn.Module):
+    theta: Tensor
+    cos: Tensor
+    sin: Tensor
+
     def __init__(self, dim: int = 32, base: int = 10_000) -> None:
         super().__init__()  # type: ignore
         self.dim = dim
@@ -146,17 +150,18 @@ class RotaryPositionalEmbedding(nn.Module):
             tensor=torch.pow(base, torch.arange(0, self.dim, 2, dtype=torch.float32) / self.dim).reciprocal(),
         )
 
-        self.register_buffer(name="cos", tensor=torch.empty(0))
-        self.register_buffer(name="sin", tensor=torch.empty(0))
+        self.cos = torch.empty(0, requires_grad=False)
+        self.sin = torch.empty(0, requires_grad=False)
 
     def _cache(self, seq_len: int) -> None:
         if seq_len <= self.cos.shape[0]:
             return
         t = torch.arange(seq_len, dtype=torch.float32, device=self.theta.device)  # type: ignore
-        freqs = torch.outer(t, self.theta)  # type: ignore
+        freqs = torch.outer(t, self.theta)
         embs = torch.cat([freqs, freqs], dim=-1)
-        self.cos: Tensor = embs.cos().to(torch.float32)
-        self.sin: Tensor = embs.sin().to(torch.float32)
+        with torch.no_grad():
+            self.cos = embs.cos().float()
+            self.sin = embs.sin().float()
 
     def _neg_half(self, x: Tensor) -> Tensor:
         return torch.cat([-x[:, :, :, self.dim // 2 :], x[:, :, :, : self.dim // 2]], dim=-1)

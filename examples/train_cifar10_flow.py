@@ -8,11 +8,11 @@ from torch import Tensor
 from torch.utils.data import DataLoader, Dataset
 
 from diffulab.diffuse import Diffuser
-from diffulab.networks import Denoiser, UNetModel
+from diffulab.networks import Denoiser, MMDiT
 from diffulab.training import Trainer
 
 BATCH_SIZE = 64
-EPOCHS = 100
+EPOCHS = 25
 LR = 1e-4
 
 
@@ -65,17 +65,18 @@ def train():
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-    denoiser = UNetModel(
-        image_size=[32, 32],
-        in_channels=3,
-        model_channels=192,
-        out_channels=3,
-        num_res_blocks=2,
-        attention_resolutions=[4, 8, 16],
-        num_heads=3,
-        resblock_updown=True,
+    denoiser = MMDiT(
+        simple_dit=True,
+        input_channels=3,
+        output_channels=3,
+        input_dim=512,
+        hidden_dim=1024,
+        embedding_dim=512,
+        num_heads=4,
+        mlp_ratio=2,
+        patch_size=4,
+        depth=6,
         n_classes=10,
-        use_scale_shift_norm=True,
         classifier_free=True,
     )
 
