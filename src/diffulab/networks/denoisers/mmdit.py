@@ -511,6 +511,7 @@ class MMDiT(Denoiser):
         patch_size: int = 16,
         depth: int = 38,
         context_dim: int = 4096,
+        frequency_embedding_dim: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
@@ -557,8 +558,9 @@ class MMDiT(Denoiser):
                 nn.Linear(input_dim, self.patch_size * self.patch_size * self.output_channels, bias=True),
             )
 
+        self.frequency_embedding_dim = frequency_embedding_dim
         self.time_embed = nn.Sequential(
-            nn.Linear(self.input_channels, embedding_dim),
+            nn.Linear(self.frequency_embedding_dim, embedding_dim),
             nn.SiLU(),
             nn.Linear(embedding_dim, embedding_dim),
         )
@@ -566,27 +568,25 @@ class MMDiT(Denoiser):
         self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
 
         # Fix the ModuleList initialization - it was taking *[] which is incorrect
-        self.layers = nn.ModuleList(
-            [
-                MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                if not self.simple_dit
-                else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                for _ in range(depth)
-            ]
-        )
+        self.layers = nn.ModuleList([
+            MMDiTBlock(
+                context_dim=context_dim,
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            if not self.simple_dit
+            else DiTBlock(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            for _ in range(depth)
+        ])
 
     def patchify(
         self, x: Float[Tensor, "batch_size channels height width"]
@@ -637,7 +637,7 @@ class MMDiT(Denoiser):
     ) -> Tensor:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         x = self.patchify(x)
-        emb = self.time_embed(timestep_embedding(timesteps, self.input_channels))
+        emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding_dim))
         context_pooled, context = self.context_embedder(initial_context, p)
         context_pooled = self.mlp_pooled_context(context_pooled) + emb
         context = self.context_embed(context)
@@ -662,7 +662,7 @@ class MMDiT(Denoiser):
             )
         x = self.patchify(x)
 
-        emb = self.time_embed(timestep_embedding(timestep, self.input_channels))
+        emb = self.time_embed(timestep_embedding(timestep, self.frequency_embedding_dim))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
