@@ -587,6 +587,13 @@ class MMDiT(Denoiser):
             )
             for _ in range(depth)
         ])
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module: nn.Module) -> None:
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            if module.bias is not None:  # type: ignore
+                nn.init.constant_(module.bias, 0)
 
     def patchify(
         self, x: Float[Tensor, "batch_size channels height width"]
@@ -655,7 +662,7 @@ class MMDiT(Denoiser):
         timestep: Float[Tensor, "batch_size"],
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
-    ):
+    ) -> Tensor:
         if p > 0:
             assert self.n_classes, (
                 "probability of dropping for classifier free guidance is only available if a number of classes is set"
