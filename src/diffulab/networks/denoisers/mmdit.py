@@ -305,7 +305,7 @@ class Modulation(nn.Module):
         >>> modulation = Modulation(dim=512)
         >>> input_tensor = torch.randn(10, 512)
         >>> output = modulation(input_tensor)
-        >>> print(output.alpha.shape)  # Output: torch.Size([10, 512])
+        >>> print(output.alpha.shape)  # Output: torch.Size([10, 1, 512])
     """
 
     def __init__(self, dim: int):
@@ -316,6 +316,10 @@ class Modulation(nn.Module):
         out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(6, dim=-1)
 
         return ModulationOut(*out)
+
+
+def modulate(x: Tensor, scale: Tensor, shift: Tensor) -> Tensor:
+    return x * (1 + scale) + shift
 
 
 class DiTBlock(nn.Module):
@@ -353,7 +357,7 @@ class DiTBlock(nn.Module):
         self.modulation = Modulation(embedding_dim)
         self.norm_1 = nn.LayerNorm(input_dim)
         self.attention = DiTAttention(input_dim, hidden_dim, num_heads)
-        self.input_norm_2 = nn.LayerNorm(input_dim)
+        self.norm_2 = nn.LayerNorm(input_dim)
         self.mlp_input = nn.Sequential(
             nn.Linear(input_dim, mlp_ratio * input_dim),
             nn.GELU(approximate="tanh"),
@@ -364,16 +368,19 @@ class DiTBlock(nn.Module):
         self, input: Float[Tensor, "batch_size seq_len embedding_dim"], y: Float[Tensor, "batch_size embedding_dim"]
     ) -> Tensor:
         modulation: ModulationOut = self.modulation(y)
-        modulated_input = (modulation.alpha * self.norm_1(input)) + modulation.beta
 
-        modulated_input = self.attention(modulated_input)
-        modulated_input = input + modulated_input * modulation.gamma
+        modulated_input = (
+            input
+            + self.attention(modulate(self.norm_1(input), scale=modulation.alpha, shift=modulation.beta))
+            * modulation.gamma
+        )
 
-        modulated_input = (modulation.delta * self.input_norm_2(modulated_input)) + modulation.epsilon
+        modulated_input = modulated_input + (
+            self.mlp_input(modulate(self.norm_2(modulated_input), scale=modulation.delta, shift=modulation.epsilon))
+            * modulation.zeta
+        )
 
-        modulated_input = modulation.zeta * self.mlp_input(modulated_input)
-
-        return modulated_input + input
+        return modulated_input
 
 
 class MMDiTBlock(nn.Module):
@@ -461,22 +468,37 @@ class MMDiTBlock(nn.Module):
         modulation_input: ModulationOut = self.modulation_input(y)
         modulation_context: ModulationOut = self.modulation_context(y)
 
-        modulated_input = (modulation_input.alpha * self.input_norm_1(input)) + modulation_input.beta
-        modulated_context = (modulation_context.alpha * self.context_norm_1(context)) + modulation_context.beta
+        modulated_input = modulate(self.input_norm_1(input), scale=modulation_input.alpha, shift=modulation_input.beta)
+        modulated_context = modulate(
+            self.context_norm_1(context), scale=modulation_context.alpha, shift=modulation_context.beta
+        )
 
         modulated_input, modulated_context = self.attention(modulated_input, modulated_context)
         modulated_input = input + modulated_input * modulation_input.gamma
         modulated_context = context + modulated_context * modulation_context.gamma
 
-        modulated_input = (modulation_input.delta * self.input_norm_2(modulated_input)) + modulation_input.epsilon
+        modulated_input = (
+            modulated_input
+            + self.mlp_input(
+                modulate(
+                    self.input_norm_2(modulated_input), scale=modulation_input.delta, shift=modulation_input.epsilon
+                )
+            )
+            * modulation_input.zeta
+        )
         modulated_context = (
-            modulation_context.delta * self.context_norm_2(modulated_context)
-        ) + modulation_context.epsilon
+            modulated_context
+            + self.mlp_context(
+                modulate(
+                    self.context_norm_2(modulated_context),
+                    scale=modulation_context.delta,
+                    shift=modulation_context.epsilon,
+                )
+            )
+            * modulation_context.zeta
+        )
 
-        modulated_input = modulation_input.zeta * self.mlp_input(modulated_input)
-        modulated_context = modulation_context.zeta * self.mlp_context(modulated_context)
-
-        return modulated_input + input, modulated_context + context
+        return modulated_input, modulated_context
 
 
 class ModulatedLastLayer(nn.Module):
@@ -487,8 +509,8 @@ class ModulatedLastLayer(nn.Module):
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
     def forward(self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size dim"]) -> Tensor:
-        shift, scale = self.adaLN_modulation(vec).chunk(2, dim=1)
-        x = (1 + scale[:, None, :]) * self.norm_final(x) + shift[:, None, :]
+        alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=1)
+        x = modulate(self.norm_final(x), scale=alpha[:, None, :], shift=beta[:, None, :])
         x = self.linear(x)
         return x
 
@@ -511,7 +533,6 @@ class MMDiT(Denoiser):
         patch_size: int = 16,
         depth: int = 38,
         context_dim: int = 4096,
-        frequency_embedding_dim: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
@@ -553,14 +574,13 @@ class MMDiT(Denoiser):
             self.label_embed = (
                 LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
             )
-            self.last_layer = nn.Sequential(
-                nn.LayerNorm(input_dim, elementwise_affine=False, eps=1e-6),
-                nn.Linear(input_dim, self.patch_size * self.patch_size * self.output_channels, bias=True),
+            self.last_layer = ModulatedLastLayer(
+                hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
             )
 
-        self.frequency_embedding_dim = frequency_embedding_dim
+        self.input_dim = input_dim
         self.time_embed = nn.Sequential(
-            nn.Linear(self.frequency_embedding_dim, embedding_dim),
+            nn.Linear(self.input_dim, embedding_dim),
             nn.SiLU(),
             nn.Linear(embedding_dim, embedding_dim),
         )
@@ -644,7 +664,7 @@ class MMDiT(Denoiser):
     ) -> Tensor:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         x = self.patchify(x)
-        emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding_dim))
+        emb = self.time_embed(timestep_embedding(timesteps, self.input_dim))
         context_pooled, context = self.context_embedder(initial_context, p)
         context_pooled = self.mlp_pooled_context(context_pooled) + emb
         context = self.context_embed(context)
@@ -669,7 +689,7 @@ class MMDiT(Denoiser):
             )
         x = self.patchify(x)
 
-        emb = self.time_embed(timestep_embedding(timestep, self.frequency_embedding_dim))
+        emb = self.time_embed(timestep_embedding(timestep, self.input_dim))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
@@ -677,7 +697,7 @@ class MMDiT(Denoiser):
         for layer in self.layers:
             x = layer(x, emb)
 
-        x = self.last_layer(x)
+        x = self.last_layer(x, emb)
 
         x = self.unpatchify(x)
         return x
