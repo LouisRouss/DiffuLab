@@ -132,7 +132,7 @@ class DiTAttention(nn.Module):
         input_dim: int,
         dim: int,
         num_heads: int,
-        partial_rotary_factor: float = 0.5,
+        partial_rotary_factor: float = 1,
         base: int = 10000,
     ) -> None:
         super().__init__()  # type: ignore
@@ -145,7 +145,7 @@ class DiTAttention(nn.Module):
 
         self.partial_rotary_factor = partial_rotary_factor
         self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.head_dim, base=base)
+        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
 
         self.proj_out = nn.Linear(dim, input_dim)
 
@@ -159,12 +159,13 @@ class DiTAttention(nn.Module):
             rearrange(input_v, "b n (h d) -> b n h d", h=self.num_heads),
         )
         q, k, v = self.rope(q=q, k=k, v=v)
-        q, k, v = map(lambda x: rearrange(x, "b n h d -> b n (h d)"), [q, k, v])
+        q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
         attn_weights: Tensor = (q @ k.transpose(-2, -1)) * self.scale
         attn_weights = attn_weights.softmax(dim=-1)
-
         attn_output = attn_weights @ v
+
+        attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
 
         output: Tensor = self.proj_out(attn_output)
 
@@ -223,7 +224,7 @@ class MMDiTAttention(nn.Module):
         input_dim: int,
         dim: int,
         num_heads: int,
-        partial_rotary_factor: float = 0.5,
+        partial_rotary_factor: float = 1,
         base: int = 10000,
     ):
         super().__init__()  # type: ignore
@@ -238,7 +239,7 @@ class MMDiTAttention(nn.Module):
 
         self.partial_rotary_factor = partial_rotary_factor
         self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.head_dim, base=base)
+        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
 
         self.input_proj_out = nn.Linear(dim, input_dim)
         self.context_proj_out = nn.Linear(dim, context_dim)
@@ -260,12 +261,13 @@ class MMDiTAttention(nn.Module):
             rearrange(torch.cat([context_v, input_v], dim=1), "b n (h d) -> b n h d", h=self.num_heads),
         )
         q, k, v = self.rope(q=q, k=k, v=v)
-        q, k, v = map(lambda x: rearrange(x, "b n h d -> b n (h d)"), [q, k, v])
+        q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
         attn_weights = (q @ k.transpose(-2, -1)) * self.scale
         attn_weights = attn_weights.softmax(dim=-1)
-
         attn_output = attn_weights @ v
+
+        attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
 
         input_output = self.input_proj_out(attn_output[:, context.size(1) :, :])
         context_output = self.context_proj_out(attn_output[:, : context.size(1), :])
@@ -352,7 +354,15 @@ class DiTBlock(nn.Module):
         >>> print(output_tensor.shape)  # Output: torch.Size([10, 25, 512])
     """
 
-    def __init__(self, input_dim: int, hidden_dim: int, embedding_dim: int, num_heads: int, mlp_ratio: int):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        partial_rotary_factor: float = 1,
+    ):
         super().__init__()  # type: ignore
         self.modulation = Modulation(embedding_dim)
         self.norm_1 = nn.LayerNorm(input_dim)
