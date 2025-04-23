@@ -12,8 +12,8 @@ from diffulab.networks import Denoiser, MMDiT
 from diffulab.training import Trainer
 
 BATCH_SIZE = 64
-EPOCHS = 25
-LR = 1e-4
+EPOCHS = 100
+LR = 5e-4
 
 
 class Cifar10(Dataset[dict[str, Tensor]]):
@@ -55,7 +55,7 @@ class Cifar10(Dataset[dict[str, Tensor]]):
 
 
 def train():
-    data_path = "/home/louis/datasets/cifar-10-batches-py"
+    data_path = "/path/to/data"
     batches_to_load_train = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4"]
     batches_to_load_val = ["data_batch_5"]
 
@@ -70,14 +70,14 @@ def train():
         input_channels=3,
         output_channels=3,
         input_dim=512,
-        hidden_dim=1024,
+        hidden_dim=512,
         embedding_dim=512,
-        num_heads=4,
-        mlp_ratio=2,
-        patch_size=4,
-        depth=6,
+        num_heads=8,
+        mlp_ratio=4,
+        patch_size=2,
+        depth=10,
         n_classes=10,
-        classifier_free=True,
+        classifier_free=False,
     )
 
     # Print number of trainable parameters
@@ -86,7 +86,9 @@ def train():
 
     print(f"Number of trainable parameters: {count_parameters(denoiser):,}")
 
-    diffuser = Diffuser(denoiser, model_type="rectified_flow", n_steps=50, sampling_method="euler")
+    diffuser = Diffuser(
+        denoiser, model_type="rectified_flow", n_steps=50, sampling_method="euler", extra_args={"logits_normal": True}
+    )
     optimizer = torch.optim.AdamW(denoiser.parameters(), lr=LR)
 
     trainer = Trainer(

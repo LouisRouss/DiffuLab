@@ -59,7 +59,7 @@ class MNISTDataset(Dataset[dict[str, Tensor]]):
 
 
 def train():
-    data_path = "/home/louis/datasets/mnist"
+    data_path = "/path/to/data"
 
     train_dataset = MNISTDataset(data_path, True)
     val_dataset = MNISTDataset(data_path, False)
