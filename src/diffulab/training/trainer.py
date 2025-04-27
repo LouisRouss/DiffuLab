@@ -29,7 +29,6 @@ class Trainer:
     unconditional diffusion model training.
     Args:
         n_epoch (int): Number of training epochs.
-        batch_size (int): Batch size for training.
         gradient_accumulation_step (int, optional): Number of steps to accumulate gradients. Defaults to 1.
         precision_type (str, optional): Type of precision for mixed precision training ("no", "fp16", "bf16").
             Defaults to "no".
@@ -48,7 +47,6 @@ class Trainer:
         ema_update_every (int, optional): Frequency of EMA updates. Defaults to 1.
     Attributes:
         n_epoch (int): Number of training epochs.
-        batch_size (int): Training batch size.
         use_ema (bool): Whether EMA is enabled.
         ema_rate (float): EMA decay rate.
         ema_update_after_step (int): Steps before EMA updates begin.
@@ -67,7 +65,6 @@ class Trainer:
     def __init__(
         self,
         n_epoch: int,
-        batch_size: int,
         gradient_accumulation_step: int = 1,
         precision_type: str = "no",
         save_path: str | Path = Path.home() / "experiments" / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}",
@@ -83,7 +80,6 @@ class Trainer:
             "please run `accelerate config` first in the CLI and save the config at the default location"
         )
         self.n_epoch = n_epoch
-        self.batch_size = batch_size
         self.use_ema = use_ema
         self.ema_rate = ema_rate
         self.ema_update_after_step = ema_update_after_step * gradient_accumulation_step
