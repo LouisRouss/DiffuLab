@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple, Any
+from typing import Any, Dict, Tuple
 
 import torch
 from numpy.typing import NDArray
