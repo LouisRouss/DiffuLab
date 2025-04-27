@@ -1,7 +1,7 @@
 import hydra
+import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-import torch
 from torch.utils.data import DataLoader
 
 from diffulab.diffuse import Diffuser
