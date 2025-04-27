@@ -11,24 +11,32 @@ from diffulab.training import Trainer
 @hydra.main(version_base=None, config_path="../configs", config_name="train_mnist_flow_matching")
 def train(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
-    
+
     train_dataset = instantiate(cfg.dataset.train)
     val_dataset = instantiate(cfg.dataset.val)
 
     train_loader = DataLoader(
-        train_dataset, 
-        batch_size=cfg.dataloader.batch_size, 
+        train_dataset,
+        batch_size=cfg.dataloader.batch_size,
         shuffle=True,
-        num_workers=cfg.dataloader.num_workers if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "num_workers") else 0,
-        pin_memory=cfg.dataloader.pin_memory if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "pin_memory") else False,
+        num_workers=cfg.dataloader.num_workers
+        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "num_workers")
+        else 0,
+        pin_memory=cfg.dataloader.pin_memory
+        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "pin_memory")
+        else False,
     )
-    
+
     val_loader = DataLoader(
-        val_dataset, 
-        batch_size=cfg.dataloader.batch_size, 
+        val_dataset,
+        batch_size=cfg.dataloader.batch_size,
         shuffle=False,
-        num_workers=cfg.dataloader.num_workers if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "num_workers") else 0,
-        pin_memory=cfg.dataloader.pin_memory if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "pin_memory") else False,
+        num_workers=cfg.dataloader.num_workers
+        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "num_workers")
+        else 0,
+        pin_memory=cfg.dataloader.pin_memory
+        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "pin_memory")
+        else False,
     )
 
     denoiser = instantiate(cfg.model)
@@ -45,8 +53,11 @@ def train(cfg: DictConfig):
         sampling_method=cfg.diffuser.sampling_method,
         extra_args=cfg.diffuser.extra_args if hasattr(cfg.diffuser, "extra_args") else {},
     )
-    
-    optimizer = instantiate(cfg.optimizer, params=denoiser.parameters(),)
+
+    optimizer = instantiate(
+        cfg.optimizer,
+        params=denoiser.parameters(),
+    )
 
     # TODO: add a run name for wandb
     trainer = Trainer(
@@ -70,4 +81,4 @@ def train(cfg: DictConfig):
 
 
 if __name__ == "__main__":
-    train() 
+    train()
