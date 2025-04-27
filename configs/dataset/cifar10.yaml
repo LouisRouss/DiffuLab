@@ -1,0 +1,10 @@
+# CIFAR10 dataset configuration
+train:
+  _target_: diffulab.datasets.CIFAR10Dataset
+  data_path: "data/cifar-10-batches-py"
+  batches_to_load: ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4"]
+
+val:
+  _target_: diffulab.datasets.CIFAR10Dataset
+  data_path: "data/cifar-10-batches-py"
+  batches_to_load: ["data_batch_5"] 

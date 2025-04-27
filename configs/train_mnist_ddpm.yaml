@@ -1,0 +1,31 @@
+# configs/train_mnist_ddpm.yaml
+# @package _global_
+defaults:
+  - model: unet
+  - diffuser: gaussian_diffusion
+  - trainer: default
+  - dataset: mnist
+  - dataloader: default
+  - optimizer: adamw
+  - _self_
+
+# Override specific settings
+trainer:
+  project_name: mnist_ddpm
+  n_epoch: 50  
+
+diffuser:
+  model_type: gaussian_diffusion
+  n_steps: 1000  
+  sampling_method: ddpm
+
+dataloader:
+  batch_size: 128  
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num} 

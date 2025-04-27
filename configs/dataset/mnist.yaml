@@ -1,0 +1,10 @@
+# MNIST dataset configuration
+train:
+  _target_: diffulab.datasets.MNISTDataset
+  data_path: "data/MNIST/raw"
+  train: true
+
+val:
+  _target_: diffulab.datasets.MNISTDataset
+  data_path: "data/MNIST/raw"
+  train: false 

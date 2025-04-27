@@ -1,0 +1,13 @@
+# UNet model configuration
+_target_: diffulab.networks.denoisers.UNetModel
+image_size: [32, 32]
+in_channels: 1
+model_channels: 128
+out_channels: 1
+num_res_blocks: 2
+attention_resolutions: [4, 8, 16]
+num_heads: 2
+resblock_updown: true
+n_classes: 10
+use_scale_shift_norm: true
+classifier_free: false 
