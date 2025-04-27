@@ -1,5 +1,6 @@
 import struct
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -57,6 +58,6 @@ class MNISTDataset(DiffusionDataset):
             labels = np.frombuffer(f.read(), dtype=np.uint8)
         return labels.astype(np.int64)
 
-    def preprocess_image(self, image: NDArray) -> NDArray:
+    def preprocess_image(self, image: NDArray[Any]) -> NDArray[np.float32]:
         """Normalize the image to [-1, 1] range."""
         return ((image.astype(np.float32) / 255.0) - 0.5) / 0.5

@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any
 
-import numpy as np
 import torch
 from numpy.typing import NDArray
 from torch import Tensor
@@ -21,7 +20,7 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
         self.labels = None
 
     @abstractmethod
-    def load_data(self) -> Tuple[NDArray, NDArray]:
+    def load_data(self) -> Tuple[NDArray[Any], NDArray[Any]]:
         """Load and preprocess the dataset images and labels.
 
         Returns:
@@ -30,7 +29,7 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
         pass
 
     @abstractmethod
-    def preprocess_image(self, image: NDArray) -> NDArray:
+    def preprocess_image(self, image: NDArray[Any]) -> NDArray[Any]:
         """Preprocess a single image according to the dataset's requirements.
 
         Args:
