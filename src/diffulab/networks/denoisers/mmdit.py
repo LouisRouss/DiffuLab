@@ -401,9 +401,12 @@ class ModulatedLastLayer(nn.Module):
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
         self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
 
-    def forward(self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size dim"]) -> Tensor:
-        alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=1)
-        x = modulate(self.norm_final(x), scale=alpha[:, None, :], shift=beta[:, None, :])
+    def forward(self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "... dim"]) -> Tensor:
+        alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=-1)
+        if len(alpha.shape) == 2:
+            alpha = alpha.unsqueeze(1)
+            beta = beta.unsqueeze(1)
+        x = modulate(self.norm_final(x), scale=alpha, shift=beta)
         x = self.linear(x)
         return x
 
