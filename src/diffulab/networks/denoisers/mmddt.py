@@ -54,16 +54,18 @@ class MMDDT(MMDiT):
         self.depth_decoder = depth_decoder
         self.depth = depth_encoder + depth_decoder
 
-        self.decoder_layers = nn.ModuleList([
-            DiTBlock(
-                input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                embedding_dim=embedding_dim,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-            )
-            for _ in range(depth_decoder)
-        ])
+        self.decoder_layers = nn.ModuleList(
+            [
+                DiTBlock(
+                    input_dim=input_dim,
+                    hidden_dim=hidden_dim,
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                )
+                for _ in range(depth_decoder)
+            ]
+        )
         self.decoder_layers.apply(self._init_weights)
 
     def simple_ddt_encode(
