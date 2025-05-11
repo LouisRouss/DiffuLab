@@ -15,6 +15,11 @@ from diffulab.networks.utils.nn import timestep_embedding
 
 
 class MMDDT(MMDiT):
+    """
+    Architecture for the ddt model following https://arxiv.org/abs/2504.05741.
+    Adding the possibility to train with text as the mmdit model.
+    """
+
     def __init__(
         self,
         simple_ddt: bool = False,
@@ -26,8 +31,8 @@ class MMDDT(MMDiT):
         num_heads: int = 16,
         mlp_ratio: int = 4,
         patch_size: int = 2,
-        depth_encoder: int = 4,
-        depth_decoder: int = 24,
+        depth_encoder: int = 22,
+        depth_decoder: int = 6,
         context_dim: int = 1152,
         n_classes: int | None = None,
         classifier_free: bool = False,
@@ -75,6 +80,17 @@ class MMDDT(MMDiT):
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
     ) -> Tensor:
+        """
+        Encode input patchified tensor using a simple Decoupled Diffusion Transformer approach.
+        Args:
+            x (Tensor): Input patchified tensor of shape [batch_size, seq_len, patch_dim].
+            timestep (Tensor): Timestep tensor of shape [batch_size].
+            p (float, optional): Probability of dropping class labels for classifier-free guidance. Defaults to 0.0.
+            y (Tensor, optional): Class labels tensor of shape [batch_size]. Defaults to None.
+        Returns:
+            Tensor: Encoded tensor with the same shape as input, with time embeddings added.
+        """
+
         if p > 0:
             assert self.n_classes, (
                 "probability of dropping for classifier free guidance is only available if a number of classes is set"
@@ -93,6 +109,18 @@ class MMDDT(MMDiT):
         initial_context: Any | None = None,
         p: float = 0.0,
     ) -> Tensor:
+        """
+        Encode input patchified tensor using a MMDiT approach.
+        Args:
+            x (Tensor): Input patchified tensor with shape [batch_size, seq_len, patch_dim]
+            timesteps (Tensor): Timestep values for diffusion process with shape [batch_size]
+            initial_context (Any, optional): Optional context information to condition the model
+            p (float, optional): Dropout probability for context processing, default is 0.0
+        Returns:
+            Encoded tensor with the same shape as input x
+        Note:
+            This method requires a context_embedder to be defined for the model
+        """
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         t_emb: Tensor = self.time_embed(timestep_embedding(timesteps, self.input_dim))
         context_pooled, context = self.context_embedder(initial_context, p)
@@ -113,6 +141,20 @@ class MMDDT(MMDiT):
         x_context: Tensor | None = None,
         encoder_features: Tensor | None = None,
     ) -> Tensor:
+        """
+        Forward pass through the DDT architecture.
+        Args:
+            x (Tensor): Input image tensor of shape [batch_size, channels, height, width].
+            timesteps (Tensor): Timestep tensor of shape [batch_size].
+            initial_context (Any, optional): Optional initial context for MMDDT encoding.
+            p (float, optional): Probability of dropping context for classifier-free guidance. Defaults to 0.0.
+            y (Tensor, optional): Optional class labels of shape [batch_size]. Used for conditional generation.
+            x_context (Tensor, optional): Optional context tensor to concatenate with input x. Can be B&W image for coloriation,
+                low rresolution image for super-resolution, etc...
+            encoder_features (Tensor, optional): Optional pre-computed encoder features.
+        Returns:
+            Tensor: Denoised output tensor of the same shape as input x.
+        """
         assert not (initial_context is not None and y is not None), "initial_context and y cannot both be specified"
         if p > 0:
             assert self.classifier_free, (
