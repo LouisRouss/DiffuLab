@@ -1,9 +1,9 @@
 from abc import ABC, abstractmethod
 from typing import Dict, Tuple
 
+import numpy as np
 import torch
 from numpy.typing import NDArray
-import numpy as np
 from torch import Tensor
 from torch.utils.data import Dataset
 
