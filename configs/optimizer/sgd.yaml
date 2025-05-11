@@ -1,6 +1,6 @@
 # SGD optimizer configuration
 _target_: torch.optim.SGD
-lr: ${training.learning_rate}
+lr: 1e-3
 momentum: 0.9
 weight_decay: 0.0001
 nesterov: true 
