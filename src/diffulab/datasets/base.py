@@ -29,7 +29,7 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
         pass
 
     @abstractmethod
-    def preprocess_image(self, image: NDArray[Any]) -> NDArray[Any]:
+    def preprocess_image(self, image: NDArray[np.uint8 | np.float32]) -> NDArray[np.float32]:
         """Preprocess a single image according to the dataset's requirements.
 
         Args:
