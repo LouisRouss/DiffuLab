@@ -15,28 +15,21 @@ def train(cfg: DictConfig):
     train_dataset = instantiate(cfg.dataset.train)
     val_dataset = instantiate(cfg.dataset.val)
 
+    dl_cfg = cfg.get("dataloader", {})
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=cfg.dataloader.batch_size,
-        shuffle=True,
-        num_workers=cfg.dataloader.num_workers
-        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "num_workers")
-        else 0,
-        pin_memory=cfg.dataloader.pin_memory
-        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "pin_memory")
-        else False,
+        dataset=train_dataset,
+        batch_size  = dl_cfg.get("batch_size",    32),
+        shuffle     = dl_cfg.get("shuffle",       True),
+        num_workers = dl_cfg.get("num_workers",   0),
+        pin_memory  = dl_cfg.get("pin_memory",    False),
     )
 
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=cfg.dataloader.batch_size,
-        shuffle=False,
-        num_workers=cfg.dataloader.num_workers
-        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "num_workers")
-        else 0,
-        pin_memory=cfg.dataloader.pin_memory
-        if hasattr(cfg, "dataloader") and hasattr(cfg.dataloader, "pin_memory")
-        else False,
+        dataset=val_dataset,
+        batch_size=dl_cfg.get("batch_size",    32),
+        shuffle=dl_cfg.get("shuffle",       False),
+        num_workers=dl_cfg.get("num_workers",   0),
+        pin_memory=dl_cfg.get("pin_memory",    False),
     )
 
     denoiser = instantiate(cfg.model)
@@ -51,7 +44,7 @@ def train(cfg: DictConfig):
         model_type=cfg.diffuser.model_type,
         n_steps=cfg.diffuser.n_steps,
         sampling_method=cfg.diffuser.sampling_method,
-        extra_args=cfg.diffuser.extra_args if hasattr(cfg.diffuser, "extra_args") else {},
+        extra_args=cfg.diffuser.get("extra_args", {}),
     )
 
     optimizer = instantiate(
@@ -66,8 +59,8 @@ def train(cfg: DictConfig):
         precision_type=cfg.trainer.precision_type,
         project_name=cfg.trainer.project_name,
         use_ema=cfg.trainer.use_ema,
-        ema_update_after_step=cfg.trainer.ema_update_after_step if hasattr(cfg.trainer, "ema_update_after_step") else 0,
-        ema_update_every=cfg.trainer.ema_update_every if hasattr(cfg.trainer, "ema_update_every") else 10,
+        ema_update_after_step=cfg.trainer.get("ema_update_after_step", 0),
+        ema_update_every=cfg.trainer.get("ema_update_every", 10),
     )
 
     trainer.train(
@@ -76,7 +69,7 @@ def train(cfg: DictConfig):
         train_dataloader=train_loader,
         val_dataloader=val_loader,
         log_validation_images=cfg.trainer.log_validation_images,
-        val_steps=cfg.trainer.val_steps if hasattr(cfg.trainer, "val_steps") else 50,
+        val_steps=cfg.trainer.get("val_steps", 50),
     )
 
 
