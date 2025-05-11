@@ -18,18 +18,18 @@ def train(cfg: DictConfig):
     dl_cfg = cfg.get("dataloader", {})
     train_loader = DataLoader(
         dataset=train_dataset,
-        batch_size  = dl_cfg.get("batch_size",    32),
-        shuffle     = dl_cfg.get("shuffle",       True),
-        num_workers = dl_cfg.get("num_workers",   0),
-        pin_memory  = dl_cfg.get("pin_memory",    False),
+        batch_size=dl_cfg.get("batch_size", 32),
+        shuffle=dl_cfg.get("shuffle", True),
+        num_workers=dl_cfg.get("num_workers", 0),
+        pin_memory=dl_cfg.get("pin_memory", False),
     )
 
     val_loader = DataLoader(
         dataset=val_dataset,
-        batch_size=dl_cfg.get("batch_size",    32),
-        shuffle=dl_cfg.get("shuffle",       False),
-        num_workers=dl_cfg.get("num_workers",   0),
-        pin_memory=dl_cfg.get("pin_memory",    False),
+        batch_size=dl_cfg.get("batch_size", 32),
+        shuffle=dl_cfg.get("shuffle", False),
+        num_workers=dl_cfg.get("num_workers", 0),
+        pin_memory=dl_cfg.get("pin_memory", False),
     )
 
     denoiser = instantiate(cfg.model)
