@@ -1,0 +1,21 @@
+# configs/train_mnist_flow_matching.yaml
+# @package _global_
+defaults:
+  - model: unet
+  - diffuser: rectified_flow
+  - trainer: default
+  - dataset: mnist
+  - dataloader: default
+  - optimizer: adamw
+  - _self_
+
+trainer:
+  project_name: mnist_flow_matching
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
