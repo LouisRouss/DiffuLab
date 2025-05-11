@@ -20,7 +20,7 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
         self.labels = None
 
     @abstractmethod
-    def load_data(self) -> Tuple[NDArray[Any], NDArray[Any]]:
+    def load_data(self) -> Tuple[NDArray[np.uint8 | np.float32], NDArray[np.int64]]:
         """Load and preprocess the dataset images and labels.
 
         Returns:
