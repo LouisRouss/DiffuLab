@@ -1,6 +1,6 @@
 import pickle
 from pathlib import Path
-from typing import Any, List
+from typing import List
 
 import numpy as np
 from numpy.typing import NDArray
@@ -55,7 +55,7 @@ class CIFAR10Dataset(DiffusionDataset):
 
         return images, labels
 
-    def preprocess_image(self, image: NDArray[np.uint8]) -> NDArray[np.float32]:
+    def preprocess_image(self, image: NDArray[np.uint8 | np.float32]) -> NDArray[np.float32]:
         """Preprocess CIFAR10 image: normalize and transpose to (C, H, W)."""
         # Convert to float and normalize to [-1, 1]
         normalized = (image.astype(np.float32) / 255.0 - 0.5) / 0.5
