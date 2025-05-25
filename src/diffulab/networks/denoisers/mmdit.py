@@ -1,6 +1,5 @@
 # Recoded from scratch from https://arxiv.org/pdf/2403.03206, if you see any error please report it to the author of the repository
 
-from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -11,82 +10,16 @@ from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser
 from diffulab.networks.embedders.common import ContextEmbedder
-from diffulab.networks.utils.nn import LabelEmbed, RotaryPositionalEmbedding, timestep_embedding
-
-
-class RMSNorm(torch.nn.Module):
-    """
-    Root Mean Square Layer Normalization (RMSNorm) module.
-
-    Args:
-        - dim (int): The dimension of the input tensor to be normalized.
-
-    Attributes:
-        - scale (torch.nn.Parameter): A learnable scaling parameter of shape (dim,).
-
-    Methods:
-        - forward(x: Tensor) -> Tensor:
-            Applies RMS normalization to the input tensor.
-
-    Example:
-        >>> rms_norm = RMSNorm(dim=512)
-        >>> input_tensor = torch.randn(10, 512)
-        >>> output_tensor = rms_norm(input_tensor)
-    """
-
-    def __init__(self, dim: int):
-        super().__init__()  # type: ignore
-        self.scale = nn.Parameter(torch.ones(dim))
-
-    def forward(self, x: Float[Tensor, "... dim"]) -> Float[Tensor, "... dim"]:
-        x_dtype = x.dtype
-        x = x.float()
-        rrms = torch.rsqrt(torch.mean(x**2, dim=-1, keepdim=True) + 1e-6)
-        return (x * rrms).to(dtype=x_dtype) * self.scale
-
-
-class QKNorm(nn.Module):
-    """
-    A neural network module that applies RMS normalization to query and key tensors.
-
-    Args:
-        dim (int): The dimension of the input tensors.
-
-    Attributes:
-        query_norm (RMSNorm): The RMS normalization layer for the query tensor.
-        key_norm (RMSNorm): The RMS normalization layer for the key tensor.
-
-    Methods:
-        - forward(q: Tensor, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
-            Applies RMS normalization to the query and key tensors, and ensures they have the same type as the value tensor.
-            Args:
-                - q (Tensor): The query tensor.
-                - k (Tensor): The key tensor.
-                - v (Tensor): The value tensor.
-            Returns:
-                - tuple[Tensor, Tensor]: The normalized query and key tensors, both converted to the type of the value tensor.
-    Example:
-        >>> qknorm = QKNorm(dim=512)
-        >>> query_tensor = torch.randn(10, 25, 512)
-        >>> key_tensor = torch.randn(10, 25, 512)
-        >>> value_tensor = torch.randn(10, 25, 512)
-        >>> normalized_query, normalized_key = qknorm(query_tensor, key_tensor, value_tensor)
-    """
-
-    def __init__(self, dim: int):
-        super().__init__()  # type: ignore
-        self.query_norm = RMSNorm(dim)
-        self.key_norm = RMSNorm(dim)
-
-    def forward(
-        self,
-        q: Float[Tensor, "batch_size seq_len dim"],
-        k: Float[Tensor, "batch_size seq_len dim"],
-        v: Float[Tensor, "batch_size seq_len dim"],
-    ) -> tuple[Float[Tensor, "batch_size seq_len dim"], Float[Tensor, "batch_size seq_len dim"]]:
-        q = self.query_norm(q)
-        k = self.key_norm(k)
-        return q.to(v), k.to(v)
+from diffulab.networks.utils.nn import (
+    LabelEmbed,
+    Modulation,
+    ModulationOut,
+    QKNorm,
+    RMSNorm,
+    RotaryPositionalEmbedding,
+    modulate,
+    timestep_embedding,
+)
 
 
 class DiTAttention(nn.Module):
@@ -274,56 +207,6 @@ class MMDiTAttention(nn.Module):
         return input_output, context_output
 
 
-@dataclass
-class ModulationOut:
-    alpha: Tensor
-    beta: Tensor
-    gamma: Tensor
-    delta: Tensor
-    epsilon: Tensor
-    zeta: Tensor
-
-
-class Modulation(nn.Module):
-    """
-    A neural network module that applies a linear transformation to the input tensor
-    and splits the output into six chunks.
-
-    Attributes:
-        lin (nn.Linear): A linear layer that transforms the input tensor.
-
-    Methods:
-        __init__(dim: int):
-            Initializes the Modulation module with the specified dimension.
-
-        forward(vec: Tensor) -> ModulationOut:
-            Applies the linear transformation to the input tensor, followed by
-            the SiLU activation function, and splits the result into six chunks.
-
-    Args:
-        dim (int): The dimension of the input tensor.
-
-    Example:
-        >>> modulation = Modulation(dim=512)
-        >>> input_tensor = torch.randn(10, 512)
-        >>> output = modulation(input_tensor)
-        >>> print(output.alpha.shape)  # Output: torch.Size([10, 1, 512])
-    """
-
-    def __init__(self, dim: int):
-        super().__init__()  # type: ignore
-        self.lin = nn.Linear(dim, 6 * dim, bias=True)
-
-    def forward(self, vec: Float[Tensor, "... dim"]) -> ModulationOut:
-        out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(6, dim=-1)
-
-        return ModulationOut(*out)
-
-
-def modulate(x: Tensor, scale: Tensor, shift: Tensor) -> Tensor:
-    return x * (1 + scale) + shift
-
-
 class DiTBlock(nn.Module):
     """
     DiTBlock is a neural network module that performs modulation, normalization,
@@ -365,9 +248,9 @@ class DiTBlock(nn.Module):
     ):
         super().__init__()  # type: ignore
         self.modulation = Modulation(embedding_dim)
-        self.norm_1 = nn.LayerNorm(input_dim)
+        self.norm_1 = nn.RMSNorm(input_dim)
         self.attention = DiTAttention(input_dim, hidden_dim, num_heads)
-        self.norm_2 = nn.LayerNorm(input_dim)
+        self.norm_2 = nn.RMSNorm(input_dim)
         self.mlp_input = nn.Sequential(
             nn.Linear(input_dim, mlp_ratio * input_dim),
             nn.GELU(approximate="tanh"),
@@ -433,13 +316,13 @@ class MMDiTBlock(nn.Module):
         self.modulation_context = Modulation(embedding_dim)
         self.modulation_input = Modulation(embedding_dim)
 
-        self.context_norm_1 = nn.LayerNorm(context_dim)
-        self.input_norm_1 = nn.LayerNorm(input_dim)
+        self.context_norm_1 = RMSNorm(context_dim)
+        self.input_norm_1 = RMSNorm(input_dim)
 
         self.attention = MMDiTAttention(context_dim, input_dim, hidden_dim, num_heads)
 
-        self.context_norm_2 = nn.LayerNorm(context_dim)
-        self.input_norm_2 = nn.LayerNorm(input_dim)
+        self.context_norm_2 = RMSNorm(context_dim)
+        self.input_norm_2 = RMSNorm(input_dim)
 
         self.mlp_context = nn.Sequential(
             nn.Linear(context_dim, mlp_ratio * context_dim),
@@ -567,27 +450,21 @@ class MMDiT(Denoiser):
             assert self.context_embedder.n_output == 2, "for MMDiT context embedder should provide 2 embeddings"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
                 isinstance(i, int) for i in self.context_embedder.output_size
-            ), (
-                "context_embedder.output_size must be a tuple of integers, (embeddings provided should be one dimensional)"
-            )
+            ), "context_embedder.output_size must be a tuple of integers"
             self.mlp_pooled_context = nn.Sequential(
                 nn.Linear(self.context_embedder.output_size[0], embedding_dim),
                 nn.SiLU(),
                 nn.Linear(embedding_dim, embedding_dim),
             )
             self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
-
-            self.last_layer = ModulatedLastLayer(
-                hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
-            )
         else:
             self.label_embed = (
                 LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
             )
-            self.last_layer = ModulatedLastLayer(
-                hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
-            )
 
+        self.last_layer = ModulatedLastLayer(
+            hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
+        )
         self.input_dim = input_dim
         self.time_embed = nn.Sequential(
             nn.Linear(self.input_dim, embedding_dim),
@@ -597,32 +474,29 @@ class MMDiT(Denoiser):
 
         self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
 
-        # Fix the ModuleList initialization - it was taking *[] which is incorrect
-        self.layers = nn.ModuleList(
-            [
-                MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                if not self.simple_dit
-                else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                for _ in range(depth)
-            ]
-        )
+        self.layers = nn.ModuleList([
+            MMDiTBlock(
+                context_dim=context_dim,
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            if not self.simple_dit
+            else DiTBlock(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            for _ in range(depth)
+        ])
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module) -> None:
-        if isinstance(module, nn.Linear):
+        if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
             nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:  # type: ignore
                 nn.init.constant_(module.bias, 0)
@@ -669,13 +543,12 @@ class MMDiT(Denoiser):
 
     def mmdit_forward(
         self,
-        x: Float[Tensor, "batch_size channels height width"],
+        x: Float[Tensor, "batch_size seq_len patch_dim"],
         timesteps: Float[Tensor, "batch_size"],
         initial_context: Any | None = None,
         p: float = 0.0,
     ) -> Tensor:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
-        x = self.patchify(x)
         emb = self.time_embed(timestep_embedding(timesteps, self.input_dim))
         context_pooled, context = self.context_embedder(initial_context, p)
         context_pooled = self.mlp_pooled_context(context_pooled) + emb
@@ -685,12 +558,11 @@ class MMDiT(Denoiser):
             x, context = layer(x, context_pooled, context)
 
         x = self.last_layer(x, context_pooled)
-        x = self.unpatchify(x)
         return x
 
     def simple_dit_forward(
         self,
-        x: Float[Tensor, "batch_size channels height width"],
+        x: Float[Tensor, "batch_size seq_len patch_dim"],
         timestep: Float[Tensor, "batch_size"],
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
@@ -699,7 +571,6 @@ class MMDiT(Denoiser):
             assert self.n_classes, (
                 "probability of dropping for classifier free guidance is only available if a number of classes is set"
             )
-        x = self.patchify(x)
 
         emb = self.time_embed(timestep_embedding(timestep, self.input_dim))
         if self.label_embed is not None:
@@ -710,8 +581,6 @@ class MMDiT(Denoiser):
             x = layer(x, emb)
 
         x = self.last_layer(x, emb)
-
-        x = self.unpatchify(x)
         return x
 
     def forward(
@@ -730,7 +599,11 @@ class MMDiT(Denoiser):
             )
         if x_context is not None:
             x = torch.cat([x, x_context], dim=1)
+
+        x = self.patchify(x)
         if self.simple_dit:
-            return self.simple_dit_forward(x, timesteps, p, y)
+            x = self.simple_dit_forward(x, timesteps, p, y)
         else:
-            return self.mmdit_forward(x, timesteps, initial_context, p)
+            x = self.mmdit_forward(x, timesteps, initial_context, p)
+        x = self.unpatchify(x)
+        return x
