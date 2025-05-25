@@ -42,7 +42,11 @@ class Flow(Diffusion):
     """
 
     def __init__(
-        self, n_steps: int = 50, sampling_method: str = "euler", schedule: str = "linear", logits_normal: bool = False
+        self,
+        n_steps: int = 50,
+        sampling_method: str = "euler",
+        schedule: str = "linear",
+        logits_normal: bool = False,
     ) -> None:
         super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
         self.logits_normal = logits_normal
@@ -148,7 +152,7 @@ class Flow(Diffusion):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
-        prediction = model(**model_inputs, timesteps=timesteps)
+        prediction = model(**model_inputs, timesteps=timesteps)["x"]
         return prediction
 
     def one_step_denoise(
@@ -217,7 +221,7 @@ class Flow(Diffusion):
         """
         x_0 = model_inputs["x"].clone()
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
-        prediction: torch.Tensor = model(**model_inputs, timesteps=timesteps)
+        prediction: torch.Tensor = model(**model_inputs, timesteps=timesteps)["x"]
         losses = ((noise - x_0) - prediction) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()

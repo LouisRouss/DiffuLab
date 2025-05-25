@@ -537,10 +537,10 @@ class GaussianDiffusion(Diffusion):
             timesteps_model = map_tensor[timesteps]
         else:
             timesteps_model = timesteps
-        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps_model)
+        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps_model)["x"]
 
         if classifier_free and guidance_scale > 0:
-            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)
+            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)["x"]
             prediction = prediction + guidance_scale * (prediction - prediction_uncond)
 
         mean, _, log_var, x_start = self._get_p_mean_var(prediction, model_inputs["x"], timesteps, clamp_x)
@@ -657,7 +657,7 @@ class GaussianDiffusion(Diffusion):
         if self.timestep_map:
             map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=timesteps.dtype)
             timesteps = map_tensor[timesteps]
-        prediction = model(**model_inputs, timesteps=timesteps)
+        prediction = model(**model_inputs, timesteps=timesteps)["x"]
         loss = nn.functional.mse_loss(prediction, noise, reduction="mean")
         return loss
 

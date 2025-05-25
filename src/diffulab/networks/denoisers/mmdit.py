@@ -8,7 +8,7 @@ from einops import rearrange
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.denoisers.common import Denoiser, ModelOutput
 from diffulab.networks.embedders.common import ContextEmbedder
 from diffulab.networks.utils.nn import (
     LabelEmbed,
@@ -591,7 +591,7 @@ class MMDiT(Denoiser):
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
         x_context: Tensor | None = None,
-    ) -> Tensor:
+    ) -> ModelOutput:
         assert not (initial_context is not None and y is not None), "initial_context and y cannot both be specified"
         if p > 0:
             assert self.classifier_free, (
@@ -606,4 +606,4 @@ class MMDiT(Denoiser):
         else:
             x = self.mmdit_forward(x, timesteps, initial_context, p)
         x = self.unpatchify(x)
-        return x
+        return {"x": x}

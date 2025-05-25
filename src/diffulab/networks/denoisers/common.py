@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import NotRequired, Required, TypedDict
+from typing import Any, NotRequired, Required, TypedDict
 
 import torch.nn as nn
 from torch import Tensor
@@ -12,12 +12,17 @@ class ModelInput(TypedDict, total=False):
     context: NotRequired[Tensor]  # context information, can be text image etc
 
 
+class ModelOutput(TypedDict, total=False):
+    x: Required[Tensor]  # output tensor
+    features: NotRequired[list[Tensor]]  # list of features from intermediate layers
+
+
 class Denoiser(nn.Module, ABC):
     def __init__(self):
         super().__init__()  # type: ignore
 
     @abstractmethod
-    def forward(self, x: Tensor, timesteps: Tensor, *args, **kwargs) -> Tensor:  # type: ignore
+    def forward(self, x: Tensor, timesteps: Tensor, *args: Any, **kwargs: Any) -> ModelOutput:
         """
         Apply the model to an input batch.
         :param x: a [N x C x ...] Tensor of noisy image.
