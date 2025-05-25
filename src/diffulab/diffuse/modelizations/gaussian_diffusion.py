@@ -79,6 +79,7 @@ class GaussianDiffusion(Diffusion):
         n_steps: int = 1000,
         sampling_method: str = "ddpm",
         schedule: str = "linear",
+        latent_diffusion: bool = False,
         mean_type: str = "epsilon",
         variance_type: str = "fixed_small",
     ):
@@ -92,7 +93,9 @@ class GaussianDiffusion(Diffusion):
         self.mean_type = mean_type
         self.var_type = variance_type
         self.training_steps = n_steps
-        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
+        super().__init__(
+            n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
+        )
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:
         """

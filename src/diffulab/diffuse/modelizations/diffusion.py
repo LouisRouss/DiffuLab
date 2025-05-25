@@ -32,11 +32,19 @@ class Diffusion(ABC):
         draw_timesteps: Sample random timesteps for training.
     """
 
-    def __init__(self, n_steps: int, sampling_method: str = "euler", schedule: str = "linear", **kwargs: Any):
+    def __init__(
+        self,
+        n_steps: int,
+        sampling_method: str = "euler",
+        schedule: str = "linear",
+        latent_diffusion: bool = False,
+        **kwargs: Any,
+    ):
         self.timesteps: list[float] = []
         self.steps: int = n_steps
         self.sampling_method = sampling_method
         self.schedule = schedule
+        self.latent_diffusion = latent_diffusion
         self.set_steps(n_steps, schedule=schedule, **kwargs)
 
     @abstractmethod

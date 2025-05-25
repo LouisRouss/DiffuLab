@@ -27,6 +27,6 @@ class Denoiser(nn.Module, ABC):
         Apply the model to an input batch.
         :param x: a [N x C x ...] Tensor of noisy image.
         :param timesteps: a 1-D batch of timesteps.
-        :return: a dictionnary containing "x" the tensor
+        :return: a dictionary containing "x" the tensor
         output and potentially other outputs such as intermediate features.
         """

@@ -6,6 +6,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.networks.vae.common import VAE
 
 
 class Diffuser:
@@ -47,15 +48,20 @@ class Diffuser:
         sampling_method: str,
         model_type: str = "rectified_flow",
         n_steps: int = 1000,
+        vae: VAE | None = None,
         extra_args: dict[str, Any] = {},
     ):
         self.model_type = model_type
         self.denoiser = denoiser
         self.n_steps = n_steps
+        self.vae = vae
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
-                n_steps=n_steps, sampling_method=sampling_method, **extra_args
+                n_steps=n_steps,
+                sampling_method=sampling_method,
+                latent_diffusion=self.vae is not None,
+                **extra_args,
             )
         else:
             raise NotImplementedError(f"Model type {self.model_type} is not implemented")
@@ -157,12 +163,31 @@ class Diffuser:
                 guidance_scale=7.5
             ```
         """
-        return self.diffusion.denoise(
-            self.denoiser,
-            data_shape,
-            model_inputs,
-            use_tqdm=use_tqdm,
-            clamp_x=clamp_x,
-            guidance_scale=guidance_scale,
-            **kwargs,
-        )
+        if not self.vae:
+            return self.diffusion.denoise(
+                self.denoiser,
+                data_shape,
+                model_inputs,
+                use_tqdm=use_tqdm,
+                clamp_x=clamp_x,
+                guidance_scale=guidance_scale,
+                **kwargs,
+            )
+        else:
+            latent_shape = (
+                data_shape[0],
+                self.vae.latent_channels,
+                data_shape[2] // self.vae.compression_factor,
+                data_shape[3] // self.vae.compression_factor,
+            )
+
+            z = self.diffusion.denoise(
+                self.denoiser,
+                latent_shape,
+                model_inputs,
+                use_tqdm=use_tqdm,
+                clamp_x=clamp_x,
+                guidance_scale=guidance_scale,
+                **kwargs,
+            )
+            return self.vae.decode(z)
