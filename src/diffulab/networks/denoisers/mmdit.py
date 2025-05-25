@@ -477,25 +477,27 @@ class MMDiT(Denoiser):
 
         self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
 
-        self.layers = nn.ModuleList([
-            MMDiTBlock(
-                context_dim=context_dim,
-                input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                embedding_dim=embedding_dim,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-            )
-            if not self.simple_dit
-            else DiTBlock(
-                input_dim=input_dim,
-                hidden_dim=hidden_dim,
-                embedding_dim=embedding_dim,
-                num_heads=num_heads,
-                mlp_ratio=mlp_ratio,
-            )
-            for _ in range(depth)
-        ])
+        self.layers = nn.ModuleList(
+            [
+                MMDiTBlock(
+                    context_dim=context_dim,
+                    input_dim=input_dim,
+                    hidden_dim=hidden_dim,
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                )
+                if not self.simple_dit
+                else DiTBlock(
+                    input_dim=input_dim,
+                    hidden_dim=hidden_dim,
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                )
+                for _ in range(depth)
+            ]
+        )
 
         self.repa = repa
         self.repa_layers = repa_layers
