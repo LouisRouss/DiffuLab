@@ -15,6 +15,7 @@ class ModelInput(TypedDict, total=False):
 class ModelOutput(TypedDict, total=False):
     x: Required[Tensor]  # output tensor
     features: NotRequired[list[Tensor]]  # list of features from intermediate layers
+    repa_features: NotRequired[list[Tensor]]  # list of features after projection for REPA alignment
 
 
 class Denoiser(nn.Module, ABC):
