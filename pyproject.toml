@@ -21,6 +21,9 @@ dev = [
     "ruff>=0.9.7",
     "typos>=1.30.0",
 ]
+repa = [
+    "timm>=1.0.15",
+]
 
 [tool.uv.sources]
 diffulab = {workspace = true}
