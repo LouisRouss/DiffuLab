@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, cast
 
 import torch
 import wandb
@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 from diffulab.diffuse.diffuser import Diffuser
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.networks.encoders.common import Encoder  # type: ignore [stub file not found]
 from diffulab.training.utils import AverageMeter
 
 HOME_PATH = Path.home()
@@ -78,6 +79,7 @@ class Trainer:
         ema_rate: float = 0.999,
         ema_update_after_step: int = 100,
         ema_update_every: int = 1,
+        repa: bool = False,
     ):
         assert (HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml").exists(), (
             "please run `accelerate config` first in the CLI and save the config at the default location"
@@ -88,6 +90,7 @@ class Trainer:
         self.ema_rate = ema_rate
         self.ema_update_after_step = ema_update_after_step * gradient_accumulation_step
         self.ema_update_every = ema_update_every * gradient_accumulation_step
+        self.repa = repa
         self.accelerator = Accelerator(
             split_batches=True,
             mixed_precision=precision_type,
@@ -341,6 +344,12 @@ class Trainer:
             ema_denoiser = self.accelerator.prepare(ema_denoiser)  # type: ignore
         else:
             ema_denoiser = None
+
+        if self.repa:
+            assert diffuser.repa_encoder is not None, "REPA encoder must be provided for REPA training"
+            assert isinstance(diffuser.repa_encoder, Encoder), "REPA encoder must be an instance of Encoder class"
+            diffuser.repa_encoder = cast(Encoder, self.accelerator.prepare(diffuser.repa_encoder))  # type: ignore
+
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
             diffuser.denoiser, train_dataloader, val_dataloader, optimizer
         )

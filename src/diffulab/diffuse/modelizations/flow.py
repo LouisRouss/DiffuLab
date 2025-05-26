@@ -48,13 +48,11 @@ class Flow(Diffusion):
         schedule: str = "linear",
         latent_diffusion: bool = False,
         logits_normal: bool = False,
-        repa_loss: bool = False,
     ) -> None:
         super().__init__(
             n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
         )
         self.logits_normal = logits_normal
-        self.repa_loss = repa_loss
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         """
@@ -231,11 +229,6 @@ class Flow(Diffusion):
         losses = ((noise - x_0) - prediction["x"]) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
-
-        if self.repa_loss:
-            # RepA: https://arxiv.org/pdf/2410.06940
-            # Adding representation alignment loss
-            ...
         return loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:

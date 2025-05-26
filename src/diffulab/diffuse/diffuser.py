@@ -6,6 +6,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.networks.encoders.common import Encoder
 from diffulab.networks.vae.common import VAE
 
 
@@ -50,11 +51,13 @@ class Diffuser:
         n_steps: int = 1000,
         vae: VAE | None = None,
         extra_args: dict[str, Any] = {},
+        repa_encoder: Encoder | None = None,
     ):
         self.model_type = model_type
         self.denoiser = denoiser
         self.n_steps = n_steps
         self.vae = vae
+        self.repa_encoder = repa_encoder
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
