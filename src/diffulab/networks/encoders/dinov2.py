@@ -4,13 +4,16 @@ import timm
 import torch
 import torch.nn as nn
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from torch import Tensor
 from torchvision.transforms import Normalize  # type: ignore[reportMissingTypeStub]
 
 from diffulab.networks.encoders.common import Encoder
 
 
 class DinoV2(Encoder):
-    def __init__(self, dino_model: str = f"dinov2_vitl14_reg", resolution: int = 256) -> None:
+    def __init__(
+        self, dino_model: str = f"dinov2_vitl14_reg", resolution: int = 256, base_patch_size: int = 16
+    ) -> None:
         super().__init__()
         self.resolution = resolution
 
@@ -19,13 +22,14 @@ class DinoV2(Encoder):
         self._encoder.eval()
 
         # Resample the positional embedding to match the resolution
-        patch_resolution = 16 * (resolution // 256)
+        patch_resolution = base_patch_size * (resolution // 256)
         self._encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
             self._encoder.pos_embed.data,  # type: ignore
             [patch_resolution, patch_resolution],
         )
 
         self._encoder.head = torch.nn.Identity()
+        self._embedding_dim: int = self._encoder.embed_dim  # type: ignore
 
     @property
     def encoder(self) -> nn.Module:
@@ -36,9 +40,18 @@ class DinoV2(Encoder):
         """
         return self._encoder
 
-    def preprocess(self, x: torch.Tensor) -> torch.Tensor:
+    @property
+    def embedding_dim(self) -> int:
+        """
+        The dimension of the encoded representation.
+        Returns:
+            int: The embedding dimension of the DINO V2 encoder.
+        """
+        return self._embedding_dim
+
+    def preprocess(self, x: Tensor) -> Tensor:
         # Normalize the input tensor to be between 0 and 1
-        if x.dtype == torch.uint8:  # Case: 0-255
+        if x.min() >= 0 and x.max() <= 255:  # Case: 0-255
             x = x.float() / 255.0
         elif x.min() >= -1.0 and x.max() <= 1.0:  # Case: -1 to 1
             x = (x + 1.0) / 2.0
@@ -50,5 +63,18 @@ class DinoV2(Encoder):
             mean=IMAGENET_DEFAULT_MEAN,
             std=IMAGENET_DEFAULT_STD,
         )(x)
-        x = cast(torch.Tensor, torch.nn.functional.interpolate(x, 224 * (self.resolution // 256), mode="bicubic"))  # type: ignore[reportUnknownMemberType]
+        x = cast(Tensor, torch.nn.functional.interpolate(x, 224 * (self.resolution // 256), mode="bicubic"))  # type: ignore[reportUnknownMemberType]
         return x
+
+    def forward(self, x: Tensor) -> Tensor:
+        """
+        Forward pass of the encoder.
+        Args:
+            x (Tensor): Input tensor to be encoded.
+        Returns:
+            Tensor: Encoded representation of the input tensor.
+        """
+        x = self.preprocess(x)
+        with torch.no_grad():
+            z = cast(Tensor, self.encoder.forward_features(x)["x_norm_patchtokens"])  # type: ignore
+        return z
