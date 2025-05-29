@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "pre-commit>=4.2.0",
     "pyright>=1.1.396",
     "ruff>=0.9.7",
     "typos>=1.30.0",
@@ -29,7 +30,7 @@ repa = [
 diffulab = {workspace = true}
 
 [tool.astral]
-package = "src" 
+package = "src"
 
 [tool.black]
 line-length = 120

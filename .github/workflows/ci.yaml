@@ -40,7 +40,7 @@ jobs:
 
       - name: Install the project
         if: steps.changes.outputs.sources == 'true'
-        run: uv sync --all-extras 
+        run: uv sync --all-extras
 
       - name: fmt
         if: steps.changes.outputs.sources == 'true'
@@ -48,8 +48,8 @@ jobs:
 
       - name: lint
         if: steps.changes.outputs.sources == 'true'
-        run: uv run ruff check 
-      
+        run: uv run ruff check
+
       - name: typecheck
         if: steps.changes.outputs.sources == 'true'
         run: uv run pyright
