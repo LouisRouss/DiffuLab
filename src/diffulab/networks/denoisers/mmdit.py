@@ -429,9 +429,6 @@ class MMDiT(Denoiser):
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
-        repa: bool = False,
-        repa_dim: int = 768,
-        repa_layers: list[int] = [],
     ):
         super().__init__()
         assert not (n_classes is not None and context_embedder is not None), (
@@ -477,32 +474,25 @@ class MMDiT(Denoiser):
 
         self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
 
-        self.layers = nn.ModuleList(
-            [
-                MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                if not self.simple_dit
-                else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=embedding_dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                )
-                for _ in range(depth)
-            ]
-        )
-
-        self.repa = repa
-        self.repa_layers = repa_layers
-        if self.repa:
-            self.repa_proj = nn.ModuleList([nn.Linear(input_dim, repa_dim) for _ in range(len(self.repa_layers))])
+        self.layers = nn.ModuleList([
+            MMDiTBlock(
+                context_dim=context_dim,
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            if not self.simple_dit
+            else DiTBlock(
+                input_dim=input_dim,
+                hidden_dim=hidden_dim,
+                embedding_dim=embedding_dim,
+                num_heads=num_heads,
+                mlp_ratio=mlp_ratio,
+            )
+            for _ in range(depth)
+        ])
 
         self.apply(self._init_weights)
 
@@ -558,6 +548,7 @@ class MMDiT(Denoiser):
         timesteps: Float[Tensor, "batch_size"],
         initial_context: Any | None = None,
         p: float = 0.0,
+        intermediate_features: bool = False,
     ) -> ModelOutput:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         emb = self.time_embed(timestep_embedding(timesteps, self.input_dim))
@@ -565,15 +556,20 @@ class MMDiT(Denoiser):
         context_pooled = self.mlp_pooled_context(context_pooled) + emb
         context = self.context_embed(context)
 
-        features: list[Tensor] = []
+        features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
             x, context = layer(x, context_pooled, context)
-            features.append(x)
+            if features:
+                features.append(x)
 
         x = self.last_layer(x, context_pooled)
-        features.append(x)
-        return {"x": x, "features": features}
+        if features:
+            features.append(x)
+        model_output: ModelOutput = {"x": x}
+        if features:
+            model_output["features"] = features
+        return model_output
 
     def simple_dit_forward(
         self,
@@ -581,6 +577,7 @@ class MMDiT(Denoiser):
         timestep: Float[Tensor, "batch_size"],
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
+        intermediate_features: bool = False,
     ) -> ModelOutput:
         if p > 0:
             assert self.n_classes, (
@@ -591,15 +588,20 @@ class MMDiT(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
-        features: list[Tensor] = []
+        features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
             x = layer(x, emb)
-            features.append(x)
+            if features:
+                features.append(x)
 
         x = self.last_layer(x, emb)
-        features.append(x)
-        return {"x": x, "features": features}
+        if features:
+            features.append(x)
+        model_output: ModelOutput = {"x": x}
+        if features:
+            model_output["features"] = features
+        return model_output
 
     def forward(
         self,
@@ -625,11 +627,4 @@ class MMDiT(Denoiser):
             model_output = self.mmdit_forward(x, timesteps, initial_context, p)
         model_output["x"] = self.unpatchify(model_output["x"])
 
-        if self.repa:
-            assert "features" in model_output, "features must be present in model output for REPA alignment"
-            repa_features = [
-                self.repa_proj[idx_proj](model_output["features"][idx_layer])
-                for idx_proj, idx_layer in enumerate(self.repa_layers)
-            ]
-            model_output["repa_features"] = repa_features
         return model_output
