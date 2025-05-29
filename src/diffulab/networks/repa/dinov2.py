@@ -7,10 +7,10 @@ from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torch import Tensor
 from torchvision.transforms import Normalize  # type: ignore[reportMissingTypeStub]
 
-from diffulab.networks.encoders.common import Encoder
+from diffulab.networks.repa.common import REPA
 
 
-class DinoV2(Encoder):
+class DinoV2(REPA):
     def __init__(
         self, dino_model: str = f"dinov2_vitl14_reg", resolution: int = 256, base_patch_size: int = 16
     ) -> None:

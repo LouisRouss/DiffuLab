@@ -15,7 +15,7 @@ from tqdm import tqdm
 
 from diffulab.diffuse.diffuser import Diffuser
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-from diffulab.networks.encoders.common import Encoder  # type: ignore [stub file not found]
+from diffulab.networks.repa.common import REPA  # type: ignore [stub file not found]
 from diffulab.training.utils import AverageMeter
 
 HOME_PATH = Path.home()
@@ -161,12 +161,10 @@ class Trainer:
             ModelInput: A new dictionary with the same structure as the input, but with all
                 tensor values moved to the accelerator's device.
         """
-        return ModelInput(
-            **{
-                k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-                for k, v in batch.items()  # type: ignore
-            }
-        )
+        return ModelInput(**{
+            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+            for k, v in batch.items()  # type: ignore
+        })
 
     @torch.no_grad()  # type: ignore
     def validation_step(
@@ -347,7 +345,7 @@ class Trainer:
 
         if self.repa:
             assert diffuser.repa_encoder is not None, "REPA encoder must be provided for REPA training"
-            assert isinstance(diffuser.repa_encoder, Encoder), "REPA encoder must be an instance of Encoder class"
+            assert isinstance(diffuser.repa_encoder, REPA), "REPA encoder must be an instance of Encoder class"
             diffuser.repa_encoder = cast(Encoder, self.accelerator.prepare(diffuser.repa_encoder))  # type: ignore
 
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore

@@ -7,7 +7,7 @@ from PIL import Image
 from torch import Tensor
 
 
-class Encoder(nn.Module, ABC):
+class REPA(nn.Module, ABC):
     def __init__(self) -> None:
         super().__init__()  # type: ignore
 

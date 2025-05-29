@@ -5,7 +5,7 @@ import torch.nn as nn
 from torch import Tensor
 
 
-class VAE(nn.Module, ABC):
+class VisionTower(nn.Module, ABC):
     def __init__(self):
         super().__init__()  # type: ignore
 
@@ -30,7 +30,7 @@ class VAE(nn.Module, ABC):
     @abstractmethod
     def compression_factor(self) -> int:
         """
-        Compression factor of the VAE.
+        Compression factor of the AE.
         This should be implemented in subclasses to return the specific compression factor.
         """
         ...

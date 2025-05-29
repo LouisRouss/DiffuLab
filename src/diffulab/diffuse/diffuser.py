@@ -6,8 +6,8 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-from diffulab.networks.encoders.common import Encoder
-from diffulab.networks.vae.common import VAE
+from diffulab.networks.repa.common import REPA
+from diffulab.networks.vision_towers.common import VisionTower
 
 
 class Diffuser:
@@ -49,21 +49,21 @@ class Diffuser:
         sampling_method: str,
         model_type: str = "rectified_flow",
         n_steps: int = 1000,
-        vae: VAE | None = None,
+        vision_tower: VisionTower | None = None,
         extra_args: dict[str, Any] = {},
-        repa_encoder: Encoder | None = None,
+        repa_encoder: REPA | None = None,
     ):
         self.model_type = model_type
         self.denoiser = denoiser
         self.n_steps = n_steps
-        self.vae = vae
+        self.vision_tower = vision_tower
         self.repa_encoder = repa_encoder
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
                 n_steps=n_steps,
                 sampling_method=sampling_method,
-                latent_diffusion=self.vae is not None,
+                latent_diffusion=self.vision_tower is not None,
                 **extra_args,
             )
         else:
@@ -166,7 +166,7 @@ class Diffuser:
                 guidance_scale=7.5
             ```
         """
-        if not self.vae:
+        if not self.vision_tower:
             return self.diffusion.denoise(
                 self.denoiser,
                 data_shape,
@@ -179,9 +179,9 @@ class Diffuser:
         else:
             latent_shape = (
                 data_shape[0],
-                self.vae.latent_channels,
-                data_shape[2] // self.vae.compression_factor,
-                data_shape[3] // self.vae.compression_factor,
+                self.vision_tower.latent_channels,
+                data_shape[2] // self.vision_tower.compression_factor,
+                data_shape[3] // self.vision_tower.compression_factor,
             )
 
             z = self.diffusion.denoise(
@@ -193,4 +193,4 @@ class Diffuser:
                 guidance_scale=guidance_scale,
                 **kwargs,
             )
-            return self.vae.decode(z)
+            return self.vision_tower.decode(z)
