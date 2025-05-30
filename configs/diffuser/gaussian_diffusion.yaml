@@ -1,0 +1,4 @@
+# Gaussian diffusion configuration
+model_type: gaussian_diffusion
+n_steps: 1000
+sampling_method: ddpm 
