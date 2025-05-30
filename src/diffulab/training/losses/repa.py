@@ -1,4 +1,4 @@
-from typing import Any, cast
+from typing import Any
 
 import torch
 from jaxtyping import Float
@@ -39,22 +39,20 @@ class RepaLoss(LossFunction):
             nn.Linear(hidden_dim, self.repa_encoder.embedding_dim),
         )
         self.denoiser.layers[alignment_layer - 1].register_forward_hook(self._forward_hook)
-        self.register_buffer(
-            "src_features", torch.empty(0)
-        )  # Placeholder for source features # ENSURE IT WILL WORK IN DATA PARALLELISM
+        self.src_features: Tensor | None = None
 
     def _forward_hook(self, net: nn.Module, input: tuple[Any, ...], output: Tensor) -> None:
         """
         Hook to capture the output of the specified layer during the forward pass.
         """
-        projected_output = self.proj(output)
-        self.src_features = projected_output
+        self.src_features = output
 
     def forward(self, x0: Float[Tensor, "batch 3 H W"]) -> Tensor:
+        assert self.src_features is not None, "Source features are not computed. Ensure the forward hook is registered."
         with torch.no_grad():
             dst_features = self.repa_encoder(
                 x0
             )  # batch size seqlen embedding_dim # SEE HOW TO HANDLE THE PRE COMPUTING OF FEATURES
-        cos_sim = torch.nn.functional.cosine_similarity(cast(Tensor, self.src_features), dst_features, dim=-1)
+        cos_sim = torch.nn.functional.cosine_similarity(self.proj(self.src_features), dst_features, dim=-1)
         loss = 1 - cos_sim.mean()
         return loss
