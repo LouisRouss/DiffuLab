@@ -31,6 +31,10 @@ class DinoV2(REPA):
         self._encoder.head = torch.nn.Identity()
         self._embedding_dim: int = self._encoder.embed_dim  # type: ignore
 
+        # Freeze all parameters in the encoder
+        for param in self._encoder.parameters():
+            param.requires_grad = False
+
     @property
     def encoder(self) -> nn.Module:
         """

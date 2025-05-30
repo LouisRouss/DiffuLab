@@ -1,21 +1,8 @@
-from abc import ABC, abstractmethod
-from typing import Any
+from abc import ABC
+
+import torch.nn as nn
 
 
-class LossFunction(ABC):  # to be completed
-    def __init__(self):
+class LossFunction(ABC, nn.Module):  # to be completed
+    def __init__(self) -> None:
         super().__init__()  # type: ignore
-
-    @abstractmethod
-    def __call__(self, *args: Any, **kwargs: Any) -> float:
-        """
-        Forward pass of the loss function.
-
-        Args:
-            *args: Variable length argument list.
-            **kwargs: Arbitrary keyword arguments.
-
-        Returns:
-            float: Computed loss value.
-        """
-        ...
