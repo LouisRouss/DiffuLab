@@ -79,5 +79,5 @@ class VisionTower(nn.Module, ABC):
             **kwargs: Arbitrary keyword arguments.
 
         Returns:
-            Tensor: Encoded representation of the input tensor.
+            forward (Tensor): Output tensor after encoding and decoding.
         """
