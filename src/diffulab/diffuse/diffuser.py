@@ -6,8 +6,8 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-from diffulab.networks.repa.common import REPA
 from diffulab.networks.vision_towers.common import VisionTower
+from diffulab.training.losses import LossFunction
 
 
 class Diffuser:
@@ -51,13 +51,13 @@ class Diffuser:
         n_steps: int = 1000,
         vision_tower: VisionTower | None = None,
         extra_args: dict[str, Any] = {},
-        repa_encoder: REPA | None = None,
+        extra_losses: list[LossFunction] = [],
     ):
         self.model_type = model_type
         self.denoiser = denoiser
         self.n_steps = n_steps
         self.vision_tower = vision_tower
-        self.repa_encoder = repa_encoder
+        self.extra_losses = extra_losses
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
@@ -91,7 +91,13 @@ class Diffuser:
         """
         return self.diffusion.draw_timesteps(batch_size=batch_size)
 
-    def compute_loss(self, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
+    def compute_loss(
+        self,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_args: dict[str, Any] = {},
+    ) -> Tensor:
         """
         Compute the loss for the diffusion model using the denoiser and diffusion process.
         This method serves as a bridge between the Diffuser class and the underlying
@@ -105,7 +111,7 @@ class Diffuser:
         Returns:
             Tensor: The computed loss value as a scalar tensor.
         """
-        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise)
+        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
     def set_steps(self, n_steps: int, **extra_args: dict[str, Any]) -> None:
         """

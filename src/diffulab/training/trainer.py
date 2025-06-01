@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, cast
+from typing import Any, Iterable
 
 import torch
 import wandb
@@ -13,9 +13,9 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
+from diffulab.datasets.base import BatchData
 from diffulab.diffuse.diffuser import Diffuser
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-from diffulab.networks.repa.common import REPA  # type: ignore [stub file not found]
 from diffulab.training.utils import AverageMeter
 
 HOME_PATH = Path.home()
@@ -76,7 +76,6 @@ class Trainer:
         ema_rate: float = 0.999,
         ema_update_after_step: int = 100,
         ema_update_every: int = 1,
-        repa: bool = False,
     ):
         assert (HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml").exists(), (
             "please run `accelerate config` first in the CLI and save the config at the default location"
@@ -86,7 +85,6 @@ class Trainer:
         self.ema_rate = ema_rate
         self.ema_update_after_step = ema_update_after_step * gradient_accumulation_step
         self.ema_update_every = ema_update_every * gradient_accumulation_step
-        self.repa = repa
         self.accelerator = Accelerator(
             split_batches=True,
             mixed_precision=precision_type,
@@ -99,11 +97,28 @@ class Trainer:
         Path(os.environ["WANDB_DIR"]).mkdir(parents=True, exist_ok=True)
         self.accelerator.init_trackers(project_name=project_name, config=run_config, init_kwargs=init_kwargs)  # type: ignore
 
+    def move_dict_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """
+        Moves all tensor values in a dictionary to the appropriate device.
+        This method recursively traverses a dictionary and moves any tensor values to the
+        device specified by the accelerator, while leaving non-tensor values unchanged.
+        Args:
+            batch (dict[str, Any]): A dictionary where values may be tensors
+                that need to be moved to the appropriate device.
+        Returns:
+            dict[str, Any]: A new dictionary with the same structure as the input, but with all
+                tensor values moved to the accelerator's device.
+        """
+        return {
+            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+            for k, v in batch.items()  # type: ignore
+        }
+
     def training_step(
         self,
         diffuser: Diffuser,
         optimizer: Optimizer,
-        batch: ModelInput,
+        batch: BatchData,
         tracker: AverageMeter,
         p_classifier_free_guidance: float = 0,
         scheduler: LRScheduler | None = None,
@@ -118,7 +133,7 @@ class Trainer:
         Args:
             diffuser (Diffuser): The diffusion model wrapper that handles the diffusion process.
             optimizer (Optimizer): The optimizer used for updating model parameters.
-            batch (ModelInput): A dictionary containing the training batch data, must include 'x' key
+            batch (BatchData): A dictionary containing the training batch data, must include 'x' key
                 for input data.
             tracker (AverageMeter): Tracks and logs training metrics like loss values.
             p_classifier_free_guidance (float, optional): Probability of using classifier-free guidance
@@ -134,9 +149,10 @@ class Trainer:
             - Loss values are automatically tracked and can be accessed through the tracker.
         """
         optimizer.zero_grad()
-        timesteps = diffuser.draw_timesteps(batch["x"].shape[0]).to(self.accelerator.device)
-        batch.update({"p": p_classifier_free_guidance})
-        loss = diffuser.compute_loss(model_inputs=batch, timesteps=timesteps)
+        model_inputs = batch["model_inputs"]
+        timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
+        model_inputs.update({"p": p_classifier_free_guidance})
+        loss = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=batch.get("extra", {}))
         tracker.update(loss.item(), key="loss")
         self.accelerator.backward(loss)  # type: ignore
         optimizer.step()
@@ -145,30 +161,11 @@ class Trainer:
         if ema_denoiser is not None:
             ema_denoiser.update()
 
-    def move_dict_to_device(self, batch: ModelInput) -> ModelInput:
-        """
-        Moves all tensor values in a dictionary to the appropriate device.
-        This method recursively traverses a dictionary and moves any tensor values to the
-        device specified by the accelerator, while leaving non-tensor values unchanged.
-        Args:
-            batch (ModelInput): A dictionary containing model inputs, where values may be tensors
-                that need to be moved to the appropriate device.
-        Returns:
-            ModelInput: A new dictionary with the same structure as the input, but with all
-                tensor values moved to the accelerator's device.
-        """
-        return ModelInput(
-            **{
-                k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-                for k, v in batch.items()  # type: ignore
-            }
-        )
-
     @torch.no_grad()  # type: ignore
     def validation_step(
         self,
         diffuser: Diffuser,
-        val_batch: ModelInput,
+        val_batch: BatchData,
         tracker: AverageMeter,
         ema_eval: Denoiser | None = None,
     ) -> None:
@@ -186,12 +183,21 @@ class Trainer:
                 If provided and self.use_ema is True, validation will use the EMA model.
                 Defaults to None.
         """
-        timesteps = diffuser.draw_timesteps(val_batch["x"].shape[0]).to(self.accelerator.device)
-        val_batch = self.move_dict_to_device(val_batch)
+        model_inputs: ModelInput = val_batch["model_inputs"]
+        timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
+        model_inputs: ModelInput = self.move_dict_to_device(model_inputs)  # type: ignore
+        extra_args = val_batch.get("extra", {})
+        extra_args = self.move_dict_to_device(extra_args)
+
         val_loss = (
-            diffuser.compute_loss(model_inputs=val_batch, timesteps=timesteps)
+            diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps)
             if not self.use_ema
-            else diffuser.diffusion.compute_loss(model=ema_eval, model_inputs=val_batch, timesteps=timesteps)  # type: ignore
+            else diffuser.diffusion.compute_loss(
+                model=ema_eval,  # type: ignore
+                model_inputs=model_inputs,
+                timesteps=timesteps,
+                extra_args=extra_args,
+            )
         )
         tracker.update(val_loss.item(), key="val_loss")
 
@@ -234,7 +240,7 @@ class Trainer:
     def log_images(
         self,
         diffuser: Diffuser,
-        val_dataloader: Iterable[dict[str, Any]],
+        val_dataloader: Iterable[BatchData],
         epoch: int,
         ema_eval: Denoiser | None = None,
         val_steps: int = 50,
@@ -246,7 +252,7 @@ class Trainer:
         generates samples, and logs them using wandb (Weights & Biases).
         Args:
             diffuser (Diffuser): The diffusion model wrapper used for generating samples.
-            val_dataloader (Iterable[dict[str, Any]]): An iterator providing validation batches.
+            val_dataloader (Iterable[BatchData]): An iterator providing validation batches.
                 Each batch should contain at least an 'x' key with the input data.
             epoch (int): Current training epoch number, used for logging.
             ema_eval (Diffuser | None, optional): EMA version of the model for evaluation.
@@ -261,7 +267,7 @@ class Trainer:
             - Images are logged to wandb with the key 'val/images'.
         """
         diffuser.eval()
-        batch: ModelInput = next(iter(val_dataloader))  # type: ignore
+        batch: ModelInput = next(iter(val_dataloader))["model_inputs"]  # type: ignore
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
@@ -283,8 +289,8 @@ class Trainer:
         self,
         diffuser: Diffuser,
         optimizer: Optimizer,
-        train_dataloader: Iterable[ModelInput],
-        val_dataloader: Iterable[ModelInput] | None = None,
+        train_dataloader: Iterable[BatchData],
+        val_dataloader: Iterable[BatchData] | None = None,
         scheduler: LRScheduler | None = None,
         per_batch_scheduler: bool = False,
         log_validation_images: bool = False,
@@ -341,14 +347,12 @@ class Trainer:
         else:
             ema_denoiser = None
 
-        if self.repa:
-            assert diffuser.repa_encoder is not None, "REPA encoder must be provided for REPA training"
-            assert isinstance(diffuser.repa_encoder, REPA), "REPA encoder must be an instance of Encoder class"
-            diffuser.repa_encoder = cast(Encoder, self.accelerator.prepare(diffuser.repa_encoder))  # type: ignore
-
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
             diffuser.denoiser, train_dataloader, val_dataloader, optimizer
         )
+        for loss_idx in range(len(diffuser.extra_losses)):
+            diffuser.extra_losses[loss_idx] = self.accelerator.prepare(diffuser.extra_losses[loss_idx])  # type: ignore
+
         if scheduler is not None:
             scheduler = self.accelerator.prepare_scheduler(scheduler)  # type: ignore
         best_val_loss = float("inf")

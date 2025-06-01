@@ -1,6 +1,6 @@
 import enum
 import math
-from typing import Callable
+from typing import Any, Callable
 
 import torch
 import torch.nn as nn
@@ -11,6 +11,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.utils import space_timesteps
 from diffulab.diffuse.utils import extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.training.losses.common import LossFunction
 
 
 class MeanType(enum.Enum):
@@ -634,7 +635,13 @@ class GaussianDiffusion(Diffusion):
 
     ### Need to add compute loss for different parameterization + variance learned
     def compute_loss(
-        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_losses: list[LossFunction] = [],
+        extra_args: dict[str, Any] = {},
     ) -> Tensor:
         """
         Computes the loss for training the Gaussian diffusion model.
@@ -662,6 +669,8 @@ class GaussianDiffusion(Diffusion):
             timesteps = map_tensor[timesteps]
         prediction = model(**model_inputs, timesteps=timesteps)["x"]
         loss = nn.functional.mse_loss(prediction, noise, reduction="mean")
+        for extra_loss in extra_losses:
+            loss += extra_loss(**extra_args)
         return loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:

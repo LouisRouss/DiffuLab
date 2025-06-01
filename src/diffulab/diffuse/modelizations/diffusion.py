@@ -4,6 +4,7 @@ from typing import Any
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.training.losses import LossFunction
 
 
 class Diffusion(ABC):
@@ -93,7 +94,13 @@ class Diffusion(ABC):
 
     @abstractmethod
     def compute_loss(
-        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_losses: list[LossFunction] = [],
+        extra_args: dict[str, Any] = {},
     ) -> Tensor:
         """
         Calculate the loss for training the diffusion model.

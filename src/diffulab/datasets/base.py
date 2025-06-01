@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
+from typing import NotRequired, Required, TypedDict
 
 import numpy as np
 import torch
@@ -7,8 +7,15 @@ from numpy.typing import NDArray
 from torch import Tensor
 from torch.utils.data import Dataset
 
+from diffulab.networks.denoisers.common import ModelInput
 
-class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
+
+class BatchData(TypedDict, total=False):
+    model_inputs: Required[ModelInput]
+    extra: NotRequired[dict[str, Tensor]]
+
+
+class DiffusionDataset(Dataset[BatchData], ABC):
     """Base class for datasets used in diffusion models.
 
     This abstract class defines the common interface that all diffusion datasets
@@ -21,7 +28,7 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
         self.labels = None
 
     @abstractmethod
-    def load_data(self) -> Tuple[NDArray[np.uint8 | np.float32], NDArray[np.int64]]:
+    def load_data(self) -> tuple[NDArray[np.uint8 | np.float32], NDArray[np.int64]]:
         """Load and preprocess the dataset images and labels.
 
         Returns:
@@ -47,7 +54,7 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
             raise ValueError("Dataset has not been initialized properly. Images are None.")
         return len(self.images)
 
-    def __getitem__(self, idx: int) -> Dict[str, Tensor]:
+    def __getitem__(self, idx: int) -> BatchData:
         """Get a sample from the dataset.
 
         Args:
@@ -62,4 +69,4 @@ class DiffusionDataset(Dataset[Dict[str, Tensor]], ABC):
         image = self.preprocess_image(self.images[idx])
         label = self.labels[idx]
 
-        return {"x": torch.tensor(image), "y": torch.tensor(label, dtype=torch.long)}
+        return {"model_inputs": {"x": torch.tensor(image), "y": torch.tensor(label, dtype=torch.long)}}

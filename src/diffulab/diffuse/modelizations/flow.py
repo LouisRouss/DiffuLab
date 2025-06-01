@@ -1,9 +1,12 @@
+from typing import Any
+
 import torch
 from torch import Tensor
 from tqdm import tqdm
 
 from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelOutput
+from diffulab.training.losses.common import LossFunction
 
 
 # replace function at, bt etc ... By actually precomputing the values and storing them for every timestep
@@ -199,7 +202,13 @@ class Flow(Diffusion):
         return x_t_minus_one
 
     def compute_loss(
-        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_losses: list[LossFunction] = [],
+        extra_args: dict[str, Any] = {},
     ) -> Tensor:
         """
         Computes the loss for training the flow-based diffusion model.
@@ -229,6 +238,9 @@ class Flow(Diffusion):
         losses = ((noise - x_0) - prediction["x"]) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
+        # Compute extra losses if any
+        for extra_loss in extra_losses:
+            loss += extra_loss(**extra_args)
         return loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
