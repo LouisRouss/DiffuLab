@@ -21,6 +21,8 @@ class RepaLoss(LossFunction):
         alignment_layer: int = 8,
         denoiser_dimension: int = 256,
         hidden_dim: int = 256,
+        load_dino: bool = True,  # whether to load the DINO model weights, if precomputed features are used no need to load it
+        embedding_dim: int = 768,  # dimension of the DINO features
     ) -> None:
         super().__init__()
 
@@ -29,14 +31,16 @@ class RepaLoss(LossFunction):
         )
 
         self.denoiser = denoiser
-        self.repa_encoder = self.encoder_registry[repa_encoder](**encoder_args)
+        self.repa_encoder: REPA | None = None
+        if load_dino:
+            self.repa_encoder = self.encoder_registry[repa_encoder](**encoder_args)
 
         self.proj = nn.Sequential(
             nn.Linear(denoiser_dimension, hidden_dim),
             nn.SiLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.SiLU(),
-            nn.Linear(hidden_dim, self.repa_encoder.embedding_dim),
+            nn.Linear(hidden_dim, self.repa_encoder.embedding_dim if self.repa_encoder else embedding_dim),
         )
         self.denoiser.layers[alignment_layer - 1].register_forward_hook(self._forward_hook)
         self.src_features: Tensor | None = None
@@ -55,6 +59,7 @@ class RepaLoss(LossFunction):
         assert self.src_features is not None, "Source features are not computed. Ensure the forward hook is registered."
         assert x0 is not None or dst_features is not None, "Either x0 or dst_features must be provided."
         if dst_features is None:
+            assert self.repa_encoder is not None, "REPA encoder must be initialized to compute features."
             with torch.no_grad():
                 dst_features = self.repa_encoder(
                     x0
