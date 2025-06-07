@@ -47,12 +47,19 @@ class RepaLoss(LossFunction):
         """
         self.src_features = output
 
-    def forward(self, x0: Float[Tensor, "batch 3 H W"]) -> Tensor:
+    def forward(
+        self,
+        x0: Float[Tensor, "batch 3 H W"] | None = None,
+        dst_features: Float[Tensor, "batch seq_len n_dim"] | None = None,
+    ) -> Tensor:
         assert self.src_features is not None, "Source features are not computed. Ensure the forward hook is registered."
-        with torch.no_grad():
-            dst_features = self.repa_encoder(
-                x0
-            )  # batch size seqlen embedding_dim # SEE HOW TO HANDLE THE PRE COMPUTING OF FEATURES
+        assert x0 is not None or dst_features is not None, "Either x0 or dst_features must be provided."
+        if dst_features is None:
+            with torch.no_grad():
+                dst_features = self.repa_encoder(
+                    x0
+                )  # batch size seqlen embedding_dim # SEE HOW TO HANDLE THE PRE COMPUTING OF FEATURES
+        assert dst_features is not None, "Destination features must be provided or computed."
         cos_sim = torch.nn.functional.cosine_similarity(self.proj(self.src_features), dst_features, dim=-1)
         loss = 1 - cos_sim.mean()
         return loss
