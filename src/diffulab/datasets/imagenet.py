@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import torch
 from streaming import StreamingDataset
 from torch.utils.data import Dataset
 
@@ -51,11 +52,14 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         assert "dst_features" in sample, (
             "Batch must contain 'dst_features' key, please precompute the DINOv2 features before training"
         )
+        latent = torch.tensor(sample["latent"], dtype=torch.float32)
+        y = torch.tensor(sample["label"], dtype=torch.long)
+        dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
 
         batch_data: BatchData = {
-            "model_inputs": {"x": sample["latent"] * self.latent_scale, "y": sample["label"]},
+            "model_inputs": {"x": latent * self.latent_scale, "y": y},
             "extra": {
-                "dst_features": sample["dst_features"],
+                "dst_features": dst_features,
             },
         }
 
