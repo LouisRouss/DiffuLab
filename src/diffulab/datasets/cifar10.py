@@ -5,7 +5,7 @@ from typing import List
 import numpy as np
 from numpy.typing import NDArray
 
-from .base import DiffusionDataset
+from diffulab.datasets.base import DiffusionDataset
 
 
 class CIFAR10Dataset(DiffusionDataset):
