@@ -15,7 +15,7 @@ class RepaLoss(LossFunction):
 
     def __init__(
         self,
-        denoiser: MMDiT,  # maybe allow other denoisers in the future
+        denoiser: MMDiT,
         repa_encoder: str = "dinov2",
         encoder_args: dict[str, Any] = {},
         alignment_layer: int = 8,
@@ -29,6 +29,10 @@ class RepaLoss(LossFunction):
         assert repa_encoder in self.encoder_registry, (
             f"Encoder {repa_encoder} is not supported. Available encoders: {list(self.encoder_registry.keys())}"
         )
+        if not isinstance(denoiser, MMDiT):  # type: ignore[reportUnnecessaryIsInstance]
+            raise TypeError(
+                f"Denoiser must be an instance of MMDiT, got {type(denoiser)} instead. REPA isn't implemented for other denoisers yet."
+            )
 
         self.denoiser = denoiser
         self.repa_encoder: REPA | None = None
