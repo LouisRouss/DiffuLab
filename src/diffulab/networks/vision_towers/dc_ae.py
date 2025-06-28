@@ -41,10 +41,10 @@ class DCAE(VisionTower):
         Returns:
             Tensor: Encoded representation of the input tensor.
         """
-        if x.min() >= 0 and x.max() <= 255:  # Case: 0-255
-            x = x.float() / 255.0
+        if x.min() >= 0 and x.max() <= 1:  # Case: 0-1
             x = (x - 0.5) * 2.0
-        elif x.min() >= 0 and x.max() <= 1:
+        elif x.min() >= 0 and x.max() <= 255:  # Case: 0-255
+            x = x.float() / 255.0
             x = (x - 0.5) * 2.0
         return self.model.encode(x).latent  # type: ignore
 
