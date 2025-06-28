@@ -12,7 +12,7 @@ from diffulab.networks.denoisers.common import ModelInput
 
 class BatchData(TypedDict, total=False):
     model_inputs: Required[ModelInput]
-    extra: NotRequired[dict[str, Tensor]]
+    extra: NotRequired[dict[str, Tensor | None]]
 
 
 class DiffusionDataset(Dataset[BatchData], ABC):

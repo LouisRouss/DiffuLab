@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import torch
+import torchvision.transforms as transforms  # type: ignore[reportMissingTypeStub]
 from streaming import StreamingDataset
 from torch.utils.data import Dataset
 
@@ -35,6 +36,7 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             split=split,
         )
         self.latent_scale = latent_scale
+        self.transform = transforms.ToTensor()
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
@@ -51,17 +53,26 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         sample = self.dataset[idx]
         assert "latent" in sample, "Batch must contain 'latent' key, please precompute the latents before training"
         assert "label" in sample, "Batch must contain 'y' key, please add labels to the dataset"
-        assert "dst_features" in sample, (
-            "Batch must contain 'dst_features' key, please precompute the DINOv2 features before training"
-        )
+
+        x0: torch.Tensor | None = None
+        dst_features: torch.Tensor | None = None
+        if "dst_features" not in sample:
+            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
+            x0 = self.transform(sample["image"])
+        else:
+            assert "dst_features" in sample, (
+                "Batch must contain 'dst_features' key, please precompute the DINOv2 features before training"
+            )
+            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
+
         latent = torch.tensor(sample["latent"], dtype=torch.float32)
         y = torch.tensor(sample["label"], dtype=torch.long)
-        dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
 
         batch_data: BatchData = {
             "model_inputs": {"x": latent * self.latent_scale, "y": y},
             "extra": {
                 "dst_features": dst_features,
+                "x0": x0,
             },
         }
 
