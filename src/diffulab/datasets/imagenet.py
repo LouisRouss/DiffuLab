@@ -16,6 +16,7 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         local: bool = True,
         batch_size: int = 64,
         latent_scale: float = 0.18215,
+        split: str = "train",
     ) -> None:
         """Initialize the MNIST dataset.
 
@@ -31,6 +32,7 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             remote=self.data_path.as_posix() if not local else None,
             local=self.data_path.as_posix() if local else None,
             batch_size=batch_size,
+            split=split,
         )
         self.latent_scale = latent_scale
 
