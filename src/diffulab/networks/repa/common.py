@@ -101,7 +101,7 @@ class REPA(nn.Module, ABC):
         if sum(col.startswith("image") for col in columns) > 1:
             raise ValueError(f"Dataset contains multiple columns starting with 'image'. Only one is allowed.")
 
-        columns["repa_embedding"] = f"ndarray:{target_type}"
+        columns["dst_features"] = f"ndarray:{target_type}"
 
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
@@ -133,5 +133,5 @@ class REPA(nn.Module, ABC):
                     sample: dict[str, Any] = {}
                     for key in batch.keys():
                         sample[key] = batch[key][i]
-                    sample["repa_embedding"] = embeddings_numpy[i]
+                    sample["dst_features"] = embeddings_numpy[i]
                     writer.write(sample)
