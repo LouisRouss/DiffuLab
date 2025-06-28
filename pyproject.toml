@@ -22,6 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "jupyter>=1.1.1",
     "pre-commit>=4.2.0",
     "pyright>=1.1.396",
     "ruff>=0.9.7",
