@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, cast
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms  # type: ignore[reportMissingTypeStub]
@@ -9,6 +10,7 @@ from streaming import StreamingDataset
 from streaming.base import MDSWriter
 from torch import Tensor
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 
 class REPA(nn.Module, ABC):
@@ -63,11 +65,13 @@ class REPA(nn.Module, ABC):
         local: bool = True,
         target_type: str = "float32",
         batch_size: int = 64,
+        split: str | None = None,
     ) -> None:
         dataset = StreamingDataset(
             remote=dataset_path if not local else None,
             local=dataset_path if local else None,
             batch_size=batch_size,
+            split=split,
         )
         assert dataset.shards, "Dataset has no shards."  # type: ignore
 
@@ -97,13 +101,13 @@ class REPA(nn.Module, ABC):
         if sum(col.startswith("image") for col in columns) > 1:
             raise ValueError(f"Dataset contains multiple columns starting with 'image'. Only one is allowed.")
 
-        columns["repa_embedding"] = target_type
+        columns["repa_embedding"] = f"ndarray:{target_type}"
 
         device = next(self.parameters()).device
         dtype = next(self.parameters()).dtype
         transform = transforms.ToTensor()
         with MDSWriter(out=dst_path, columns=columns) as writer:
-            for batch in dataloader:
+            for batch in tqdm(dataloader, desc="Computing REPA embeddings", unit="batch"):
                 images = batch[image_key]
                 assert all(isinstance(img, Image.Image) for img in images), "All images must be PIL Image objects"
 
@@ -114,6 +118,15 @@ class REPA(nn.Module, ABC):
                 # Compute embeddings
                 embeddings = self.forward(images)
                 embeddings_numpy = embeddings.cpu().numpy()  # type: ignore[reportUnknownMemberType]
+
+                if target_type == "float32":
+                    embeddings_numpy = embeddings_numpy.astype(np.float32)
+                elif target_type == "float16":
+                    embeddings_numpy = embeddings_numpy.astype(np.float16)
+                else:
+                    raise ValueError(
+                        f"Unsupported target type: {target_type}. Supported types are 'float32' and 'float16'."
+                    )
 
                 # Write each sample individually
                 for i in range(embeddings.shape[0]):
