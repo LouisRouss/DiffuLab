@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 import torch
 import wandb
@@ -14,9 +14,11 @@ from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
 from diffulab.datasets.base import BatchData
-from diffulab.diffuse.diffuser import Diffuser
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.utils import AverageMeter
+
+if TYPE_CHECKING:
+    from diffulab.diffuse.diffuser import Diffuser
 
 HOME_PATH = Path.home()
 
@@ -116,7 +118,7 @@ class Trainer:
 
     def training_step(
         self,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         optimizer: Optimizer,
         batch: BatchData,
         tracker: AverageMeter,
@@ -164,7 +166,7 @@ class Trainer:
     @torch.no_grad()  # type: ignore
     def validation_step(
         self,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         val_batch: BatchData,
         tracker: AverageMeter,
         ema_eval: Denoiser | None = None,
@@ -204,7 +206,7 @@ class Trainer:
     def save_model(
         self,
         optimizer: Optimizer,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         ema_denoiser: Denoiser | None = None,
         scheduler: LRScheduler | None = None,
     ) -> None:
@@ -239,7 +241,7 @@ class Trainer:
     @torch.no_grad()  # type: ignore
     def log_images(
         self,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         val_dataloader: Iterable[BatchData],
         epoch: int,
         ema_eval: Denoiser | None = None,
@@ -287,7 +289,7 @@ class Trainer:
 
     def train(
         self,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         optimizer: Optimizer,
         train_dataloader: Iterable[BatchData],
         val_dataloader: Iterable[BatchData] | None = None,
