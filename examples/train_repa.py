@@ -9,7 +9,7 @@ from diffulab.training import Trainer
 from diffulab.training.losses.repa import RepaLoss
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="train_mnist_flow_matching")
+@hydra.main(version_base=None, config_path="../configs", config_name="train_imagenet_flow_matching_repa")
 def train(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
 
