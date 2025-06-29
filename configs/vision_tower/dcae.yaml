@@ -1,0 +1,2 @@
+__target__: diffulab.networks.vision_towers.DCAE
+model_name: "mit-han-lab/dc-ae-f32c32-in-1.0-diffusers"

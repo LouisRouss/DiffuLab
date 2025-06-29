@@ -6,7 +6,7 @@ from diffulab.networks.vision_towers.common import VisionTower
 
 
 class DCAE(VisionTower):
-    def __init__(self, model_name: str = "mit-han-lab/dc-ae-f64c128-in-1.0-diffusers") -> None:
+    def __init__(self, model_name: str = "mit-han-lab/dc-ae-f32c32-in-1.0-diffusers") -> None:
         super().__init__()
         self.model: AutoencoderDC = AutoencoderDC.from_pretrained(model_name)  # type: ignore[reportUnknownMemberType]
         self.model.eval()
