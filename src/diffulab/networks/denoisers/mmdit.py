@@ -404,11 +404,11 @@ class MMDiTBlock(nn.Module):
 
 
 class ModulatedLastLayer(nn.Module):
-    def __init__(self, hidden_size: int, patch_size: int, out_channels: int):
+    def __init__(self, embedding_dim: int, hidden_size: int, patch_size: int, out_channels: int):
         super().__init__()  # type: ignore
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
-        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 2 * hidden_size, bias=True))
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(embedding_dim, 2 * hidden_size, bias=True))
 
     def forward(self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size dim"]) -> Tensor:
         alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=1)
@@ -475,7 +475,10 @@ class MMDiT(Denoiser):
             )
 
         self.last_layer = ModulatedLastLayer(
-            hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
+            embedding_dim=embedding_dim,
+            hidden_size=input_dim,
+            patch_size=self.patch_size,
+            out_channels=self.output_channels,
         )
         self.time_embed = nn.Sequential(
             nn.Linear(self.frequency_embedding, embedding_dim),
