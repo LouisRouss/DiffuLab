@@ -249,7 +249,7 @@ class DiTBlock(nn.Module):
         super().__init__()  # type: ignore
         self.modulation = Modulation(embedding_dim)
         self.norm_1 = nn.RMSNorm(input_dim)
-        self.attention = DiTAttention(input_dim, hidden_dim, num_heads)
+        self.attention = DiTAttention(input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor)
         self.norm_2 = nn.RMSNorm(input_dim)
         self.mlp_input = nn.Sequential(
             nn.Linear(input_dim, mlp_ratio * input_dim),
@@ -310,7 +310,14 @@ class MMDiTBlock(nn.Module):
     """
 
     def __init__(
-        self, context_dim: int, input_dim: int, hidden_dim: int, embedding_dim: int, num_heads: int, mlp_ratio: int
+        self,
+        context_dim: int,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        partial_rotary_factor: float = 1,
     ):
         super().__init__()  # type: ignore
         self.modulation_context = Modulation(embedding_dim)
@@ -319,7 +326,9 @@ class MMDiTBlock(nn.Module):
         self.context_norm_1 = RMSNorm(context_dim)
         self.input_norm_1 = RMSNorm(input_dim)
 
-        self.attention = MMDiTAttention(context_dim, input_dim, hidden_dim, num_heads)
+        self.attention = MMDiTAttention(
+            context_dim, input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor
+        )
 
         self.context_norm_2 = RMSNorm(context_dim)
         self.input_norm_2 = RMSNorm(input_dim)
@@ -426,6 +435,7 @@ class MMDiT(Denoiser):
         patch_size: int = 16,
         depth: int = 38,
         context_dim: int = 4096,
+        partial_rotary_factor: float = 1,
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
@@ -483,6 +493,7 @@ class MMDiT(Denoiser):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
+                    partial_rotary_factor=partial_rotary_factor,
                 )
                 if not self.simple_dit
                 else DiTBlock(
@@ -491,6 +502,7 @@ class MMDiT(Denoiser):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
+                    partial_rotary_factor=partial_rotary_factor,
                 )
                 for _ in range(depth)
             ]
