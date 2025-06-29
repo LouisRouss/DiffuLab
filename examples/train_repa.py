@@ -46,8 +46,10 @@ def train(cfg: DictConfig):
     repa_loss = RepaLoss(
         denoiser=denoiser,
         denoiser_dimension=cfg.model.get("input_dim"),
-        embedding_dim=1024,
+        embedding_dim=1024,  # dimension of the DINO features (precomputed here)
         load_dino=False,
+        use_resampler=cfg.perceiver_resampler.get("use_resampler", False),
+        resampler_params=cfg.perceiver_resampler.get("parameters", {}),
     )
     vision_tower = instantiate(cfg.vision_tower)
 
@@ -64,7 +66,9 @@ def train(cfg: DictConfig):
 
     optimizer = instantiate(
         cfg.optimizer,
-        params=list(denoiser.parameters()) + list(repa_loss.proj.parameters()),
+        params=list(denoiser.parameters())
+        + list(repa_loss.proj.parameters())
+        + list(repa_loss.resampler.parameters() if repa_loss.resampler else []),
     )
 
     trainer = Trainer(

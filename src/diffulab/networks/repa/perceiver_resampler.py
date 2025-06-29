@@ -18,6 +18,41 @@ def exists(val: Any) -> bool:
     return val is not None
 
 
+# ROPE only on k
+class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
+    def __init__(self, dim: int = 32, base: int = 10_000) -> None:
+        super().__init__(dim, base)  # type: ignore
+
+    def forward(
+        self,
+        q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+    ) -> tuple[
+        Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        Float[Tensor, "batch_size seq_len n_heads head_dim"],
+    ]:
+        seq_len = k.shape[1]
+        self._cache(seq_len)
+        cos = self.cos.to(device=k.device, dtype=k.dtype)
+        sin = self.sin.to(device=k.device, dtype=k.dtype)
+
+        # [batch_size, seq_length, num_heads, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        k = k.transpose(1, 2)
+
+        # K rotation
+        k_rope, k_pass = k[..., : self.dim], k[..., self.dim :]
+        k_neg_half = self._neg_half(k_rope)
+        k_rope = (k_rope * cos[:seq_len]) + (k_neg_half * sin[:seq_len])
+        k_rot = torch.cat((k_rope, k_pass), dim=-1)
+
+        # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
+        k_rot = k_rot.transpose(1, 2)
+
+        return q, k_rot, v
+
+
 def FeedForward(dim: int, mult: float = 4) -> nn.Sequential:
     """
     A simple feed-forward module with a GELU activation function.
@@ -48,7 +83,7 @@ class PerceiverAttention(nn.Module):
         self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
         rotary_dim = int(head_dim * partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=rotary_dim)
+        self.rope = PerceiverRotaryPositionalEmbedding(dim=rotary_dim)
 
     def forward(
         self, x: Float[Tensor, "batch n dim"], latents: Float[Tensor, "batch m dim"]
