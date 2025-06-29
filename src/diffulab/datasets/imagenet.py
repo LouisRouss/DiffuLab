@@ -56,24 +56,26 @@ class ImageNetLatentREPA(Dataset[BatchData]):
 
         x0: torch.Tensor | None = None
         dst_features: torch.Tensor | None = None
-        if "dst_features" not in sample:
-            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
+        if "repa_embedding" not in sample:
+            assert "image" in sample, "Batch must contain either 'repa_embedding' or 'image' key"
             x0 = self.transform(sample["image"])
         else:
-            assert "dst_features" in sample, (
-                "Batch must contain 'dst_features' key, please precompute the DINOv2 features before training"
+            assert "repa_embedding" in sample, (
+                "Batch must contain 'repa_embedding' key, please precompute the DINOv2 features before training"
             )
-            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
+            dst_features = torch.tensor(sample["repa_embedding"], dtype=torch.float32)
 
         latent = torch.tensor(sample["latent"], dtype=torch.float32)
         y = torch.tensor(sample["label"], dtype=torch.long)
 
         batch_data: BatchData = {
             "model_inputs": {"x": latent * self.latent_scale, "y": y},
-            "extra": {
-                "dst_features": dst_features,
-                "x0": x0,
-            },
+            "extra": {},
         }
+
+        if dst_features is not None:
+            batch_data["extra"]["dst_features"] = dst_features
+        if x0 is not None:
+            batch_data["extra"]["x0"] = x0
 
         return batch_data
