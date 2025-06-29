@@ -60,9 +60,7 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             assert "image" in sample, "Batch must contain either 'repa_embedding' or 'image' key"
             x0 = self.transform(sample["image"])
         else:
-            assert "repa_embedding" in sample, (
-                "Batch must contain 'repa_embedding' key, please precompute the DINOv2 features before training"
-            )
+            assert "repa_embedding" in sample, "Batch must contain either 'repa_embedding' or 'image' key"
             dst_features = torch.tensor(sample["repa_embedding"], dtype=torch.float32)
 
         latent = torch.tensor(sample["latent"], dtype=torch.float32)

@@ -50,9 +50,9 @@ class Diffuser:
         model_type: str = "rectified_flow",
         n_steps: int = 1000,
         vision_tower: VisionTower | None = None,
+        latent_scale: float = 1.0,
         extra_args: dict[str, Any] = {},
         extra_losses: list[LossFunction] = [],
-        latent_scale: float = 1.0,
     ):
         self.model_type = model_type
         self.denoiser = denoiser
