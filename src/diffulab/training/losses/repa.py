@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, TypedDict
 
 import torch
 from jaxtyping import Float
@@ -7,7 +7,17 @@ from torch import Tensor, nn
 from diffulab.networks.denoisers.mmdit import MMDiT
 from diffulab.networks.repa.common import REPA
 from diffulab.networks.repa.dinov2 import DinoV2
+from diffulab.networks.repa.perceiver_resampler import PerceiverResampler
 from diffulab.training.losses.common import LossFunction
+
+
+class ResamplerParams(TypedDict):
+    dim: int
+    depth: int
+    head_dim: int
+    num_heads: int
+    ff_mult: int
+    num_latents: int
 
 
 class RepaLoss(LossFunction):
@@ -23,6 +33,8 @@ class RepaLoss(LossFunction):
         hidden_dim: int = 256,
         load_dino: bool = True,  # whether to load the DINO model weights, if precomputed features are used no need to load it
         embedding_dim: int = 768,  # dimension of the DINO features
+        use_resampler: bool = False,  # whether to use the perceiver resampler
+        resampler_params: ResamplerParams | None = None,
         coeff: float = 1.0,  # weight for the loss
     ) -> None:
         super().__init__()
@@ -47,6 +59,15 @@ class RepaLoss(LossFunction):
             nn.SiLU(),
             nn.Linear(hidden_dim, self.repa_encoder.embedding_dim if self.repa_encoder else embedding_dim),
         )
+
+        self.resampler: PerceiverResampler | None = None
+        if use_resampler:
+            assert resampler_params is not None, (
+                "Resampler parameters must be provided when using the perceiver resampler."
+            )
+            self.resampler = PerceiverResampler(
+                **resampler_params,
+            )
         self.denoiser.layers[alignment_layer - 1].register_forward_hook(self._forward_hook)
         self.src_features: Tensor | None = None
         self.coeff = coeff
@@ -71,8 +92,12 @@ class RepaLoss(LossFunction):
                     x0
                 )  # batch size seqlen embedding_dim # SEE HOW TO HANDLE THE PRE COMPUTING OF FEATURES
         assert dst_features is not None, "Destination features must be provided or computed."
-        print("source", self.proj(self.src_features).shape)
-        print("destination", dst_features.shape)
+
+        projected_src_features: Tensor = self.proj(self.src_features)
+        if self.resampler is not None:
+            projected_src_features = self.resampler(projected_src_features)
+            dst_features = self.resampler(dst_features)
+
         cos_sim = torch.nn.functional.cosine_similarity(self.proj(self.src_features), dst_features, dim=-1)
         loss = 1 - cos_sim.mean()
         return self.coeff * loss
