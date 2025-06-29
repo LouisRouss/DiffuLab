@@ -52,12 +52,14 @@ class Diffuser:
         vision_tower: VisionTower | None = None,
         extra_args: dict[str, Any] = {},
         extra_losses: list[LossFunction] = [],
+        latent_scale: float = 1.0,
     ):
         self.model_type = model_type
         self.denoiser = denoiser
         self.n_steps = n_steps
         self.vision_tower = vision_tower
         self.extra_losses = extra_losses
+        self.latent_scale = latent_scale
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
@@ -199,4 +201,5 @@ class Diffuser:
                 guidance_scale=guidance_scale,
                 **kwargs,
             )
+            z = z / self.latent_scale
             return self.vision_tower.decode(z)
