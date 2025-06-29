@@ -247,7 +247,7 @@ class DiTBlock(nn.Module):
         partial_rotary_factor: float = 1,
     ):
         super().__init__()  # type: ignore
-        self.modulation = Modulation(embedding_dim)
+        self.modulation = Modulation(embedding_dim, input_dim)
         self.norm_1 = nn.RMSNorm(input_dim)
         self.attention = DiTAttention(input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor)
         self.norm_2 = nn.RMSNorm(input_dim)
@@ -320,8 +320,8 @@ class MMDiTBlock(nn.Module):
         partial_rotary_factor: float = 1,
     ):
         super().__init__()  # type: ignore
-        self.modulation_context = Modulation(embedding_dim)
-        self.modulation_input = Modulation(embedding_dim)
+        self.modulation_context = Modulation(embedding_dim, context_dim)
+        self.modulation_input = Modulation(embedding_dim, input_dim)
 
         self.context_norm_1 = RMSNorm(context_dim)
         self.input_norm_1 = RMSNorm(input_dim)
@@ -436,6 +436,7 @@ class MMDiT(Denoiser):
         depth: int = 38,
         context_dim: int = 4096,
         partial_rotary_factor: float = 1,
+        frequency_embedding: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
@@ -451,6 +452,7 @@ class MMDiT(Denoiser):
             output_channels = input_channels
         self.output_channels = output_channels
         self.context_embedder = context_embedder
+        self.frequency_embedding = frequency_embedding
 
         self.n_classes = n_classes
         self.classifier_free = classifier_free
@@ -475,9 +477,8 @@ class MMDiT(Denoiser):
         self.last_layer = ModulatedLastLayer(
             hidden_size=input_dim, patch_size=self.patch_size, out_channels=self.output_channels
         )
-        self.input_dim = input_dim
         self.time_embed = nn.Sequential(
-            nn.Linear(self.input_dim, embedding_dim),
+            nn.Linear(self.frequency_embedding, embedding_dim),
             nn.SiLU(),
             nn.Linear(embedding_dim, embedding_dim),
         )
@@ -565,7 +566,7 @@ class MMDiT(Denoiser):
         intermediate_features: bool = False,
     ) -> ModelOutput:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
-        emb = self.time_embed(timestep_embedding(timesteps, self.input_dim))
+        emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))
         context_pooled, context = self.context_embedder(initial_context, p)
         context_pooled = self.mlp_pooled_context(context_pooled) + emb
         context = self.context_embed(context)
@@ -598,7 +599,7 @@ class MMDiT(Denoiser):
                 "probability of dropping for classifier free guidance is only available if a number of classes is set"
             )
 
-        emb = self.time_embed(timestep_embedding(timestep, self.input_dim))
+        emb = self.time_embed(timestep_embedding(timestep, self.frequency_embedding))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 

@@ -299,26 +299,27 @@ class Modulation(nn.Module):
         lin (nn.Linear): A linear layer that transforms the input tensor.
 
     Methods:
-        __init__(dim: int):
-            Initializes the Modulation module with the specified dimension.
+        __init__(embedding_dim: int, input_dim: int):
+            Initializes the Modulation module with the specified dimensions.
 
         forward(vec: Tensor) -> ModulationOut:
             Applies the linear transformation to the input tensor, followed by
             the SiLU activation function, and splits the result into six chunks.
 
     Args:
-        dim (int): The dimension of the input tensor.
+        embedding_dim (int): The dimension of the input embedding tensor.
+        input_dim (int): The dimension that determines the output size (6 * input_dim).
 
     Example:
-        >>> modulation = Modulation(dim=512)
-        >>> input_tensor = torch.randn(10, 512)
+        >>> modulation = Modulation(embedding_dim=256, input_dim=128)
+        >>> input_tensor = torch.randn(10, 256)
         >>> output = modulation(input_tensor)
-        >>> print(output.alpha.shape)  # Output: torch.Size([10, 1, 512])
+        >>> print(output.alpha.shape)  # Output: torch.Size([10, 1, 128])
     """
 
-    def __init__(self, dim: int):
+    def __init__(self, embedding_dim: int, input_dim: int):
         super().__init__()  # type: ignore
-        self.lin = nn.Linear(dim, 6 * dim, bias=True)
+        self.lin = nn.Linear(embedding_dim, 6 * input_dim, bias=True)
 
     def forward(self, vec: Float[Tensor, "... dim"]) -> ModulationOut:
         out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(6, dim=-1)
