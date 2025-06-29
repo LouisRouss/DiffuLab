@@ -50,6 +50,7 @@ def train(cfg: DictConfig):
         load_dino=False,
         use_resampler=cfg.perceiver_resampler.get("use_resampler", False),
         resampler_params=cfg.perceiver_resampler.get("parameters", {}),
+        coeff=0.5,
     )
     vision_tower = instantiate(cfg.vision_tower)
 
