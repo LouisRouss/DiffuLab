@@ -11,21 +11,33 @@ from diffulab.networks.repa.common import REPA
 
 
 class DinoV2(REPA):
+    native_resolution: int = 224
+    base_patch_pixel_size: int = 14
+
     def __init__(
-        self, dino_model: str = f"dinov2_vitl14_reg", resolution: int = 256, base_patch_size: int = 16
+        self,
+        dino_model: str = f"dinov2_vitl14_reg",
+        resolution: int = 256,
+        target_seq_len: int | None = None,
     ) -> None:
         super().__init__()
-        self.resolution = resolution
 
+        self.inference_resolution: int = self.native_resolution * (resolution // 256)
         self._encoder: nn.Module = torch.hub.load("facebookresearch/dinov2", dino_model)  # type: ignore
         del self._encoder.head
         self._encoder.eval()
 
-        # Resample the positional embedding to match the resolution
-        patch_resolution = base_patch_size * (resolution // 256)
+        if not target_seq_len:
+            grid_size = self.inference_resolution // self.base_patch_pixel_size
+        else:
+            sqrt_val = target_seq_len**0.5
+            if not sqrt_val.is_integer():
+                raise ValueError(f"target_seq_len ({target_seq_len}) must be a square")
+            grid_size = int(sqrt_val)
+
         self._encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
             self._encoder.pos_embed.data,  # type: ignore
-            [patch_resolution, patch_resolution],
+            [grid_size, grid_size],
         )
 
         self._encoder.head = torch.nn.Identity()
@@ -65,7 +77,10 @@ class DinoV2(REPA):
             mean=IMAGENET_DEFAULT_MEAN,
             std=IMAGENET_DEFAULT_STD,
         )(x)
-        x = cast(Tensor, torch.nn.functional.interpolate(x, 224 * (self.resolution // 256), mode="bicubic"))  # type: ignore[reportUnknownMemberType]
+        x = cast(
+            Tensor,
+            torch.nn.functional.interpolate(x, self.inference_resolution, mode="bicubic"),  # type: ignore[reportUnknownMemberType]
+        )
         return x
 
     def forward(self, x: Tensor) -> Tensor:
