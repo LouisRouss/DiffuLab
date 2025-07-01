@@ -47,11 +47,11 @@ hydra:
     subdir: ${hydra.job.num}
 
 perceiver_resampler:
-  use_resampler: true
-  parameters:
-    depth: 3
-    dim: 1024 # dim of the dinov2 features and projected ones
-    head_dim: 64
-    num_heads: 8
-    ff_mult: 4
-    num_latents: 64
+  use_resampler: false
+  # parameters:
+  #   depth: 3
+  #   dim: 1024 # dim of the dinov2 features and projected ones
+  #   head_dim: 64
+  #   num_heads: 8
+  #   ff_mult: 4
+  #   num_latents: 64
