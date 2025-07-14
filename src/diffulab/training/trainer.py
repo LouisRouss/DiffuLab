@@ -391,7 +391,9 @@ class Trainer:
                             per_batch_scheduler=per_batch_scheduler,
                             ema_denoiser=ema_denoiser,  # type: ignore
                         )
-                        tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
+                        tq_batch.set_description(
+                            f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
+                        )
 
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
@@ -423,7 +425,9 @@ class Trainer:
                             tracker=tracker,
                             ema_eval=ema_eval,  # type: ignore
                         )
-                    tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss']:.4f}")
+                    tq_val_batch.set_description(
+                        f"Val Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('val/')):.4f}"
+                    )
 
                 total_loss = 0
                 for key, value in tracker.avg.items():
