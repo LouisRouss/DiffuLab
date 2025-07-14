@@ -154,8 +154,12 @@ class Trainer:
         model_inputs = batch["model_inputs"]
         timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
         model_inputs.update({"p": p_classifier_free_guidance})
-        loss = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=batch.get("extra", {}))
-        tracker.update(loss.item(), key="loss")
+        losses = diffuser.compute_loss(
+            model_inputs=model_inputs, timesteps=timesteps, extra_args=batch.get("extra", {})
+        )
+        for key, loss in losses.items():
+            tracker.update(loss.item(), key=f"train/{key}")
+        loss = sum(losses.values())
         self.accelerator.backward(loss)  # type: ignore
         optimizer.step()
         if scheduler is not None and per_batch_scheduler:
@@ -191,7 +195,7 @@ class Trainer:
         extra_args = val_batch.get("extra", {})
         extra_args = self.move_dict_to_device(extra_args)
 
-        val_loss = (
+        val_losses = (
             diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps)
             if not self.use_ema
             else diffuser.diffusion.compute_loss(
@@ -201,7 +205,8 @@ class Trainer:
                 extra_args=extra_args,
             )
         )
-        tracker.update(val_loss.item(), key="val_loss")
+        for key, val_loss in val_losses.items():
+            tracker.update(val_loss.item(), key=f"val/{key}")
 
     def save_model(
         self,
@@ -388,12 +393,14 @@ class Trainer:
                         )
                         tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
 
-            gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
-                torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
-            )
-            self.accelerator.log(  # type: ignore
-                {"train/loss": gathered_loss.mean().item()}, step=epoch + 1
-            )
+            for key, value in tracker.avg.items():
+                if key.startswith("train/"):
+                    gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
+                        torch.tensor(value, device=self.accelerator.device)
+                    )
+                    self.accelerator.log(  # type: ignore
+                        {key: gathered_loss.mean().item()}, step=epoch + 1
+                    )
             tracker.reset()
 
             if val_dataloader is not None:
@@ -417,14 +424,20 @@ class Trainer:
                             ema_eval=ema_eval,  # type: ignore
                         )
                     tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss']:.4f}")
-                gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
-                    torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
-                )
-                self.accelerator.log(  # type: ignore
-                    {"val/loss": gathered_val_loss.mean().item()}, step=epoch + 1
-                )
-                if gathered_val_loss.mean().item() < best_val_loss:  # type: ignore
-                    best_val_loss = gathered_val_loss
+
+                total_loss = 0
+                for key, value in tracker.avg.items():
+                    if key.startswith("val/"):
+                        gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
+                            torch.tensor(value, device=self.accelerator.device)
+                        )
+                        self.accelerator.log(  # type: ignore
+                            {key: gathered_loss.mean().item()}, step=epoch + 1
+                        )
+                        total_loss += gathered_loss.mean().item()
+
+                if total_loss < best_val_loss:  # type: ignore
+                    best_val_loss = total_loss
                     self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
                 tracker.reset()
 

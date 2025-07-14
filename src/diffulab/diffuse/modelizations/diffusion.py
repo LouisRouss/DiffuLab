@@ -101,7 +101,7 @@ class Diffusion(ABC):
         noise: Tensor | None = None,
         extra_losses: list[LossFunction] = [],
         extra_args: dict[str, Any] = {},
-    ) -> Tensor:
+    ) -> dict[str, Tensor]:
         """
         Calculate the loss for training the diffusion model.
         This abstract method computes the loss used to train the model based on the difference
@@ -117,8 +117,7 @@ class Diffusion(ABC):
             noise (Tensor | None, optional): Pre-defined noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed loss value as a scalar tensor, typically the mean
-                error across the batch for training optimization.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
         pass
 

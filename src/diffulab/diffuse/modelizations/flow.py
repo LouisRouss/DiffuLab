@@ -1,4 +1,4 @@
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import Tensor
@@ -209,12 +209,13 @@ class Flow(Diffusion):
         noise: Tensor | None = None,
         extra_losses: list[LossFunction] = [],
         extra_args: dict[str, Any] = {},
-    ) -> Tensor:
+    ) -> dict[str, Tensor]:
         """
         Computes the loss for training the flow-based diffusion model.
         This method implements the loss function for training the flow-based diffusion model,
         which measures the difference between the predicted velocity field and the true velocity
         field (noise - x_t). The loss is computed as the mean squared error between these values.
+        Additional losses can be included by passing them in the `extra_losses` list
         Args:
             model (Denoiser): The neural network model used for denoising.
             model_inputs (ModelInput): A dictionary containing the model inputs, including
@@ -224,7 +225,7 @@ class Flow(Diffusion):
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed loss value as a scalar tensor.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:
             The function first adds noise to the input data according to the specified timesteps,
             then computes the model's prediction. The loss is calculated as the mean squared error
@@ -238,10 +239,12 @@ class Flow(Diffusion):
         losses = ((noise - x_0) - prediction["x"]) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
+        loss_dict = {"loss": loss}
         # Compute extra losses if any
         for extra_loss in extra_losses:
-            loss += extra_loss(**extra_args)
-        return loss
+            e_loss = cast(Tensor, extra_loss(**extra_args))
+            loss_dict[extra_loss.__class__.__name__] = e_loss
+        return loss_dict
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """

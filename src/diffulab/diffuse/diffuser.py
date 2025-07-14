@@ -99,7 +99,7 @@ class Diffuser:
         timesteps: Tensor,
         noise: Tensor | None = None,
         extra_args: dict[str, Any] = {},
-    ) -> Tensor:
+    ) -> dict[str, Tensor]:
         """
         Compute the loss for the diffusion model using the denoiser and diffusion process.
         This method serves as a bridge between the Diffuser class and the underlying
@@ -111,7 +111,7 @@ class Diffuser:
             - noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed loss value as a scalar tensor.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
         return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 

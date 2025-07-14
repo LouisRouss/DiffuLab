@@ -1,6 +1,6 @@
 import enum
 import math
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 import torch
 import torch.nn as nn
@@ -642,7 +642,7 @@ class GaussianDiffusion(Diffusion):
         noise: Tensor | None = None,
         extra_losses: list[LossFunction] = [],
         extra_args: dict[str, Any] = {},
-    ) -> Tensor:
+    ) -> dict[str, Tensor]:
         """
         Computes the loss for training the Gaussian diffusion model.
         This method calculates the mean squared error loss between the model's prediction
@@ -657,7 +657,7 @@ class GaussianDiffusion(Diffusion):
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed mean squared error loss as a scalar tensor.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:
             When using a different number of sampling steps than training steps,
             this method maps the timestep indices through the timestep_map to ensure
@@ -669,9 +669,11 @@ class GaussianDiffusion(Diffusion):
             timesteps = map_tensor[timesteps]
         prediction = model(**model_inputs, timesteps=timesteps)["x"]
         loss = nn.functional.mse_loss(prediction, noise, reduction="mean")
+        loss_dict = {"loss": loss}
         for extra_loss in extra_losses:
-            loss += extra_loss(**extra_args)
-        return loss
+            e_loss = cast(Tensor, extra_loss(**extra_args))
+            loss_dict[extra_loss.__class__.__name__] = e_loss
+        return loss_dict
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """
