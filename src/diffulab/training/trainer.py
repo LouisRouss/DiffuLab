@@ -279,17 +279,18 @@ class Trainer:
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
 
-        if not self.use_ema:
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
-        else:
-            images = diffuser.diffusion.denoise(
+        images = (
+            diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            if not self.use_ema
+            else diffuser.diffusion.denoise(
                 model=ema_eval,  # type: ignore
                 data_shape=x.shape,
                 model_inputs=batch,
             )
-            if diffuser.vision_tower:
-                images = images / diffuser.latent_scale
-                images = diffuser.vision_tower.decode(images)
+        )
+        if self.use_ema and diffuser.vision_tower:
+            images = images / diffuser.latent_scale
+            images = diffuser.vision_tower.decode(images)
 
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
