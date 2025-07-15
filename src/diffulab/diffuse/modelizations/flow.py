@@ -134,11 +134,11 @@ class Flow(Diffusion):
                 normal distribution, which concentrates more samples near 0 and 1.
         """
 
-        if not self.logits_normal:
-            return torch.rand((batch_size), dtype=torch.float32)
-        else:
+        if self.logits_normal:
             nt = torch.randn((batch_size), dtype=torch.float32)
             return torch.sigmoid(nt)
+
+        return torch.rand((batch_size), dtype=torch.float32)
 
     def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         """

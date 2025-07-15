@@ -174,17 +174,7 @@ class Diffuser:
                 guidance_scale=7.5
             ```
         """
-        if not self.vision_tower:
-            return self.diffusion.denoise(
-                self.denoiser,
-                data_shape,
-                model_inputs,
-                use_tqdm=use_tqdm,
-                clamp_x=clamp_x,
-                guidance_scale=guidance_scale,
-                **kwargs,
-            )
-        else:
+        if self.vision_tower:
             latent_shape = (
                 data_shape[0],
                 self.vision_tower.latent_channels,
@@ -203,3 +193,13 @@ class Diffuser:
             )
             z = z / self.latent_scale
             return self.vision_tower.decode(z)
+
+        return self.diffusion.denoise(
+            self.denoiser,
+            data_shape,
+            model_inputs,
+            use_tqdm=use_tqdm,
+            clamp_x=clamp_x,
+            guidance_scale=guidance_scale,
+            **kwargs,
+        )
