@@ -278,15 +278,19 @@ class Trainer:
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
-        images = (
-            diffuser.generate(data_shape=x.shape, model_inputs=batch)  # type: ignore
-            if not self.use_ema
-            else diffuser.diffusion.denoise(
+
+        if not self.use_ema:
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+        else:
+            images = diffuser.diffusion.denoise(
                 model=ema_eval,  # type: ignore
                 data_shape=x.shape,
                 model_inputs=batch,
             )
-        )
+            if diffuser.vision_tower:
+                images = images / diffuser.latent_scale
+                images = diffuser.vision_tower.decode(images)
+
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
@@ -353,6 +357,9 @@ class Trainer:
             ema_denoiser = self.accelerator.prepare(ema_denoiser)  # type: ignore
         else:
             ema_denoiser = None
+
+        if diffuser.vision_tower:
+            diffuser.vision_tower = self.accelerator.prepare(diffuser.vision_tower)  # type: ignore
 
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
             diffuser.denoiser, train_dataloader, val_dataloader, optimizer
