@@ -24,15 +24,12 @@ model:
   embedding_dim: 256
   num_heads: 12
   mlp_ratio: 1
-  patch_size: 2
+  patch_size: 1
   depth: 12
   n_classes: 1000
   classifier_free: true
 
 diffuser:
-  vision_tower:
-    _target_: diffulab.networks.vision_towers.DCAE
-    model_name: "mit-han-lab/dc-ae-f64c128-in-1.0-diffusers"
   latent_scale: 0.18215
 
 dataloader:
@@ -47,11 +44,11 @@ hydra:
     subdir: ${hydra.job.num}
 
 perceiver_resampler:
-  use_resampler: false
-  # parameters:
-  #   depth: 3
-  #   dim: 1024 # dim of the dinov2 features and projected ones
-  #   head_dim: 64
-  #   num_heads: 8
-  #   ff_mult: 4
-  #   num_latents: 64
+  use_resampler: true
+  parameters:
+    depth: 3
+    dim: 1024 # dim of the dinov2 features and projected ones
+    head_dim: 64
+    num_heads: 8
+    ff_mult: 4
+    num_latents: 256
