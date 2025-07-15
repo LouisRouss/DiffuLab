@@ -80,6 +80,7 @@ def train(cfg: DictConfig):
         use_ema=cfg.trainer.use_ema,
         ema_update_after_step=cfg.trainer.get("ema_update_after_step", 0),
         ema_update_every=cfg.trainer.get("ema_update_every", 10),
+        run_config=OmegaConf.to_container(cfg, resolve=True),  # type: ignore[reportArgumentType]
     )
 
     trainer.train(
