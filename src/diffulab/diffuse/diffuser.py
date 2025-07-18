@@ -150,12 +150,13 @@ class Diffuser:
         generate a sample from the diffusion process. It can handle conditional generation
         with guidance when appropriate settings are provided.
         Args:
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
-            model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
+            - data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
+                If a vision tower is used, this should be the shape of the latent space.
+            - model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
                 conditional information, or labels. If 'x' is not provided, random noise will be generated.
-            use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to True.
-            guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
+            - use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
+            - clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to True.
+            - guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
             **kwargs (dict[str, Any]): Additional arguments to pass to the diffusion model's denoise method.
                 These may include parameters like 'classifier', 'classifier_free', etc.
@@ -175,16 +176,9 @@ class Diffuser:
             ```
         """
         if self.vision_tower:
-            latent_shape = (
-                data_shape[0],
-                self.vision_tower.latent_channels,
-                data_shape[2] // self.vision_tower.compression_factor,
-                data_shape[3] // self.vision_tower.compression_factor,
-            )
-
             z = self.diffusion.denoise(
                 self.denoiser,
-                latent_shape,
+                data_shape,
                 model_inputs,
                 use_tqdm=use_tqdm,
                 clamp_x=clamp_x,

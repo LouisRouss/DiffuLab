@@ -68,9 +68,26 @@ class RepaLoss(LossFunction):
             self.resampler = PerceiverResampler(
                 **resampler_params,
             )
-        self.denoiser.layers[alignment_layer - 1].register_forward_hook(self._forward_hook)
+        self.alignment_layer = alignment_layer
+        self.hook_handle = None
+        self._register_hook(self.denoiser)
         self.src_features: Tensor | None = None
         self.coeff = coeff
+
+    def _register_hook(self, model: MMDiT) -> None:
+        """Register the forward hook on the specified layer of the model."""
+        self._unregister_hook()  # Ensure no previous hook is registered
+        self.hook_handle = model.layers[self.alignment_layer - 1].register_forward_hook(self._forward_hook)
+    
+    def _unregister_hook(self) -> None:
+        """Remove the forward hook."""
+        if self.hook_handle is not None:
+            self.hook_handle.remove()
+            self.hook_handle = None
+    
+    def set_model(self, model: MMDiT) -> None:
+        """Switch the hook to a different model (e.g., EMA model)."""
+        self._register_hook(model)
 
     def _forward_hook(self, net: nn.Module, input: tuple[Any, ...], output: Tensor) -> None:
         """

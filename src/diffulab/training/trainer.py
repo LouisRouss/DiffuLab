@@ -195,16 +195,23 @@ class Trainer:
         extra_args = val_batch.get("extra", {})
         extra_args = self.move_dict_to_device(extra_args)
 
-        val_losses = (
-            diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps)
-            if not self.use_ema
-            else diffuser.diffusion.compute_loss(
-                model=ema_eval,  # type: ignore
-                model_inputs=model_inputs,
-                timesteps=timesteps,
-                extra_args=extra_args,
-            )
-        )
+        if self.use_ema and ema_eval is not None:
+            # Temporarily swap the model in diffuser to use EMA for validation
+            original_model = diffuser.denoiser
+            diffuser.denoiser = ema_eval
+            for loss in diffuser.extra_losses:
+                if hasattr(loss, 'set_model'):
+                    loss.set_model(ema_eval) # type: ignore
+            val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
+
+            # Restore original model and eventual hooks
+            diffuser.denoiser = original_model
+            for loss in diffuser.extra_losses:
+                if hasattr(loss, 'set_model'):
+                    loss.set_model(original_model) # type: ignore
+        else:
+            val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
+            
         for key, val_loss in val_losses.items():
             tracker.update(val_loss.item(), key=f"val/{key}")
 
@@ -279,18 +286,13 @@ class Trainer:
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
 
-        images = (
-            diffuser.generate(data_shape=x.shape, model_inputs=batch)
-            if not self.use_ema
-            else diffuser.diffusion.denoise(
-                model=ema_eval,  # type: ignore
-                data_shape=x.shape,
-                model_inputs=batch,
-            )
-        )
-        if self.use_ema and diffuser.vision_tower:
-            images = images / diffuser.latent_scale
-            images = diffuser.vision_tower.decode(images)
+        if self.use_ema and ema_eval is not None:
+            original_model = diffuser.denoiser
+            diffuser.denoiser = ema_eval
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            diffuser.denoiser = original_model
+        else:
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
 
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
