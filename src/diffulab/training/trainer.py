@@ -280,7 +280,6 @@ class Trainer:
             - Generated images are normalized from [-1, 1] to [0, 1] range before logging.
             - Images are logged to wandb with the key 'val/images'.
         """
-        diffuser.eval()
         batch: ModelInput = next(iter(val_dataloader))["model_inputs"]  # type: ignore
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
