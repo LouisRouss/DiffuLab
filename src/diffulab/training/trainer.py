@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 import torch
 import wandb
@@ -13,9 +13,12 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
-from diffulab.diffuse.diffuser import Diffuser
+from diffulab.datasets.base import BatchData
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.utils import AverageMeter
+
+if TYPE_CHECKING:
+    from diffulab.diffuse.diffuser import Diffuser
 
 HOME_PATH = Path.home()
 
@@ -96,11 +99,28 @@ class Trainer:
         Path(os.environ["WANDB_DIR"]).mkdir(parents=True, exist_ok=True)
         self.accelerator.init_trackers(project_name=project_name, config=run_config, init_kwargs=init_kwargs)  # type: ignore
 
+    def move_dict_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
+        """
+        Moves all tensor values in a dictionary to the appropriate device.
+        This method recursively traverses a dictionary and moves any tensor values to the
+        device specified by the accelerator, while leaving non-tensor values unchanged.
+        Args:
+            batch (dict[str, Any]): A dictionary where values may be tensors
+                that need to be moved to the appropriate device.
+        Returns:
+            dict[str, Any]: A new dictionary with the same structure as the input, but with all
+                tensor values moved to the accelerator's device.
+        """
+        return {
+            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
+            for k, v in batch.items()  # type: ignore
+        }
+
     def training_step(
         self,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         optimizer: Optimizer,
-        batch: ModelInput,
+        batch: BatchData,
         tracker: AverageMeter,
         p_classifier_free_guidance: float = 0,
         scheduler: LRScheduler | None = None,
@@ -115,7 +135,7 @@ class Trainer:
         Args:
             diffuser (Diffuser): The diffusion model wrapper that handles the diffusion process.
             optimizer (Optimizer): The optimizer used for updating model parameters.
-            batch (ModelInput): A dictionary containing the training batch data, must include 'x' key
+            batch (BatchData): A dictionary containing the training batch data, must include 'x' key
                 for input data.
             tracker (AverageMeter): Tracks and logs training metrics like loss values.
             p_classifier_free_guidance (float, optional): Probability of using classifier-free guidance
@@ -131,10 +151,15 @@ class Trainer:
             - Loss values are automatically tracked and can be accessed through the tracker.
         """
         optimizer.zero_grad()
-        timesteps = diffuser.draw_timesteps(batch["x"].shape[0]).to(self.accelerator.device)
-        batch.update({"p": p_classifier_free_guidance})
-        loss = diffuser.compute_loss(model_inputs=batch, timesteps=timesteps)
-        tracker.update(loss.item(), key="loss")
+        model_inputs = batch["model_inputs"]
+        timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
+        model_inputs.update({"p": p_classifier_free_guidance})
+        losses = diffuser.compute_loss(
+            model_inputs=model_inputs, timesteps=timesteps, extra_args=batch.get("extra", {})
+        )
+        for key, loss in losses.items():
+            tracker.update(loss.item(), key=f"train/{key}")
+        loss = sum(losses.values())
         self.accelerator.backward(loss)  # type: ignore
         optimizer.step()
         if scheduler is not None and per_batch_scheduler:
@@ -142,30 +167,11 @@ class Trainer:
         if ema_denoiser is not None:
             ema_denoiser.update()
 
-    def move_dict_to_device(self, batch: ModelInput) -> ModelInput:
-        """
-        Moves all tensor values in a dictionary to the appropriate device.
-        This method recursively traverses a dictionary and moves any tensor values to the
-        device specified by the accelerator, while leaving non-tensor values unchanged.
-        Args:
-            batch (ModelInput): A dictionary containing model inputs, where values may be tensors
-                that need to be moved to the appropriate device.
-        Returns:
-            ModelInput: A new dictionary with the same structure as the input, but with all
-                tensor values moved to the accelerator's device.
-        """
-        return ModelInput(
-            **{
-                k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-                for k, v in batch.items()  # type: ignore
-            }
-        )
-
     @torch.no_grad()  # type: ignore
     def validation_step(
         self,
-        diffuser: Diffuser,
-        val_batch: ModelInput,
+        diffuser: "Diffuser",
+        val_batch: BatchData,
         tracker: AverageMeter,
         ema_eval: Denoiser | None = None,
     ) -> None:
@@ -183,19 +189,36 @@ class Trainer:
                 If provided and self.use_ema is True, validation will use the EMA model.
                 Defaults to None.
         """
-        timesteps = diffuser.draw_timesteps(val_batch["x"].shape[0]).to(self.accelerator.device)
-        val_batch = self.move_dict_to_device(val_batch)
-        val_loss = (
-            diffuser.compute_loss(model_inputs=val_batch, timesteps=timesteps)
-            if not self.use_ema
-            else diffuser.diffusion.compute_loss(model=ema_eval, model_inputs=val_batch, timesteps=timesteps)  # type: ignore
-        )
-        tracker.update(val_loss.item(), key="val_loss")
+        model_inputs: ModelInput = val_batch["model_inputs"]
+        timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
+        model_inputs: ModelInput = self.move_dict_to_device(model_inputs)  # type: ignore
+        extra_args = val_batch.get("extra", {})
+        extra_args = self.move_dict_to_device(extra_args)
+
+        if self.use_ema and ema_eval is not None:
+            # Temporarily swap the model in diffuser to use EMA for validation
+            original_model = diffuser.denoiser
+            diffuser.denoiser = ema_eval
+            for loss in diffuser.extra_losses:
+                if hasattr(loss, "set_model"):
+                    loss.set_model(ema_eval)  # type: ignore
+            val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
+
+            # Restore original model and eventual hooks
+            diffuser.denoiser = original_model
+            for loss in diffuser.extra_losses:
+                if hasattr(loss, "set_model"):
+                    loss.set_model(original_model)  # type: ignore
+        else:
+            val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
+
+        for key, val_loss in val_losses.items():
+            tracker.update(val_loss.item(), key=f"val/{key}")
 
     def save_model(
         self,
         optimizer: Optimizer,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         ema_denoiser: Denoiser | None = None,
         scheduler: LRScheduler | None = None,
     ) -> None:
@@ -230,8 +253,8 @@ class Trainer:
     @torch.no_grad()  # type: ignore
     def log_images(
         self,
-        diffuser: Diffuser,
-        val_dataloader: Iterable[dict[str, Any]],
+        diffuser: "Diffuser",
+        val_dataloader: Iterable[BatchData],
         epoch: int,
         ema_eval: Denoiser | None = None,
         val_steps: int = 50,
@@ -243,7 +266,7 @@ class Trainer:
         generates samples, and logs them using wandb (Weights & Biases).
         Args:
             diffuser (Diffuser): The diffusion model wrapper used for generating samples.
-            val_dataloader (Iterable[dict[str, Any]]): An iterator providing validation batches.
+            val_dataloader (Iterable[BatchData]): An iterator providing validation batches.
                 Each batch should contain at least an 'x' key with the input data.
             epoch (int): Current training epoch number, used for logging.
             ema_eval (Diffuser | None, optional): EMA version of the model for evaluation.
@@ -257,20 +280,19 @@ class Trainer:
             - Generated images are normalized from [-1, 1] to [0, 1] range before logging.
             - Images are logged to wandb with the key 'val/images'.
         """
-        diffuser.eval()
-        batch: ModelInput = next(iter(val_dataloader))  # type: ignore
+        batch: ModelInput = next(iter(val_dataloader))["model_inputs"]  # type: ignore
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
-        images = (
-            diffuser.generate(data_shape=x.shape, model_inputs=batch)  # type: ignore
-            if not self.use_ema
-            else diffuser.diffusion.denoise(
-                model=ema_eval,  # type: ignore
-                data_shape=x.shape,
-                model_inputs=batch,
-            )
-        )
+
+        if self.use_ema and ema_eval is not None:
+            original_model = diffuser.denoiser
+            diffuser.denoiser = ema_eval
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            diffuser.denoiser = original_model
+        else:
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
         self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
@@ -278,10 +300,10 @@ class Trainer:
 
     def train(
         self,
-        diffuser: Diffuser,
+        diffuser: "Diffuser",
         optimizer: Optimizer,
-        train_dataloader: Iterable[ModelInput],
-        val_dataloader: Iterable[ModelInput] | None = None,
+        train_dataloader: Iterable[BatchData],
+        val_dataloader: Iterable[BatchData] | None = None,
         scheduler: LRScheduler | None = None,
         per_batch_scheduler: bool = False,
         log_validation_images: bool = False,
@@ -337,9 +359,16 @@ class Trainer:
             ema_denoiser = self.accelerator.prepare(ema_denoiser)  # type: ignore
         else:
             ema_denoiser = None
+
+        if diffuser.vision_tower:
+            diffuser.vision_tower = self.accelerator.prepare(diffuser.vision_tower)  # type: ignore
+
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
             diffuser.denoiser, train_dataloader, val_dataloader, optimizer
         )
+        for loss_idx in range(len(diffuser.extra_losses)):
+            diffuser.extra_losses[loss_idx] = self.accelerator.prepare(diffuser.extra_losses[loss_idx])  # type: ignore
+
         if scheduler is not None:
             scheduler = self.accelerator.prepare_scheduler(scheduler)  # type: ignore
         best_val_loss = float("inf")
@@ -371,14 +400,18 @@ class Trainer:
                             per_batch_scheduler=per_batch_scheduler,
                             ema_denoiser=ema_denoiser,  # type: ignore
                         )
-                        tq_batch.set_description(f"Loss: {tracker.avg['loss']:.4f}")
+                        tq_batch.set_description(
+                            f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
+                        )
 
-            gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
-                torch.tensor(tracker.avg["loss"], device=self.accelerator.device)
-            )
-            self.accelerator.log(  # type: ignore
-                {"train/loss": gathered_loss.mean().item()}, step=epoch + 1
-            )
+            for key, value in tracker.avg.items():
+                if key.startswith("train/"):
+                    gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
+                        torch.tensor(value, device=self.accelerator.device)
+                    )
+                    self.accelerator.log(  # type: ignore
+                        {key: gathered_loss.mean().item()}, step=epoch + 1
+                    )
             tracker.reset()
 
             if val_dataloader is not None:
@@ -401,15 +434,23 @@ class Trainer:
                             tracker=tracker,
                             ema_eval=ema_eval,  # type: ignore
                         )
-                    tq_val_batch.set_description(f"Val Loss: {tracker.avg['val_loss']:.4f}")
-                gathered_val_loss: Tensor = self.accelerator.gather(  # type: ignore
-                    torch.tensor(tracker.avg["val_loss"], device=self.accelerator.device)  # type: ignore
-                )
-                self.accelerator.log(  # type: ignore
-                    {"val/loss": gathered_val_loss.mean().item()}, step=epoch + 1
-                )
-                if gathered_val_loss.mean().item() < best_val_loss:  # type: ignore
-                    best_val_loss = gathered_val_loss
+                    tq_val_batch.set_description(
+                        f"Val Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('val/')):.4f}"
+                    )
+
+                total_loss = 0
+                for key, value in tracker.avg.items():
+                    if key.startswith("val/"):
+                        gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
+                            torch.tensor(value, device=self.accelerator.device)
+                        )
+                        self.accelerator.log(  # type: ignore
+                            {key: gathered_loss.mean().item()}, step=epoch + 1
+                        )
+                        total_loss += gathered_loss.mean().item()
+
+                if total_loss < best_val_loss:  # type: ignore
+                    best_val_loss = total_loss
                     self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
                 tracker.reset()
 

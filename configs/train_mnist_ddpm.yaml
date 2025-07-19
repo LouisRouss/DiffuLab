@@ -12,15 +12,15 @@ defaults:
 # Override specific settings
 trainer:
   project_name: mnist_ddpm
-  n_epoch: 50  
+  n_epoch: 50
 
 diffuser:
   model_type: gaussian_diffusion
-  n_steps: 1000  
+  n_steps: 1000
   sampling_method: ddpm
 
 dataloader:
-  batch_size: 128  
+  batch_size: 128
 
 # Hydra configuration
 hydra:
@@ -28,4 +28,4 @@ hydra:
     dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
     dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
-    subdir: ${hydra.job.num} 
+    subdir: ${hydra.job.num}

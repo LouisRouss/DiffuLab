@@ -12,13 +12,13 @@ defaults:
 # Override specific settings
 trainer:
   project_name: cifar10_flow_matching
-  n_epoch: 100  
+  n_epoch: 100
 
 diffuser:
-  n_steps: 100  
+  n_steps: 100
 
 dataloader:
-  batch_size: 32  
+  batch_size: 32
 
 # Hydra configuration
 hydra:
@@ -26,4 +26,4 @@ hydra:
     dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
   sweep:
     dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
-    subdir: ${hydra.job.num} 
+    subdir: ${hydra.job.num}

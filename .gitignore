@@ -166,3 +166,4 @@ cython_debug/
 examples/wandb
 outputs/
 data/
+local/

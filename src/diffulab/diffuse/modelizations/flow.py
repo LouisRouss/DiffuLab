@@ -1,9 +1,12 @@
+from typing import Any, cast
+
 import torch
 from torch import Tensor
 from tqdm import tqdm
 
 from diffulab.diffuse.modelizations.diffusion import Diffusion
-from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelOutput
+from diffulab.training.losses.common import LossFunction
 
 
 # replace function at, bt etc ... By actually precomputing the values and storing them for every timestep
@@ -42,9 +45,16 @@ class Flow(Diffusion):
     """
 
     def __init__(
-        self, n_steps: int = 50, sampling_method: str = "euler", schedule: str = "linear", logits_normal: bool = False
+        self,
+        n_steps: int = 50,
+        sampling_method: str = "euler",
+        schedule: str = "linear",
+        latent_diffusion: bool = False,
+        logits_normal: bool = False,
     ) -> None:
-        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
+        super().__init__(
+            n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
+        )
         self.logits_normal = logits_normal
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
@@ -124,11 +134,11 @@ class Flow(Diffusion):
                 normal distribution, which concentrates more samples near 0 and 1.
         """
 
-        if not self.logits_normal:
-            return torch.rand((batch_size), dtype=torch.float32)
-        else:
+        if self.logits_normal:
             nt = torch.randn((batch_size), dtype=torch.float32)
             return torch.sigmoid(nt)
+
+        return torch.rand((batch_size), dtype=torch.float32)
 
     def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         """
@@ -148,7 +158,7 @@ class Flow(Diffusion):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
-        prediction = model(**model_inputs, timesteps=timesteps)
+        prediction = model(**model_inputs, timesteps=timesteps)["x"]
         return prediction
 
     def one_step_denoise(
@@ -192,13 +202,20 @@ class Flow(Diffusion):
         return x_t_minus_one
 
     def compute_loss(
-        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
-    ) -> Tensor:
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_losses: list[LossFunction] = [],
+        extra_args: dict[str, Any] = {},
+    ) -> dict[str, Tensor]:
         """
         Computes the loss for training the flow-based diffusion model.
         This method implements the loss function for training the flow-based diffusion model,
         which measures the difference between the predicted velocity field and the true velocity
         field (noise - x_t). The loss is computed as the mean squared error between these values.
+        Additional losses can be included by passing them in the `extra_losses` list
         Args:
             model (Denoiser): The neural network model used for denoising.
             model_inputs (ModelInput): A dictionary containing the model inputs, including
@@ -208,7 +225,7 @@ class Flow(Diffusion):
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed loss value as a scalar tensor.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:
             The function first adds noise to the input data according to the specified timesteps,
             then computes the model's prediction. The loss is calculated as the mean squared error
@@ -217,11 +234,17 @@ class Flow(Diffusion):
         """
         x_0 = model_inputs["x"].clone()
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
-        prediction: torch.Tensor = model(**model_inputs, timesteps=timesteps)
-        losses = ((noise - x_0) - prediction) ** 2
+        prediction: ModelOutput = model(**model_inputs, timesteps=timesteps)
+        # Compute flow matching loss
+        losses = ((noise - x_0) - prediction["x"]) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
-        return loss
+        loss_dict = {"loss": loss}
+        # Compute extra losses if any
+        for extra_loss in extra_losses:
+            e_loss = cast(Tensor, extra_loss(**extra_args))
+            loss_dict[extra_loss.__class__.__name__] = e_loss
+        return loss_dict
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """

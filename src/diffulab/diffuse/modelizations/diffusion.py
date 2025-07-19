@@ -4,6 +4,7 @@ from typing import Any
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.training.losses import LossFunction
 
 
 class Diffusion(ABC):
@@ -32,11 +33,19 @@ class Diffusion(ABC):
         draw_timesteps: Sample random timesteps for training.
     """
 
-    def __init__(self, n_steps: int, sampling_method: str = "euler", schedule: str = "linear", **kwargs: Any):
+    def __init__(
+        self,
+        n_steps: int,
+        sampling_method: str = "euler",
+        schedule: str = "linear",
+        latent_diffusion: bool = False,
+        **kwargs: Any,
+    ):
         self.timesteps: list[float] = []
         self.steps: int = n_steps
         self.sampling_method = sampling_method
         self.schedule = schedule
+        self.latent_diffusion = latent_diffusion
         self.set_steps(n_steps, schedule=schedule, **kwargs)
 
     @abstractmethod
@@ -85,8 +94,14 @@ class Diffusion(ABC):
 
     @abstractmethod
     def compute_loss(
-        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
-    ) -> Tensor:
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_losses: list[LossFunction] = [],
+        extra_args: dict[str, Any] = {},
+    ) -> dict[str, Tensor]:
         """
         Calculate the loss for training the diffusion model.
         This abstract method computes the loss used to train the model based on the difference
@@ -102,8 +117,7 @@ class Diffusion(ABC):
             noise (Tensor | None, optional): Pre-defined noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed loss value as a scalar tensor, typically the mean
-                error across the batch for training optimization.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
         pass
 

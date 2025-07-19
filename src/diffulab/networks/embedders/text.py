@@ -41,7 +41,15 @@ class SD3TextEmbedder(ContextEmbedder):
                 "google/t5-v1_1-xxl", clean_up_tokenization_spaces=True, legacy=False
             )
 
-        self.n_outputs = 2
+        self.outputs_size = (2048, 4096)
+
+    @property
+    def n_output(self) -> int:
+        return 2
+
+    @property
+    def output_size(self) -> tuple[int, int]:
+        return (2048, 4096)
 
     def dict_to_device(self, d: dict[str, Tensor]) -> dict[str, Tensor]:
         return {k: v.to(self.device) for k, v in d.items()}

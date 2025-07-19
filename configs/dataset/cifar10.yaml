@@ -7,4 +7,4 @@ train:
 val:
   _target_: diffulab.datasets.CIFAR10Dataset
   data_path: "data/cifar-10-batches-py"
-  batches_to_load: ["data_batch_5"] 
+  batches_to_load: ["data_batch_5"]

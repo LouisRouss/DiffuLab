@@ -1,0 +1,54 @@
+# configs/train_cifar10_flow_matching.yaml
+# @package _global_
+defaults:
+  - model: mmdit
+  - diffuser: rectified_flow
+  - trainer: default
+  - dataset: imagenet_repa
+  - dataloader: default
+  - optimizer: adamw
+  - vision_tower: dcae
+  - _self_
+
+# Override specific settings
+trainer:
+  project_name: imagenet_repa_flow_matching
+  n_epoch: 200
+  precision_type: "bf16"
+
+model:
+  input_channels: 32
+  output_channels: 32
+  input_dim: 768
+  hidden_dim: 768
+  embedding_dim: 256
+  num_heads: 12
+  mlp_ratio: 1
+  patch_size: 1
+  depth: 12
+  n_classes: 1000
+  classifier_free: true
+
+diffuser:
+  latent_scale: 0.18215
+
+dataloader:
+  batch_size: 256
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+perceiver_resampler:
+  use_resampler: true
+  parameters:
+    depth: 3
+    dim: 1024 # dim of the dinov2 features and projected ones
+    head_dim: 64
+    num_heads: 8
+    ff_mult: 4
+    num_latents: 256

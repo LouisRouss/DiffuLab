@@ -1,6 +1,6 @@
 import enum
 import math
-from typing import Callable
+from typing import Any, Callable, cast
 
 import torch
 import torch.nn as nn
@@ -11,6 +11,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.utils import space_timesteps
 from diffulab.diffuse.utils import extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.training.losses.common import LossFunction
 
 
 class MeanType(enum.Enum):
@@ -79,6 +80,7 @@ class GaussianDiffusion(Diffusion):
         n_steps: int = 1000,
         sampling_method: str = "ddpm",
         schedule: str = "linear",
+        latent_diffusion: bool = False,
         mean_type: str = "epsilon",
         variance_type: str = "fixed_small",
     ):
@@ -92,7 +94,9 @@ class GaussianDiffusion(Diffusion):
         self.mean_type = mean_type
         self.var_type = variance_type
         self.training_steps = n_steps
-        super().__init__(n_steps=n_steps, sampling_method=sampling_method, schedule=schedule)
+        super().__init__(
+            n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
+        )
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:
         """
@@ -537,10 +541,10 @@ class GaussianDiffusion(Diffusion):
             timesteps_model = map_tensor[timesteps]
         else:
             timesteps_model = timesteps
-        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps_model)
+        prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps_model)["x"]
 
         if classifier_free and guidance_scale > 0:
-            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)
+            prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)["x"]
             prediction = prediction + guidance_scale * (prediction - prediction_uncond)
 
         mean, _, log_var, x_start = self._get_p_mean_var(prediction, model_inputs["x"], timesteps, clamp_x)
@@ -631,8 +635,14 @@ class GaussianDiffusion(Diffusion):
 
     ### Need to add compute loss for different parameterization + variance learned
     def compute_loss(
-        self, model: Denoiser, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None
-    ) -> Tensor:
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_losses: list[LossFunction] = [],
+        extra_args: dict[str, Any] = {},
+    ) -> dict[str, Tensor]:
         """
         Computes the loss for training the Gaussian diffusion model.
         This method calculates the mean squared error loss between the model's prediction
@@ -647,7 +657,7 @@ class GaussianDiffusion(Diffusion):
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed mean squared error loss as a scalar tensor.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:
             When using a different number of sampling steps than training steps,
             this method maps the timestep indices through the timestep_map to ensure
@@ -657,9 +667,13 @@ class GaussianDiffusion(Diffusion):
         if self.timestep_map:
             map_tensor = torch.tensor(self.timestep_map, device=timesteps.device, dtype=timesteps.dtype)
             timesteps = map_tensor[timesteps]
-        prediction = model(**model_inputs, timesteps=timesteps)
+        prediction = model(**model_inputs, timesteps=timesteps)["x"]
         loss = nn.functional.mse_loss(prediction, noise, reduction="mean")
-        return loss
+        loss_dict = {"loss": loss}
+        for extra_loss in extra_losses:
+            e_loss = cast(Tensor, extra_loss(**extra_args))
+            loss_dict[extra_loss.__class__.__name__] = e_loss
+        return loss_dict
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """

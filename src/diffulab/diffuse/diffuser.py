@@ -6,6 +6,8 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.networks.vision_towers.common import VisionTower
+from diffulab.training.losses import LossFunction
 
 
 class Diffuser:
@@ -47,15 +49,24 @@ class Diffuser:
         sampling_method: str,
         model_type: str = "rectified_flow",
         n_steps: int = 1000,
+        vision_tower: VisionTower | None = None,
         extra_args: dict[str, Any] = {},
+        extra_losses: list[LossFunction] = [],
     ):
         self.model_type = model_type
         self.denoiser = denoiser
         self.n_steps = n_steps
+        self.vision_tower = vision_tower
+        self.extra_losses = extra_losses
+        if self.vision_tower:
+            self.latent_scale = self.vision_tower.latent_scale
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
-                n_steps=n_steps, sampling_method=sampling_method, **extra_args
+                n_steps=n_steps,
+                sampling_method=sampling_method,
+                latent_diffusion=self.vision_tower is not None,
+                **extra_args,
             )
         else:
             raise NotImplementedError(f"Model type {self.model_type} is not implemented")
@@ -82,7 +93,13 @@ class Diffuser:
         """
         return self.diffusion.draw_timesteps(batch_size=batch_size)
 
-    def compute_loss(self, model_inputs: ModelInput, timesteps: Tensor, noise: Tensor | None = None) -> Tensor:
+    def compute_loss(
+        self,
+        model_inputs: ModelInput,
+        timesteps: Tensor,
+        noise: Tensor | None = None,
+        extra_args: dict[str, Any] = {},
+    ) -> dict[str, Tensor]:
         """
         Compute the loss for the diffusion model using the denoiser and diffusion process.
         This method serves as a bridge between the Diffuser class and the underlying
@@ -94,9 +111,9 @@ class Diffuser:
             - noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
         Returns:
-            Tensor: The computed loss value as a scalar tensor.
+            dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
-        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise)
+        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
     def set_steps(self, n_steps: int, **extra_args: dict[str, Any]) -> None:
         """
@@ -133,12 +150,13 @@ class Diffuser:
         generate a sample from the diffusion process. It can handle conditional generation
         with guidance when appropriate settings are provided.
         Args:
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
-            model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
+            - data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
+                If a vision tower is used, this should be the shape of the latent space.
+            - model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
                 conditional information, or labels. If 'x' is not provided, random noise will be generated.
-            use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to True.
-            guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
+            - use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
+            - clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to True.
+            - guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
             **kwargs (dict[str, Any]): Additional arguments to pass to the diffusion model's denoise method.
                 These may include parameters like 'classifier', 'classifier_free', etc.
@@ -157,6 +175,19 @@ class Diffuser:
                 guidance_scale=7.5
             ```
         """
+        if self.vision_tower:
+            z = self.diffusion.denoise(
+                self.denoiser,
+                data_shape,
+                model_inputs,
+                use_tqdm=use_tqdm,
+                clamp_x=clamp_x,
+                guidance_scale=guidance_scale,
+                **kwargs,
+            )
+            z = z / self.latent_scale
+            return self.vision_tower.decode(z)
+
         return self.diffusion.denoise(
             self.denoiser,
             data_shape,

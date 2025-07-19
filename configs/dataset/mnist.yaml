@@ -7,4 +7,4 @@ train:
 val:
   _target_: diffulab.datasets.MNISTDataset
   data_path: "data/MNIST/raw"
-  train: false 
+  train: false

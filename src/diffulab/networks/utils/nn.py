@@ -1,4 +1,5 @@
 import math
+from dataclasses import dataclass
 from typing import Tuple
 
 import torch
@@ -202,3 +203,129 @@ class RotaryPositionalEmbedding(nn.Module):
         k_rot = k_rot.transpose(1, 2)
 
         return q_rot, k_rot, v
+
+
+class RMSNorm(torch.nn.Module):
+    """
+    Root Mean Square Layer Normalization (RMSNorm) module.
+
+    Args:
+        - dim (int): The dimension of the input tensor to be normalized.
+
+    Attributes:
+        - scale (torch.nn.Parameter): A learnable scaling parameter of shape (dim,).
+
+    Methods:
+        - forward(x: Tensor) -> Tensor:
+            Applies RMS normalization to the input tensor.
+
+    Example:
+        >>> rms_norm = RMSNorm(dim=512)
+        >>> input_tensor = torch.randn(10, 512)
+        >>> output_tensor = rms_norm(input_tensor)
+    """
+
+    def __init__(self, dim: int):
+        super().__init__()  # type: ignore
+        self.scale = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x: Float[Tensor, "... dim"]) -> Float[Tensor, "... dim"]:
+        x_dtype = x.dtype
+        x = x.float()
+        rrms = torch.rsqrt(torch.mean(x**2, dim=-1, keepdim=True) + 1e-6)
+        return (x * rrms).to(dtype=x_dtype) * self.scale
+
+
+class QKNorm(nn.Module):
+    """
+    A neural network module that applies RMS normalization to query and key tensors.
+
+    Args:
+        dim (int): The dimension of the input tensors.
+
+    Attributes:
+        query_norm (RMSNorm): The RMS normalization layer for the query tensor.
+        key_norm (RMSNorm): The RMS normalization layer for the key tensor.
+
+    Methods:
+        - forward(q: Tensor, k: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
+            Applies RMS normalization to the query and key tensors, and ensures they have the same type as the value tensor.
+            Args:
+                - q (Tensor): The query tensor.
+                - k (Tensor): The key tensor.
+                - v (Tensor): The value tensor.
+            Returns:
+                - tuple[Tensor, Tensor]: The normalized query and key tensors, both converted to the type of the value tensor.
+    Example:
+        >>> qknorm = QKNorm(dim=512)
+        >>> query_tensor = torch.randn(10, 25, 512)
+        >>> key_tensor = torch.randn(10, 25, 512)
+        >>> value_tensor = torch.randn(10, 25, 512)
+        >>> normalized_query, normalized_key = qknorm(query_tensor, key_tensor, value_tensor)
+    """
+
+    def __init__(self, dim: int):
+        super().__init__()  # type: ignore
+        self.query_norm = RMSNorm(dim)
+        self.key_norm = RMSNorm(dim)
+
+    def forward(
+        self,
+        q: Float[Tensor, "batch_size seq_len dim"],
+        k: Float[Tensor, "batch_size seq_len dim"],
+        v: Float[Tensor, "batch_size seq_len dim"],
+    ) -> tuple[Float[Tensor, "batch_size seq_len dim"], Float[Tensor, "batch_size seq_len dim"]]:
+        q = self.query_norm(q)
+        k = self.key_norm(k)
+        return q.to(v), k.to(v)
+
+
+@dataclass
+class ModulationOut:
+    alpha: Tensor
+    beta: Tensor
+    gamma: Tensor
+    delta: Tensor
+    epsilon: Tensor
+    zeta: Tensor
+
+
+class Modulation(nn.Module):
+    """
+    A neural network module that applies a linear transformation to the input tensor
+    and splits the output into six chunks.
+
+    Attributes:
+        lin (nn.Linear): A linear layer that transforms the input tensor.
+
+    Methods:
+        __init__(embedding_dim: int, input_dim: int):
+            Initializes the Modulation module with the specified dimensions.
+
+        forward(vec: Tensor) -> ModulationOut:
+            Applies the linear transformation to the input tensor, followed by
+            the SiLU activation function, and splits the result into six chunks.
+
+    Args:
+        embedding_dim (int): The dimension of the input embedding tensor.
+        input_dim (int): The dimension that determines the output size (6 * input_dim).
+
+    Example:
+        >>> modulation = Modulation(embedding_dim=256, input_dim=128)
+        >>> input_tensor = torch.randn(10, 256)
+        >>> output = modulation(input_tensor)
+        >>> print(output.alpha.shape)  # Output: torch.Size([10, 1, 128])
+    """
+
+    def __init__(self, embedding_dim: int, input_dim: int):
+        super().__init__()  # type: ignore
+        self.lin = nn.Linear(embedding_dim, 6 * input_dim, bias=True)
+
+    def forward(self, vec: Float[Tensor, "... dim"]) -> ModulationOut:
+        out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(6, dim=-1)
+
+        return ModulationOut(*out)
+
+
+def modulate(x: Tensor, scale: Tensor, shift: Tensor) -> Tensor:
+    return x * (1 + scale) + shift

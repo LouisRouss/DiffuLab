@@ -6,7 +6,7 @@ import torch.nn as nn
 from jaxtyping import Float, Int
 from torch import Tensor
 
-from diffulab.networks.denoisers.common import Denoiser
+from diffulab.networks.denoisers.common import Denoiser, ModelOutput
 from diffulab.networks.embedders.common import ContextEmbedder
 from diffulab.networks.utils.nn import (
     Downsample,
@@ -446,7 +446,7 @@ class UNetModel(Denoiser):
         context: Any | None = None,
         p: float = 0.0,
         x_context: Float[Tensor, "batch_size channels height width"] | None = None,
-    ) -> Tensor:
+    ) -> ModelOutput:
         """
         Apply the model to an input batch.
         :param x: a [N x C x ...] Tensor of noisy image.
@@ -492,4 +492,4 @@ class UNetModel(Denoiser):
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
             h = module(h, emb=emb, context=context)
-        return self.out(h)
+        return {"x": self.out(h)}

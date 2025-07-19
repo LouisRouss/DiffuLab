@@ -6,12 +6,14 @@ from torch.utils.data import DataLoader
 
 from diffulab.diffuse import Diffuser
 from diffulab.training import Trainer
+from diffulab.training.losses.repa import RepaLoss
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="train_mnist_flow_matching")
+@hydra.main(version_base=None, config_path="../configs", config_name="train_imagenet_flow_matching_repa")
 def train(cfg: DictConfig):
     print(OmegaConf.to_yaml(cfg))
 
+    # Dataset
     train_dataset = instantiate(cfg.dataset.train)
     val_dataset = instantiate(cfg.dataset.val)
 
@@ -32,6 +34,7 @@ def train(cfg: DictConfig):
         pin_memory=dl_cfg.get("pin_memory", False),
     )
 
+    # Model
     denoiser = instantiate(cfg.model)
 
     def count_parameters(model: torch.nn.Module) -> int:
@@ -39,20 +42,36 @@ def train(cfg: DictConfig):
 
     print(f"Number of trainable parameters: {count_parameters(denoiser):,}")
 
+    # Repa Specific parameters
+    repa_loss = RepaLoss(
+        denoiser=denoiser,
+        denoiser_dimension=cfg.model.get("input_dim"),
+        embedding_dim=1024,  # dimension of the DINO features (precomputed here)
+        load_dino=False,
+        use_resampler=cfg.perceiver_resampler.get("use_resampler", False),
+        resampler_params=cfg.perceiver_resampler.get("parameters", {}),
+        coeff=0.5,
+    )
+    vision_tower = instantiate(cfg.vision_tower)
+
+    # Diffuser
     diffuser = Diffuser(
         denoiser=denoiser,
         model_type=cfg.diffuser.model_type,
         n_steps=cfg.diffuser.n_steps,
         sampling_method=cfg.diffuser.sampling_method,
+        vision_tower=vision_tower,
         extra_args=cfg.diffuser.get("extra_args", {}),
+        extra_losses=[repa_loss],
     )
 
     optimizer = instantiate(
         cfg.optimizer,
-        params=denoiser.parameters(),
+        params=list(denoiser.parameters())
+        + list(repa_loss.proj.parameters())
+        + list(repa_loss.resampler.parameters() if repa_loss.resampler else []),
     )
 
-    # TODO: add a run name for wandb
     trainer = Trainer(
         n_epoch=cfg.trainer.n_epoch,
         gradient_accumulation_step=cfg.trainer.gradient_accumulation_step,
