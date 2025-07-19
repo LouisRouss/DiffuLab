@@ -3,4 +3,4 @@ model_type: rectified_flow
 n_steps: 50
 sampling_method: euler
 extra_args:
-  logits_normal: true 
+  logits_normal: true

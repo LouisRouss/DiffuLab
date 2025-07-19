@@ -10,4 +10,4 @@ num_heads: 2
 resblock_updown: true
 n_classes: 10
 use_scale_shift_norm: true
-classifier_free: false 
+classifier_free: false

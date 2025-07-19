@@ -200,18 +200,18 @@ class Trainer:
             original_model = diffuser.denoiser
             diffuser.denoiser = ema_eval
             for loss in diffuser.extra_losses:
-                if hasattr(loss, 'set_model'):
-                    loss.set_model(ema_eval) # type: ignore
+                if hasattr(loss, "set_model"):
+                    loss.set_model(ema_eval)  # type: ignore
             val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
 
             # Restore original model and eventual hooks
             diffuser.denoiser = original_model
             for loss in diffuser.extra_losses:
-                if hasattr(loss, 'set_model'):
-                    loss.set_model(original_model) # type: ignore
+                if hasattr(loss, "set_model"):
+                    loss.set_model(original_model)  # type: ignore
         else:
             val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
-            
+
         for key, val_loss in val_losses.items():
             tracker.update(val_loss.item(), key=f"val/{key}")
 

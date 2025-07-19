@@ -8,7 +8,7 @@ class VisionTower(nn.Module, ABC):
     def __init__(self, latent_scale: float = 1.0) -> None:
         """
         Base class for vision towers, which are used to encode and decode images into latent representations.
-        
+
         Args:
             - latent_scale (float): Scale factor for the latent representation. Default is 1.0.
         """

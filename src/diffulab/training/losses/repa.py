@@ -78,13 +78,13 @@ class RepaLoss(LossFunction):
         """Register the forward hook on the specified layer of the model."""
         self._unregister_hook()  # Ensure no previous hook is registered
         self.hook_handle = model.layers[self.alignment_layer - 1].register_forward_hook(self._forward_hook)
-    
+
     def _unregister_hook(self) -> None:
         """Remove the forward hook."""
         if self.hook_handle is not None:
             self.hook_handle.remove()
             self.hook_handle = None
-    
+
     def set_model(self, model: MMDiT) -> None:
         """Switch the hook to a different model (e.g., EMA model)."""
         self._register_hook(model)

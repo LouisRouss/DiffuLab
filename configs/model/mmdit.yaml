@@ -11,4 +11,4 @@ mlp_ratio: 4
 patch_size: 2
 depth: 10
 n_classes: 10
-classifier_free: false 
+classifier_free: false
