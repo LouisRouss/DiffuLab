@@ -1,30 +1,19 @@
 from abc import ABC, abstractmethod
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 
 
 class VisionTower(nn.Module, ABC):
-    def __init__(self):
-        super().__init__()  # type: ignore
-
-    def sample(self, mean: Tensor, std: Tensor, latent_scale: float = 1.0, latent_bias: float = 0.0) -> Tensor:
+    def __init__(self, latent_scale: float = 1.0) -> None:
         """
-        Sample from the latent space given the mean and variance.
-
+        Base class for vision towers, which are used to encode and decode images into latent representations.
+        
         Args:
-            mean (Tensor): Mean of the latent representation.
-            std (Tensor): Standard_deviation of the latent representation.
-            latent_scale (float, optional): Scale factor for the latent space. Defaults to 1.0.
-            latent_bias (float, optional): Bias added to the latent space. Defaults to 0.0.
-
-        Returns:
-            Tensor: Sampled tensor from the latent space.
+            - latent_scale (float): Scale factor for the latent representation. Default is 1.0.
         """
-        z = mean + std * torch.randn_like(mean)
-        z = z * latent_scale + latent_bias
-        return z
+        super().__init__()  # type: ignore
+        self.latent_scale = latent_scale
 
     @property
     @abstractmethod

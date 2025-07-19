@@ -22,10 +22,11 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         """Initialize the MNIST dataset.
 
         Args:
-            data_path: Path to the dataset leading to MDS shard files
-            local: Whether to use local files or remote files
-            batch_size: Batch size for optimized streaming dataset and future data loading
-            latent_scale: Scale factor for latent features
+            - data_path: Path to the dataset leading to MDS shard files
+            - local: Whether to use local files or remote files
+            - batch_size: Batch size for optimized streaming dataset and future data loading
+            - latent_scale: Scale factor for latent features
+            - split: Dataset split to use (train, val, test)
         """
         super().__init__()
         self.data_path = Path(data_path)
@@ -56,12 +57,12 @@ class ImageNetLatentREPA(Dataset[BatchData]):
 
         x0: torch.Tensor | None = None
         dst_features: torch.Tensor | None = None
-        if "repa_embedding" not in sample:
-            assert "image" in sample, "Batch must contain either 'repa_embedding' or 'image' key"
+        if "dst_features" not in sample:
+            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
             x0 = self.transform(sample["image"])
         else:
-            assert "repa_embedding" in sample, "Batch must contain either 'repa_embedding' or 'image' key"
-            dst_features = torch.tensor(sample["repa_embedding"], dtype=torch.float32)
+            assert "dst_features" in sample, "Batch must contain either 'dst_features' or 'image' key"
+            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
 
         latent = torch.tensor(sample["latent"], dtype=torch.float32)
         y = torch.tensor(sample["label"], dtype=torch.long)

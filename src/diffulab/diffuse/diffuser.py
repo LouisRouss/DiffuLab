@@ -50,7 +50,6 @@ class Diffuser:
         model_type: str = "rectified_flow",
         n_steps: int = 1000,
         vision_tower: VisionTower | None = None,
-        latent_scale: float = 1.0,
         extra_args: dict[str, Any] = {},
         extra_losses: list[LossFunction] = [],
     ):
@@ -59,7 +58,8 @@ class Diffuser:
         self.n_steps = n_steps
         self.vision_tower = vision_tower
         self.extra_losses = extra_losses
-        self.latent_scale = latent_scale
+        if self.vision_tower:
+            self.latent_scale = self.vision_tower.latent_scale
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
