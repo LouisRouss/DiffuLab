@@ -16,7 +16,8 @@ class CIFAR10Dataset(DiffusionDataset):
         data_path: str,
         batches_to_load: List[str] = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4", "data_batch_5"],
     ):
-        """Initialize the CIFAR10 dataset.
+        """
+        Initialize the CIFAR10 dataset.
 
         Args:
             data_path: Path to the CIFAR10 data directory
@@ -28,7 +29,12 @@ class CIFAR10Dataset(DiffusionDataset):
         self.images, self.labels = self.load_data()
 
     def load_data(self) -> tuple[NDArray[np.uint8], NDArray[np.int64]]:
-        """Load CIFAR10 data from files."""
+        """
+        Load CIFAR10 data from files.
+
+        Returns:
+            tuple: Tuple containing (images, labels) arrays
+        """
         images: list[NDArray[np.uint8]] = []
         labels: list[NDArray[np.int64]] = []
 
@@ -40,7 +46,14 @@ class CIFAR10Dataset(DiffusionDataset):
         return np.concatenate(images, axis=0), np.concatenate(labels, axis=0)
 
     def _load_cifar10_batch(self, file: Path) -> tuple[NDArray[np.uint8], NDArray[np.int64]]:
-        """Load a single CIFAR10 batch file."""
+        """
+        Load a single CIFAR10 batch file.
+
+        Args:
+            file: Path to the CIFAR10 batch file
+        Returns:
+            tuple: Tuple containing (images, labels) arrays
+        """
         with open(file, "rb") as f:
             batch = pickle.load(f, encoding="latin1")
 
@@ -56,7 +69,14 @@ class CIFAR10Dataset(DiffusionDataset):
         return images, labels
 
     def preprocess_image(self, image: NDArray[np.uint8 | np.float32]) -> NDArray[np.float32]:
-        """Preprocess CIFAR10 image: normalize and transpose to (C, H, W)."""
+        """
+        Preprocess CIFAR10 image: normalize and transpose to (C, H, W).
+
+        Args:
+            image: The raw image data
+        Returns:
+            NDArray: Preprocessed image data in shape (C, H, W)
+        """
         # Convert to float and normalize to [-1, 1]
         normalized = (image.astype(np.float32) / 255.0 - 0.5) / 0.5
 

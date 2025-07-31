@@ -22,11 +22,11 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         """Initialize the MNIST dataset.
 
         Args:
-            - data_path: Path to the dataset leading to MDS shard files
-            - local: Whether to use local files or remote files
-            - batch_size: Batch size for optimized streaming dataset and future data loading
-            - latent_scale: Scale factor for latent features
-            - split: Dataset split to use (train, val, test)
+            data_path: Path to the dataset leading to MDS shard files
+            local: Whether to use local files or remote files
+            batch_size: Batch size for optimized streaming dataset and future data loading
+            latent_scale: Scale factor for latent features
+            split: Dataset split to use (train, val, test)
         """
         super().__init__()
         self.data_path = Path(data_path)

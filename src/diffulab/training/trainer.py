@@ -310,6 +310,8 @@ class Trainer:
         train_embedder: bool = False,
         p_classifier_free_guidance: float = 0,
         val_steps: int = 50,
+        optimizer_ckpt: str | None = None,
+        denoiser_ckpt: str | None = None,
         ema_ckpt: str | None = None,
         epoch_start: int = 0,
     ):
@@ -360,12 +362,30 @@ class Trainer:
         else:
             ema_denoiser = None
 
+        if denoiser_ckpt:
+            diffuser.denoiser.load_state_dict(
+                torch.load(denoiser_ckpt),  # type: ignore
+            )
+
+        if optimizer_ckpt:
+            optimizer.load_state_dict(
+                torch.load(optimizer_ckpt, weights_only=False),  # type: ignore
+            )
+
         if diffuser.vision_tower:
             diffuser.vision_tower = self.accelerator.prepare(diffuser.vision_tower)  # type: ignore
 
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
             diffuser.denoiser, train_dataloader, val_dataloader, optimizer
         )
+
+        if optimizer_ckpt:
+            device = self.accelerator.device
+            for state in optimizer.state.values():  # type: ignore
+                for k, v in state.items():  # type: ignore
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
+
         for loss_idx in range(len(diffuser.extra_losses)):
             diffuser.extra_losses[loss_idx] = self.accelerator.prepare(diffuser.extra_losses[loss_idx])  # type: ignore
 
