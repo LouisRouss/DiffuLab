@@ -54,6 +54,13 @@ def train(cfg: DictConfig):
     )
     vision_tower = instantiate(cfg.vision_tower)
 
+    assert train_dataset.latent_scale == vision_tower.latent_scale, (
+        f"Latent scale mismatch: train dataset {train_dataset.latent_scale} vs vision tower {vision_tower.latent_scale}"
+    )
+    assert val_dataset.latent_scale == vision_tower.latent_scale, (
+        f"Latent scale mismatch: val dataset {val_dataset.latent_scale} vs vision tower {vision_tower.latent_scale}"
+    )
+
     # Diffuser
     diffuser = Diffuser(
         denoiser=denoiser,
