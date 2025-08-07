@@ -140,7 +140,7 @@ class Diffuser:
         data_shape: tuple[int, ...],
         model_inputs: ModelInput,
         use_tqdm: bool = True,
-        clamp_x: bool = True,
+        clamp_x: bool = False,
         guidance_scale: float = 0,
         **kwargs: dict[str, Any],
     ) -> Tensor:
@@ -155,7 +155,7 @@ class Diffuser:
             - model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
                 conditional information, or labels. If 'x' is not provided, random noise will be generated.
             - use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            - clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to True.
+            - clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
             - guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
             **kwargs (dict[str, Any]): Additional arguments to pass to the diffusion model's denoise method.
