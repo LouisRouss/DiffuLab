@@ -416,7 +416,7 @@ class MMDiTBlock(nn.Module):
         modulated_context = context + modulated_context * modulation_context.gamma
 
         modulated_input = (
-            input
+            modulated_input
             + self.mlp_input(
                 modulate(
                     self.input_norm_2(modulated_input), scale=modulation_input.delta, shift=modulation_input.epsilon
@@ -425,7 +425,7 @@ class MMDiTBlock(nn.Module):
             * modulation_input.zeta
         )
         modulated_context = (
-            context
+            modulated_context
             + self.mlp_context(
                 modulate(
                     self.context_norm_2(modulated_context),
