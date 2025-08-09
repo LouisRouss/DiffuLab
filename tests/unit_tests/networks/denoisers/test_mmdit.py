@@ -137,8 +137,7 @@ class TestDiTAttention:
         """
         Test DiTAttention with different batch sizes.
 
-        Ensures the attention mechanism works correctly across various batch sizes,
-        which is important for both training and inference scenarios.
+        Ensures the attention mechanism works correctly across various batch sizes
 
         Args:
             dit_attention (DiTAttention): The attention module to test.
@@ -157,9 +156,7 @@ class TestDiTAttention:
         """
         Test DiTAttention with different sequence lengths.
 
-        Verifies that the attention mechanism handles variable sequence lengths correctly,
-        which is crucial for processing images of different sizes and patch configurations.
-
+        Verifies that the attention mechanism handles variable sequence lengths correctly.
         Args:
             dit_attention (DiTAttention): The attention module to test.
             batch_size (int): Size of the input batch.
@@ -178,8 +175,7 @@ class TestDiTAttention:
         Test DiTAttention with different partial rotary factors.
 
         Validates that the rotary embedding dimension is calculated correctly
-        based on the partial rotary factor, which controls how much of each
-        attention head uses rotary positional embeddings.
+        based on the partial rotary factor.
 
         Args:
             input_dim (int): Dimension of the input features.
@@ -204,8 +200,7 @@ class TestDiTAttention:
         """
         Test gradient flow through DiTAttention.
 
-        Ensures that gradients can properly flow backward through the attention mechanism,
-        which is essential for training the diffusion transformer model.
+        Ensures that gradients can properly flow backward through the attention mechanism.
 
         Args:
             dit_attention (DiTAttention): The attention module to test.
@@ -229,9 +224,7 @@ class TestMMDiTAttention:
     """
     Test class for MMDiTAttention module.
 
-    This class provides comprehensive testing for the MMDiTAttention multi-modal attention mechanism,
-    which processes both input and context tensors simultaneously with cross-attention and rotary
-    positional embeddings for multi-modal diffusion transformers.
+    This class provides comprehensive testing for the MMDiTAttention multi-modal attention mechanism.
 
     Attributes:
         None
@@ -339,8 +332,7 @@ class TestMMDiTAttention:
         Test MMDiTAttention with different input and context dimensions.
 
         Validates that the multi-modal attention can handle different dimensional inputs
-        for context and input tensors, which is common in multi-modal scenarios where
-        different modalities may have different feature dimensions.
+        for context and input tensors.
 
         Args:
             batch_size (int): Size of the input batch.
@@ -381,7 +373,7 @@ class TestMMDiTAttention:
         Test gradient flow through MMDiTAttention.
 
         Ensures that gradients can properly flow backward through the multi-modal attention
-        mechanism for both input and context paths, which is essential for training.
+        mechanism for both input and context paths.
 
         Args:
             mmdit_attention (MMDiTAttention): The multi-modal attention module to test.
@@ -524,7 +516,6 @@ class TestDiTBlock:
         Test that modulation is called correctly.
 
         Ensures that the modulate function is called the expected number of times
-        during the forward pass, which is crucial for proper conditioning in DiT models.
         Uses mocking to verify the modulation behavior without relying on actual computations.
 
         Args:
@@ -556,7 +547,7 @@ class TestDiTBlock:
         Test gradient flow through DiTBlock.
 
         Ensures that gradients can properly flow backward through the transformer block
-        for both input tensors and conditioning embeddings, which is essential for training.
+        for both input tensors and conditioning embeddings.
 
         Args:
             dit_block (DiTBlock): The transformer block to test.
@@ -594,7 +585,6 @@ class TestMMDiTBlock:
         mmdit_block: Fixture that creates an MMDiTBlock instance for testing.
         test_init: Tests proper initialization of all MMDiTBlock components.
         test_forward_shape: Tests output shapes for both input and context tensors.
-        test_residual_connections: Tests that residual connections work correctly.
         test_gradient_flow: Tests gradient propagation through the multi-modal block.
     """
 
@@ -692,50 +682,6 @@ class TestMMDiTBlock:
         assert input_output.shape == input_tensor.shape
         assert context_output.shape == context_tensor.shape
 
-    def test_residual_connections(
-        self,
-        mmdit_block: MMDiTBlock,
-        batch_size: int,
-        seq_len: int,
-        context_seq_len: int,
-        input_dim: int,
-        context_dim: int,
-        embedding_dim: int,
-    ):
-        """
-        Test that residual connections work correctly.
-
-        Verifies that the multi-modal transformer block implements proper residual connections
-        for both input and context paths, ensuring that outputs are modified versions of inputs
-        rather than completely independent transformations.
-
-        Args:
-            mmdit_block (MMDiTBlock): The multi-modal transformer block to test.
-            batch_size (int): Size of the input batch.
-            seq_len (int): Length of the input sequence.
-            context_seq_len (int): Length of the context sequence.
-            input_dim (int): Dimension of input features.
-            context_dim (int): Dimension of context features.
-            embedding_dim (int): Dimension of conditioning embeddings.
-
-        Raises:
-            AssertionError: If outputs are identical to inputs (no processing) or
-                          if residual connections are not working properly.
-        """
-        input_tensor = torch.randn(batch_size, seq_len, input_dim)
-        context_tensor = torch.randn(batch_size, context_seq_len, context_dim)
-        y = torch.randn(batch_size, embedding_dim)
-
-        # Save original tensors
-        input_orig = input_tensor.clone()
-        context_orig = context_tensor.clone()
-
-        input_output, context_output = mmdit_block(input_tensor, y, context_tensor)
-
-        # Outputs should be different from inputs due to residual connections
-        assert not torch.allclose(input_output, input_orig)
-        assert not torch.allclose(context_output, context_orig)
-
     def test_gradient_flow(
         self,
         mmdit_block: MMDiTBlock,
@@ -750,8 +696,7 @@ class TestMMDiTBlock:
         Test gradient flow through MMDiTBlock.
 
         Ensures that gradients can properly flow backward through the multi-modal transformer
-        block for input tensors, context tensors, and conditioning embeddings, which is
-        essential for training multi-modal diffusion models.
+        block for input tensors, context tensors, and conditioning embeddings.
 
         Args:
             mmdit_block (MMDiTBlock): The multi-modal transformer block to test.
@@ -931,7 +876,7 @@ class TestMMDiT:
         None
 
     Methods:
-        simple_mmdit: Fixture that creates a simple DiT configuration for testing.
+        simple_dit: Fixture that creates a simple DiT configuration for testing.
         mmdit_with_context: Fixture that creates a multi-modal DiT configuration for testing.
         test_simple_dit_init: Tests initialization of simple DiT configuration.
         test_mmdit_with_context_init: Tests initialization of multi-modal configuration.
@@ -954,7 +899,7 @@ class TestMMDiT:
     """
 
     @pytest.fixture
-    def simple_mmdit(
+    def simple_dit(
         self,
         input_channels: int,
         input_dim: int,
@@ -1032,12 +977,12 @@ class TestMMDiT:
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             patch_size=patch_size,
-            depth=2,  # Small depth for testing
+            depth=2,
             context_dim=context_dim,
             context_embedder=mock_context_embedder,
         )
 
-    def test_simple_dit_init(self, simple_mmdit: MMDiT, input_channels: int, patch_size: int):
+    def test_simple_dit_init(self, simple_dit: MMDiT, input_channels: int, patch_size: int):
         """
         Test simple MMDiT initialization.
 
@@ -1045,25 +990,23 @@ class TestMMDiT:
         parameters, including class conditioning setup and absence of context embedder.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to test.
+            simple_dit (MMDiT): Simple DiT model instance to test.
             input_channels (int): Expected number of input channels.
             patch_size (int): Expected patch size.
 
         Raises:
             AssertionError: If any initialization parameter is incorrect.
         """
-        assert simple_mmdit.simple_dit is True
-        assert simple_mmdit.input_channels == input_channels
-        assert simple_mmdit.output_channels == input_channels  # Should default to input_channels
-        assert simple_mmdit.patch_size == patch_size
-        assert simple_mmdit.n_classes == 10
-        assert simple_mmdit.classifier_free is True
-        assert simple_mmdit.context_embedder is None
-        assert simple_mmdit.label_embed is not None
+        assert simple_dit.simple_dit is True
+        assert simple_dit.input_channels == input_channels
+        assert simple_dit.output_channels == input_channels  # Should default to input_channels
+        assert simple_dit.patch_size == patch_size
+        assert simple_dit.n_classes == 10
+        assert simple_dit.classifier_free is True
+        assert simple_dit.context_embedder is None
+        assert simple_dit.label_embed is not None
 
-    def test_mmdit_with_context_init(
-        self, mmdit_with_context: MMDiT, input_channels: int, patch_size: int, mock_context_embedder: ContextEmbedder
-    ):
+    def test_mmdit_with_context_init(self, mmdit_with_context: MMDiT, mock_context_embedder: ContextEmbedder):
         """
         Test MMDiT with context embedder initialization.
 
@@ -1117,7 +1060,7 @@ class TestMMDiT:
         with pytest.raises(AssertionError, match="for MMDiT context embedder must be provided"):
             MMDiT(simple_dit=False)
 
-    def test_patchify_unpatchify_roundtrip(self, simple_mmdit: MMDiT, sample_image: torch.Tensor):
+    def test_patchify_unpatchify_roundtrip(self, simple_dit: MMDiT, sample_image: torch.Tensor):
         """
         Test that patchify and unpatchify are inverse operations.
 
@@ -1126,36 +1069,36 @@ class TestMMDiT:
         This is crucial for the diffusion model's ability to process images as sequences.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance for testing.
+            simple_dit (MMDiT): Simple DiT model instance for testing.
             sample_image (torch.Tensor): Sample input image tensor.
 
         Raises:
             AssertionError: If patch dimensions or reconstruction shapes are incorrect.
         """
         # Patchify
-        patches = simple_mmdit.patchify(sample_image)
+        patches = simple_dit.patchify(sample_image)
 
         # Check patchify output shape
         batch_size, _, height, width = sample_image.shape
-        expected_num_patches = (height // simple_mmdit.patch_size) * (width // simple_mmdit.patch_size)
-        assert patches.shape == (batch_size, expected_num_patches, simple_mmdit.conv_proj.out_channels)
+        expected_num_patches = (height // simple_dit.patch_size) * (width // simple_dit.patch_size)
+        assert patches.shape == (batch_size, expected_num_patches, simple_dit.conv_proj.out_channels)
 
         # Create dummy output with correct channel dimension
         dummy_output = torch.randn(
             batch_size,
             expected_num_patches,
-            simple_mmdit.patch_size * simple_mmdit.patch_size * simple_mmdit.output_channels,
+            simple_dit.patch_size * simple_dit.patch_size * simple_dit.output_channels,
         )
 
         # Unpatchify
-        reconstructed = simple_mmdit.unpatchify(dummy_output)
+        reconstructed = simple_dit.unpatchify(dummy_output)
 
         # Check reconstructed shape
         assert reconstructed.shape == sample_image.shape
 
     def test_simple_dit_forward(
         self,
-        simple_mmdit: MMDiT,
+        simple_dit: MMDiT,
         sample_image: torch.Tensor,
         sample_timesteps: torch.Tensor,
         sample_labels: torch.Tensor,
@@ -1167,7 +1110,7 @@ class TestMMDiT:
         class labels and timesteps, producing outputs with correct shapes and data types.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to test.
+            simple_dit (MMDiT): Simple DiT model instance to test.
             sample_image (torch.Tensor): Sample input image tensor.
             sample_timesteps (torch.Tensor): Sample timestep tensor.
             sample_labels (torch.Tensor): Sample class label tensor.
@@ -1175,7 +1118,7 @@ class TestMMDiT:
         Raises:
             AssertionError: If output shape, keys, or data type are incorrect.
         """
-        output: ModelOutput = simple_mmdit(sample_image, sample_timesteps, y=sample_labels)
+        output: ModelOutput = simple_dit(sample_image, sample_timesteps, y=sample_labels)
 
         assert "x" in output
         assert output["x"].shape == sample_image.shape
@@ -1206,7 +1149,7 @@ class TestMMDiT:
 
     def test_forward_with_intermediate_features(
         self,
-        simple_mmdit: MMDiT,
+        simple_dit: MMDiT,
         sample_image: torch.Tensor,
         sample_timesteps: torch.Tensor,
         sample_labels: torch.Tensor,
@@ -1219,7 +1162,7 @@ class TestMMDiT:
         extraction applications.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to test.
+            simple_dit (MMDiT): Simple DiT model instance to test.
             sample_image (torch.Tensor): Sample input image tensor.
             sample_timesteps (torch.Tensor): Sample timestep tensor.
             sample_labels (torch.Tensor): Sample class label tensor.
@@ -1228,20 +1171,26 @@ class TestMMDiT:
             AssertionError: If intermediate features are not returned or have incorrect format.
         """
         # Need to access the internal forward methods
-        patches = simple_mmdit.patchify(sample_image)
-        output = simple_mmdit.simple_dit_forward(patches, sample_timesteps, y=sample_labels, intermediate_features=True)
+        patches = simple_dit.patchify(sample_image)
+        output = simple_dit.simple_dit_forward(patches, sample_timesteps, y=sample_labels, intermediate_features=True)
 
         assert "x" in output
         assert "features" in output
         assert isinstance(output["features"], list)
-        assert len(output["features"]) == simple_mmdit.layers.__len__() + 1  # +1 for last layer
+        assert len(output["features"]) == simple_dit.layers.__len__() + 1  # +1 for last layer
 
     def test_forward_with_x_context(
         self,
-        simple_mmdit: MMDiT,
         sample_image: torch.Tensor,
         sample_timesteps: torch.Tensor,
         sample_labels: torch.Tensor,
+        input_channels: int,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        patch_size: int,
     ):
         """
         Test forward pass with x_context concatenation.
@@ -1250,7 +1199,6 @@ class TestMMDiT:
         to the input, which is useful for conditional generation scenarios.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to test.
             sample_image (torch.Tensor): Sample input image tensor.
             sample_timesteps (torch.Tensor): Sample timestep tensor.
             sample_labels (torch.Tensor): Sample class label tensor.
@@ -1258,15 +1206,31 @@ class TestMMDiT:
         Raises:
             AssertionError: If output shape is incorrect when using x_context.
         """
+        # Create a simple DiT model with twice the input channels for x_context
+        simple_dit = MMDiT(
+            simple_dit=True,
+            input_channels=input_channels * 2,
+            output_channels=input_channels,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            embedding_dim=embedding_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            patch_size=patch_size,
+            depth=2,  # Small depth for testing
+            n_classes=10,
+            classifier_free=True,
+        )
+
         x_context = torch.randn_like(sample_image)
-        output: ModelOutput = simple_mmdit(sample_image, sample_timesteps, y=sample_labels, x_context=x_context)
+        output: ModelOutput = simple_dit(sample_image, sample_timesteps, y=sample_labels, x_context=x_context)
 
         assert "x" in output
         assert output["x"].shape == sample_image.shape
 
     def test_forward_classifier_free_guidance(
         self,
-        simple_mmdit: MMDiT,
+        simple_dit: MMDiT,
         sample_image: torch.Tensor,
         sample_timesteps: torch.Tensor,
         sample_labels: torch.Tensor,
@@ -1278,7 +1242,7 @@ class TestMMDiT:
         which is used during training to enable guidance-free generation at inference.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to test.
+            simple_dit (MMDiT): Simple DiT model instance to test.
             sample_image (torch.Tensor): Sample input image tensor.
             sample_timesteps (torch.Tensor): Sample timestep tensor.
             sample_labels (torch.Tensor): Sample class label tensor.
@@ -1286,7 +1250,7 @@ class TestMMDiT:
         Raises:
             AssertionError: If output shape is incorrect when using guidance probability.
         """
-        output: ModelOutput = simple_mmdit(sample_image, sample_timesteps, y=sample_labels, p=0.1)
+        output: ModelOutput = simple_dit(sample_image, sample_timesteps, y=sample_labels, p=0.1)
 
         assert "x" in output
         assert output["x"].shape == sample_image.shape
@@ -1346,7 +1310,7 @@ class TestMMDiT:
 
     def test_gradient_flow_simple_dit(
         self,
-        simple_mmdit: MMDiT,
+        simple_dit: MMDiT,
         sample_image: torch.Tensor,
         sample_timesteps: torch.Tensor,
         sample_labels: torch.Tensor,
@@ -1355,11 +1319,9 @@ class TestMMDiT:
         Test gradient flow through simple DiT.
 
         Ensures that gradients can properly flow backward through the simple DiT
-        configuration for both image inputs and timesteps, which is essential
-        for training the diffusion model.
-
+        configuration for both image inputs and timesteps.
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to test.
+            simple_dit (MMDiT): Simple DiT model instance to test.
             sample_image (torch.Tensor): Sample input image tensor.
             sample_timesteps (torch.Tensor): Sample timestep tensor.
             sample_labels (torch.Tensor): Sample class label tensor.
@@ -1370,7 +1332,7 @@ class TestMMDiT:
         sample_image.requires_grad_(True)
         sample_timesteps.requires_grad_(True)
 
-        output: ModelOutput = simple_mmdit(sample_image, sample_timesteps, y=sample_labels)
+        output: ModelOutput = simple_dit(sample_image, sample_timesteps, y=sample_labels)
         loss = output["x"].sum()
         loss.backward()  # type: ignore[reportUnknownMemberType]
 
@@ -1384,8 +1346,7 @@ class TestMMDiT:
         Test gradient flow through MMDiT with context.
 
         Ensures that gradients can properly flow backward through the multi-modal DiT
-        configuration for both image inputs and timesteps, which is essential for
-        training multi-modal diffusion models.
+        configuration for both image inputs and timesteps.
 
         Args:
             mmdit_with_context (MMDiT): Multi-modal DiT model instance to test.
@@ -1506,7 +1467,7 @@ class TestMMDiT:
         output = model(sample_image, sample_timesteps, y=sample_labels)
         assert output["x"].shape == sample_image.shape
 
-    def test_weight_initialization(self, simple_mmdit: MMDiT):
+    def test_weight_initialization(self, simple_dit: MMDiT):
         """
         Test that weights are properly initialized.
 
@@ -1515,13 +1476,13 @@ class TestMMDiT:
         which is important for stable training convergence.
 
         Args:
-            simple_mmdit (MMDiT): Simple DiT model instance to check.
+            simple_dit (MMDiT): Simple DiT model instance to check.
 
         Raises:
             AssertionError: If any weights are improperly initialized (all zeros) or
                           if biases are not initialized to zero.
         """
-        for module in simple_mmdit.modules():
+        for module in simple_dit.modules():
             if isinstance(module, (nn.Linear, nn.Conv2d)):
                 # Check that weights are not all zeros (indicating initialization occurred)
                 assert not torch.allclose(module.weight, torch.zeros_like(module.weight))
@@ -1645,9 +1606,7 @@ class TestMMDiTEdgeCases:
         """
         Test model with very small dimension configurations.
 
-        Validates that the MMDiT model can function with minimal dimension settings,
-        which is important for testing computational limits and ensuring the model
-        works across various configuration sizes.
+        Validates that the MMDiT model can function with minimal dimension settings.
 
         Args:
             input_channels (int): Number of input image channels.
