@@ -15,6 +15,7 @@ trainer:
   project_name: imagenet_repa_flow_matching
   n_epoch: 150
   precision_type: "bf16"
+  p_classifier_free_guidance: 0.2
 
 model:
   input_channels: 32

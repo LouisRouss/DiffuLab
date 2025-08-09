@@ -97,6 +97,7 @@ def train(cfg: DictConfig):
         val_dataloader=val_loader,
         log_validation_images=cfg.trainer.log_validation_images,
         val_steps=cfg.trainer.get("val_steps", 50),
+        p_classifier_free_guidance=cfg.trainer.get("p_classifier_free_guidance", 0),
     )
 
 
