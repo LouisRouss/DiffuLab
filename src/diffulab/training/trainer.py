@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, cast
 
 import torch
 import wandb
@@ -288,14 +288,15 @@ class Trainer:
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
+        guidance_scale = 4 if diffuser.denoiser.classifier_free else 0
 
         if self.use_ema and ema_eval is not None:
             original_model = diffuser.denoiser
             diffuser.denoiser = ema_eval
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=4.0)
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
             diffuser.denoiser = original_model
         else:
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=4.0)
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
 
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
@@ -312,7 +313,7 @@ class Trainer:
         per_batch_scheduler: bool = False,
         log_validation_images: bool = False,
         train_embedder: bool = False,
-        p_classifier_free_guidance: float = 0,
+        p_classifier_free_guidance: float = 0.2,
         val_steps: int = 50,
         optimizer_ckpt: str | None = None,
         denoiser_ckpt: str | None = None,
@@ -339,7 +340,7 @@ class Trainer:
             train_embedder (bool, optional): Whether to train the context embedder if present.
                 Defaults to False.
             p_classifier_free_guidance (float, optional): Probability of using classifier-free
-                guidance during training. Defaults to 0.
+                guidance during training. Defaults to 0.2
             val_steps (int, optional): Number of steps to use for validation image generation.
                 Defaults to 50.
             ema_ckpt (str | None, optional): Path to EMA model checkpoint for loading pretrained
@@ -353,6 +354,9 @@ class Trainer:
             - Model checkpoints are saved when validation loss improves.
             - EMA model is used for validation if enabled.
         """
+        if not diffuser.denoiser.classifier_free:
+            p_classifier_free_guidance = 0
+
         if self.use_ema:
             ema_denoiser = EMA(
                 diffuser.denoiser,
@@ -362,7 +366,7 @@ class Trainer:
             ).to(self.accelerator.device)
             if ema_ckpt:
                 ema_denoiser.ema_model.load_state_dict(torch.load(ema_ckpt, weights_only=True))  # type: ignore
-            ema_denoiser = self.accelerator.prepare(ema_denoiser)  # type: ignore
+            ema_denoiser = cast(EMA, self.accelerator.prepare(ema_denoiser))  # type: ignore
         else:
             ema_denoiser = None
 
@@ -440,10 +444,12 @@ class Trainer:
 
             if val_dataloader is not None:
                 diffuser.eval()  # type: ignore
+                ema_eval: Denoiser | None = None
                 if ema_denoiser is not None:
-                    ema_eval = ema_denoiser.eval()  # type: ignore
-                else:
-                    ema_eval = None
+                    ema_eval = cast(
+                        Denoiser,
+                        ema_denoiser.eval(),
+                    )
                 tq_val_batch = tqdm(
                     val_dataloader,  # type: ignore
                     disable=not self.accelerator.is_main_process,
