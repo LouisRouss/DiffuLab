@@ -19,6 +19,7 @@ from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:
     from diffulab.diffuse.diffuser import Diffuser
+    from diffulab.training.losses.common import LossFunction
 
 HOME_PATH = Path.home()
 
@@ -236,19 +237,22 @@ class Trainer:
                 If provided, its state will be saved. Defaults to None.
         Note:
             The following files are created in self.save_path:
-            - denoiser.pth: Main model state dict
-            - optimizer.pth: Optimizer state dict
-            - ema.pth: EMA model state dict (if EMA is used)
-            - scheduler.pth: Scheduler state dict (if scheduler is used)
+            - denoiser.pt: Main model state dict
+            - optimizer.pt: Optimizer state dict
+            - ema.pt: EMA model state dict (if EMA is used)
+            - scheduler.pt: Scheduler state dict (if scheduler is used)
         """
         unwrapped_denoiser: Denoiser = self.accelerator.unwrap_model(diffuser.denoiser)  # type: ignore
-        self.accelerator.save(unwrapped_denoiser.state_dict(), self.save_path / "denoiser.pth")  # type: ignore
-        self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pth")  # type: ignore
+        self.accelerator.save(unwrapped_denoiser.state_dict(), self.save_path / "denoiser.pt")  # type: ignore
+        self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pt")  # type: ignore
         if ema_denoiser is not None:
             unwrapped_ema: Denoiser = self.accelerator.unwrap_model(ema_denoiser)  # type: ignore
-            self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pth")  # type: ignore
+            self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pt")  # type: ignore
         if scheduler is not None:
-            self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pth")  # type: ignore
+            self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pt")  # type: ignore
+        for extra_loss in diffuser.extra_losses:
+            unwrapped_loss: "LossFunction" = self.accelerator.unwrap_model(extra_loss)  # type: ignore
+            unwrapped_loss.save(self.save_path, self.accelerator)  # type: ignore
 
     @torch.no_grad()  # type: ignore
     def log_images(
@@ -288,10 +292,10 @@ class Trainer:
         if self.use_ema and ema_eval is not None:
             original_model = diffuser.denoiser
             diffuser.denoiser = ema_eval
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=4.0)
             diffuser.denoiser = original_model
         else:
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=4.0)
 
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")

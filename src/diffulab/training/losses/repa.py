@@ -1,6 +1,8 @@
+from pathlib import Path
 from typing import Any, TypedDict
 
 import torch
+from accelerate import Accelerator  # type: ignore
 from jaxtyping import Float
 from torch import Tensor, nn
 
@@ -73,6 +75,30 @@ class RepaLoss(LossFunction):
         self._register_hook(self.denoiser)
         self.src_features: Tensor | None = None
         self.coeff = coeff
+
+    def save(self, path: str | Path, accelerator: Accelerator | None = None) -> None:
+        """
+        Save state dict containing projection (and resampler if present).
+
+        Args:
+            path (str | Path): Path to save the loss function.
+            accelerator (Accelerator | None): Accelerator instance for distributed training. Uses
+                accelerator.save if provided.
+        """
+        file_path = Path(path) / "RepaLoss.pt"
+
+        merged_state = {}
+        for k, v in self.proj.state_dict().items():
+            merged_state[f"proj.{k}"] = v
+        if self.resampler is not None:
+            for k, v in self.resampler.state_dict().items():
+                merged_state[f"resampler.{k}"] = v
+
+        if accelerator:
+            accelerator.save(merged_state, file_path)  # type: ignore
+            return
+
+        torch.save(merged_state, file_path)  # type: ignore
 
     def _register_hook(self, model: MMDiT) -> None:
         """Register the forward hook on the specified layer of the model."""
