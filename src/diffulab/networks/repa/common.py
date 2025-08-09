@@ -5,6 +5,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torchvision.transforms as transforms  # type: ignore[reportMissingTypeStub]
+from jaxtyping import Float
 from PIL import Image
 from streaming import StreamingDataset
 from streaming.base import MDSWriter
@@ -34,7 +35,9 @@ class REPA(nn.Module, ABC):
         """
 
     @abstractmethod
-    def preprocess(self, x: Tensor) -> Tensor:
+    def preprocess(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size channels height width"]:
         """
         Preprocess the input tensor before encoding.
 
@@ -47,7 +50,7 @@ class REPA(nn.Module, ABC):
         """
 
     @abstractmethod
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Float[Tensor, "batch_size channels height width"]) -> Float[Tensor, "batch_size seq_len dim"]:
         """
         Forward pass of the encoder. Preprocesses the input tensor and returns the encoded representation.
 

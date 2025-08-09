@@ -15,8 +15,8 @@ class BatchData(TypedDict, total=False):
     extra: NotRequired[dict[str, Tensor | None]]
 
 
-class DiffusionDataset(Dataset[BatchData], ABC):
-    """Base class for datasets used in diffusion models.
+class BaseDataset(Dataset[BatchData], ABC):
+    """Base class for basic datasets used in diffusion models.
 
     This abstract class defines the common interface that all diffusion datasets
     should implement, ensuring consistency across different data sources.
@@ -32,7 +32,7 @@ class DiffusionDataset(Dataset[BatchData], ABC):
         """Load and preprocess the dataset images and labels.
 
         Returns:
-            Tuple containing (images, labels) arrays
+            tuple: tuple containing (images, labels) arrays
         """
         pass
 
@@ -44,12 +44,20 @@ class DiffusionDataset(Dataset[BatchData], ABC):
             image: The raw image data
 
         Returns:
-            Preprocessed image data
+            NDArray: Preprocessed image data
         """
         pass
 
     def __len__(self) -> int:
-        """Return the number of samples in the dataset."""
+        """
+        Return the number of samples in the dataset.
+
+        Returns:
+            int: Number of samples in the dataset
+        Raises:
+            ValueError: If the dataset has not been initialized properly (e.g., images are None)
+        """
+
         if self.images is None:
             raise ValueError("Dataset has not been initialized properly. Images are None.")
         return len(self.images)
@@ -61,7 +69,7 @@ class DiffusionDataset(Dataset[BatchData], ABC):
             idx: Index of the sample to get
 
         Returns:
-            Dictionary containing 'x' (image tensor) and 'y' (label tensor)
+            BatchData: Dictionary containing 'model_inputs' and 'extra' (eventual additional data for loss functions)
         """
         if self.images is None or self.labels is None:
             raise ValueError("Dataset has not been initialized properly. Images or labels are None.")

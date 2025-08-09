@@ -9,8 +9,6 @@ from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelOutput
 from diffulab.training.losses.common import LossFunction
 
 
-# replace function at, bt etc ... By actually precomputing the values and storing them for every timestep
-# more efficient
 class Flow(Diffusion):
     """
     Flow-based diffusion model.
@@ -224,6 +222,10 @@ class Flow(Diffusion):
                 in the range [0, 1].
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
+            extra_losses (list[LossFunction], optional): Additional loss functions to compute
+                alongside the main loss. Defaults to an empty list.
+            extra_args (dict[str, Any], optional): Additional arguments for the loss computation.
+                Defaults to an empty dictionary.
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:
@@ -235,11 +237,13 @@ class Flow(Diffusion):
         x_0 = model_inputs["x"].clone()
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
         prediction: ModelOutput = model(**model_inputs, timesteps=timesteps)
+
         # Compute flow matching loss
         losses = ((noise - x_0) - prediction["x"]) ** 2
         losses = losses.reshape(losses.shape[0], -1).mean(dim=-1)
         loss = losses.mean()
         loss_dict = {"loss": loss}
+
         # Compute extra losses if any
         for extra_loss in extra_losses:
             e_loss = cast(Tensor, extra_loss(**extra_args))

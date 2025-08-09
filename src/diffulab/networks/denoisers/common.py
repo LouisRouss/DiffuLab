@@ -19,6 +19,8 @@ class ModelOutput(TypedDict, total=False):
 
 
 class Denoiser(nn.Module, ABC):
+    classifier_free: bool
+
     def __init__(self):
         super().__init__()  # type: ignore
 

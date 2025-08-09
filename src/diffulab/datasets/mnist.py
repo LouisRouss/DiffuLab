@@ -5,10 +5,10 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from diffulab.datasets.base import DiffusionDataset
+from diffulab.datasets.base import BaseDataset
 
 
-class MNISTDataset(DiffusionDataset):
+class MNISTDataset(BaseDataset):
     """MNIST dataset for diffusion models."""
 
     def __init__(self, data_path: str, train: bool = True):

@@ -5,7 +5,7 @@ from typing import Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from jaxtyping import Float
+from jaxtyping import Float, Int
 from torch import Tensor
 
 
@@ -17,8 +17,11 @@ class GroupNorm32(nn.GroupNorm):
 def normalization(channels: int) -> GroupNorm32:
     """
     Make a standard normalization layer.
-    :param channels: number of input channels.
-    :return: an nn.Module for normalization.
+
+    Args:
+        channels (int): number of input channels.
+    Returns:
+        GroupNorm32: an nn.Module for normalization.
     """
     return GroupNorm32(32, channels)
 
@@ -28,12 +31,15 @@ class Upsample(nn.Module):
     From https://github.com/openai/guided-diffusion under MIT license as of 2024-18-08
 
     An upsampling layer with an optional convolution.
-    :param channels: channels in the inputs and outputs.
-    :param use_conv: a bool determining if a convolution is applied.
-
     """
 
     def __init__(self, channels: int, use_conv: bool, out_channels: int | None = None) -> None:
+        """
+        Args:
+            channels (int): channels in the inputs and outputs.
+            use_conv (bool): a bool determining if a convolution is applied.
+            out_channels (int | None): if provided, the number of output channels.
+        """
         super().__init__()  # type:ignore
         self.channels = channels
         self.out_channels = out_channels or channels
@@ -41,7 +47,9 @@ class Upsample(nn.Module):
         if use_conv:
             self.conv = nn.Conv2d(self.channels, self.out_channels, 3, padding=1)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size channels 2*height 2*width"]:
         assert x.shape[1] == self.channels
         x = F.interpolate(x, scale_factor=2, mode="nearest")  # type: ignore
         if self.use_conv:
@@ -54,11 +62,15 @@ class Downsample(nn.Module):
     From https://github.com/openai/guided-diffusion under MIT license as of 2024-18-08
 
     A downsampling layer with an optional convolution.
-    :param channels: channels in the inputs and outputs.
-    :param use_conv: a bool determining if a convolution is applied.
     """
 
     def __init__(self, channels: int, use_conv: bool, out_channels: int | None = None) -> None:
+        """
+        Args:
+            channels (int): channels in the inputs and outputs.
+            use_conv (bool): a bool determining if a convolution is applied.
+            out_channels (int | None): if provided, the number of output channels.
+        """
         super().__init__()  # type:ignore
         self.channels = channels
         self.out_channels = out_channels or channels
@@ -70,21 +82,27 @@ class Downsample(nn.Module):
             assert self.channels == self.out_channels
             self.op = nn.AvgPool2d(kernel_size=stride, stride=stride)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size channels height//2 width//2"]:
         assert x.shape[1] == self.channels
         return self.op(x)
 
 
-def timestep_embedding(timesteps: Tensor, dim: int, max_period: int = 10000) -> Tensor:
+def timestep_embedding(
+    timesteps: Float[Tensor, "batch_size"], dim: int, max_period: int = 10000
+) -> Float[Tensor, "batch_size dim"]:
     """
     From https://github.com/openai/guided-diffusion under MIT license as of 2024-18-08
 
     Create sinusoidal timestep embeddings.
-    :param timesteps: a 1-D Tensor of N indices, one per batch element.
-                      These may be fractional.
-    :param dim: the dimension of the output.
-    :param max_period: controls the minimum frequency of the embeddings.
-    :return: an [N x dim] Tensor of positional embeddings.
+
+    Args:
+        timesteps (Tensor): a 1D tensor of timesteps.
+        dim (int): the dimension of the output embeddings.
+        max_period (int): the maximum period for the sinusoidal functions.
+    Returns:
+        Tensor: a 2D tensor of shape [len(timesteps), dim] containing the sinusoidal embeddings.
     """
     half = dim // 2
     freqs = torch.exp(-math.log(max_period) * torch.arange(start=0, end=half, dtype=torch.float32) / half).to(
@@ -99,6 +117,12 @@ def timestep_embedding(timesteps: Tensor, dim: int, max_period: int = 10000) -> 
 
 class LabelEmbed(nn.Module):
     def __init__(self, num_classes: int, embed_dim: int, classifier_free_guidance: bool = False) -> None:
+        """
+        Args:
+            num_classes (int): the number of classes.
+            embed_dim (int): the dimension of the embeddings.
+            classifier_free_guidance (bool): if True, the embedding layer will have an extra class for classifier-free guidance.
+        """
         super().__init__()  # type: ignore
         self.num_classes = num_classes
         self.embed_dim = embed_dim
@@ -111,23 +135,28 @@ class LabelEmbed(nn.Module):
 
     def drop_labels(
         self,
-        labels: Tensor,
+        labels: Int[Tensor, "batch_size"],
         p: float,
     ) -> Tensor:
         """
         Randomly drop labels from a batch.
-        :param labels: an [N] tensor of labels.
-        :param p: the probability of dropping a label.
-        :return: an [N] tensor of modified labels.
+
+        Args:
+            labels (Tensor): an [N] tensor of labels.
+            p (float): the probability of dropping a label.
+        Returns:
+            Tensor: a tensor of labels with some labels randomly replaced by the extra class
         """
         return torch.where(torch.rand(labels.size(), device=labels.device) < p, self.num_classes, labels)
 
-    def forward(self, labels: Tensor, p: float = 0) -> Tensor:
+    def forward(self, labels: Int[Tensor, "batch_size"], p: float = 0) -> Float[Tensor, "batch_size embed_dim"]:
         """
         Embed a batch of labels.
-        :param labels: an [N] tensor of labels.
-        :param p: the probability of dropping a label.
-        :return: an [N x embed_dim] tensor of embeddings.
+        Args:
+            labels (Tensor): a [N] tensor of labels.
+            p (float): the probability of dropping a label. If greater than 0, labels will be randomly replaced by the extra class.
+        Returns:
+            Tensor: an [N, embed_dim] tensor of embeddings.
         """
         if p > 0:
             assert self.classifier_free_guidance, "Label dropout is only supported with classifier-free guidance."
@@ -140,8 +169,17 @@ class RotaryPositionalEmbedding(nn.Module):
     theta: Tensor
     cos: Tensor
     sin: Tensor
+    """
+    Rotary Positional Embedding (RoPE) module.
+    This module applies rotary positional encoding to the query and key tensors in a multi-head attention mechanism.
+    """
 
     def __init__(self, dim: int = 32, base: int = 10_000) -> None:
+        """
+        Args:
+            dim (int): the dimension of the positional encoding.
+            base (int): the base for the exponential decay of frequencies.
+        """
         super().__init__()  # type: ignore
         self.dim = dim
         self.base = base
@@ -155,6 +193,11 @@ class RotaryPositionalEmbedding(nn.Module):
         self.sin = torch.empty(0, requires_grad=False)
 
     def _cache(self, seq_len: int) -> None:
+        """
+        Cache the cosine and sine values for the given sequence length.
+        Args:
+            seq_len (int): the length of the sequence for which to cache the values.
+        """
         if seq_len <= self.cos.shape[0]:
             return
         t = torch.arange(seq_len, dtype=torch.float32, device=self.theta.device)  # type: ignore
@@ -164,7 +207,9 @@ class RotaryPositionalEmbedding(nn.Module):
             self.cos = embs.cos().float()
             self.sin = embs.sin().float()
 
-    def _neg_half(self, x: Tensor) -> Tensor:
+    def _neg_half(
+        self, x: Float[Tensor, "batch_size num_heads seq_length head_dim"]
+    ) -> Float[Tensor, "batch_size num_heads seq_length head_dim"]:
         return torch.cat([-x[:, :, :, self.dim // 2 :], x[:, :, :, : self.dim // 2]], dim=-1)
 
     def forward(
@@ -177,6 +222,16 @@ class RotaryPositionalEmbedding(nn.Module):
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
     ]:
+        """
+        Apply Rotary Positional Encoding to the query and key tensors.
+
+        Args:
+            q (Tensor): the query tensor of shape [batch_size, seq_len, n_heads, head_dim].
+            k (Tensor): the key tensor of shape [batch_size, seq_len, n_heads, head_dim].
+            v (Tensor): the value tensor of shape [batch_size, seq_len, n_heads, head_dim].
+        Returns:
+            Tuple[Tensor, Tensor, Tensor]: the rotated query and key tensors, and the unchanged value tensor.
+        """
         seq_len = q.shape[1]
         self._cache(seq_len)
         cos = self.cos.to(device=q.device, dtype=q.dtype)
