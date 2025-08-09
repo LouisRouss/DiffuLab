@@ -26,16 +26,19 @@ class ContextEmbedder(nn.Module, ABC):
         pass
 
     @abstractmethod
-    def drop_context(
+    def drop_conditions(
         self,
-        drop_context: Any,
+        context: Any,
         p: float,
     ) -> Any:
         """
         Randomly drop drop_context from a batch.
-        :param drop_context: an [N] sequence of context.
-        :param p: the probability of dropping a context.
-        :return: an [N] sequence of modified context.
+
+        Args:
+            drop_context (Any): a sequence of context.
+            p (float): the probability of dropping a context.
+        Returns
+            Any: the same sequence of context with some elements randomly dropped.
         """
         pass
 
@@ -43,8 +46,11 @@ class ContextEmbedder(nn.Module, ABC):
     def forward(self, context: Any, p: float) -> tuple[Tensor, ...]:
         """
         Apply the model to an input batch.
-        :param context: context, can be a tensor or a list of str for example.
-        :param p: the probability of dropping the context.
-        :return: an [N x C x ...] Tensor of outputs.
+
+        Args:
+            context (Any): the input batch, can be a tensor or a list of str for example.
+            p (float): the probability of dropping the context.
+        Returns:
+            tuple[Tensor, ...]: a tuple of tensors representing the embeddings.
         """
         pass

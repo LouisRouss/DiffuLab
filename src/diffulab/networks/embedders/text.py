@@ -3,6 +3,7 @@ import random
 from pathlib import Path
 
 import torch
+from jaxtyping import Float
 from open_clip import create_model_from_pretrained, get_tokenizer  # type: ignore
 from torch import Tensor
 from transformers import AutoTokenizer, CLIPTextModel, T5EncoderModel  # type: ignore
@@ -11,6 +12,31 @@ from diffulab.networks.embedders.common import ContextEmbedder
 
 
 class SD3TextEmbedder(ContextEmbedder):
+    """
+    Composite text embedder combining CLIP-L/14, CLIP-bigG/14 and T5 XXL.
+
+    This class mirrors the text conditioning strategy used by Stable Diffusion 3
+    where multiple powerful language / text encoders are fused. Each encoder can
+    be toggled on/off at construction.
+
+    The forward path returns two tensors:
+
+    * pooled: Concatenated pooled CLIP embeddings of shape ``[B, 2048]``
+      (``768 + 1280``) when both CLIP encoders are enabled.
+    * full_encoding: A composite sequence embedding formed by (a) concatenating
+      the token-level hidden states of CLIP-L/14 and CLIP-bigG/14 along the last
+      dimension with zero padding to match the T5 hidden size (4096), then (b)
+      concatenating that padded CLIP block with the T5 hidden states along the
+      sequence dimension. Resulting shape is ``[B, N_clip + N_t5, 4096]`` where
+      ``N_clip`` is the (padded) CLIP token length and ``N_t5`` the T5 token length.
+
+    Args:
+        device (str | torch.device): Torch device or device string for model instantiation & tensors.
+        load_l14 (bool): Whether to load CLIP ViT-L/14 encoder.
+        load_g14 (bool): Whether to load CLIP ViT-bigG/14 encoder.
+        load_t5 (bool): Whether to load T5 v1.1 XXL encoder.
+    """
+
     def __init__(
         self, device: str | torch.device = "cuda", load_l14: bool = True, load_g14: bool = True, load_t5: bool = True
     ) -> None:
@@ -45,23 +71,67 @@ class SD3TextEmbedder(ContextEmbedder):
 
     @property
     def n_output(self) -> int:
+        """Number of logical outputs produced by the embedder.
+
+        Returns:
+            int: Always ``2`` (``pooled`` and ``full_encoding``).
+        """
         return 2
 
     @property
     def output_size(self) -> tuple[int, int]:
+        """Dimensionalities of the two outputs.
+
+        Returns:
+            tuple[int, int]: ``(2048, 4096)`` representing the feature dimension
+            of the pooled CLIP embedding and the hidden size of the composite
+            sequence embedding respectively.
+        """
         return (2048, 4096)
 
     def dict_to_device(self, d: dict[str, Tensor]) -> dict[str, Tensor]:
+        """Move all tensors in a dictionary to the configured device.
+
+        Args:
+            d (dict[str, Tensor]): Mapping of string keys to tensors.
+
+        Returns:
+            dict[str, Tensor]: Same mapping with tensors moved to ``self.device``.
+        """
         return {k: v.to(self.device) for k, v in d.items()}
 
-    def get_l14_embeddings(self, context: list[str]) -> tuple[Tensor, Tensor]:
+    def get_l14_embeddings(
+        self, context: list[str]
+    ) -> tuple[Float[Tensor, "batch_size seq_len 768"], Float[Tensor, "batch_size 768"]]:
+        """Compute CLIP ViT-L/14 token and pooled embeddings.
+
+        Args:
+            context (list[str]): List of input prompt strings.
+
+        Returns:
+            tuple[Tensor, Tensor]:
+                * last_hidden_state: Shape ``[B, N_ctx, 768]``
+                * pooled_output: Shape ``[B, 768]`` (CLIP text projection output)
+        """
         inputs_l14 = self.dict_to_device(self.tokenizer_l14(context, return_tensors="pt", padding=True))  # type: ignore
         outputs_l14 = self.clip_l14(**inputs_l14)  # type: ignore
         last_hidden_state = outputs_l14["last_hidden_state"]  # [batch_size, n_ctx, 768]
         pooled_output = outputs_l14["pooler_output"]  # [batch_size, 768]
         return last_hidden_state, pooled_output
 
-    def get_g14_embeddings(self, context: list[str]) -> Tensor:
+    def get_g14_embeddings(
+        self, context: list[str]
+    ) -> tuple[Float[Tensor, "batch_size seq_len 1280"], Float[Tensor, "batch_size 1280"]]:
+        """Compute CLIP ViT-bigG/14 token and pooled embeddings.
+
+        Args:
+            context (list[str]): List of input prompt strings.
+
+        Returns:
+            tuple[Tensor, Tensor]:
+                * last_hidden_state: Shape ``[B, N_ctx, 1280]``
+                * pooled_output: Shape ``[B, 1280]`` (selection at EOS token)
+        """
         inputs_g14 = self.tokenizer_g14(context).to(self.device)
         cast_dtype = self.clip_g14.get_cast_dtype()  # type: ignore
 
@@ -76,7 +146,15 @@ class SD3TextEmbedder(ContextEmbedder):
 
         return last_hidden_state, pooled_output  # type: ignore
 
-    def get_t5_embeddings(self, context: list[str]) -> Tensor:
+    def get_t5_embeddings(self, context: list[str]) -> Float[Tensor, "batch_size seq_len 4096"]:
+        """Compute T5 XXL token-level embeddings.
+
+        Args:
+            context (list[str]): List of input prompt strings.
+
+        Returns:
+            Tensor: Last hidden state of shape ``[B, N_ctx, 4096]``.
+        """
         inputs_t5_list: dict[str, list[int]] = self.tokenizer_t5(context)  # type: ignore
         inputs_t5: dict[str, Tensor] = {
             key: torch.tensor(value, dtype=torch.long, device=self.device)
@@ -85,26 +163,45 @@ class SD3TextEmbedder(ContextEmbedder):
         last_hidden_state: Tensor = self.t5(**inputs_t5)["last_hidden_state"]  # [batch_size, n_ctx, 4096]
         return last_hidden_state
 
-    def get_embeddings(
-        self, context_l14: list[str], context_g14: list[str], context_t5: list[str]
-    ) -> dict[str, Tensor]:
+    def get_embeddings(self, context: list[str]) -> dict[str, Tensor]:
+        """Obtain embeddings for the enabled encoders.
+
+        Args:
+            context (list[str]): List of input prompt strings.
+
+        Returns:
+            dict[str, Tensor]: Mapping with keys among ``{"l14", "l14_pooled", "g14", "g14_pooled", "t5"}``.
+        """
         outputs: dict[str, Tensor] = {}
         if self.load_l14:
-            outputs_l14 = self.get_l14_embeddings(context_l14)  # [batch_size, n_ctx, 768]
+            outputs_l14 = self.get_l14_embeddings(context)  # [batch_size, n_ctx, 768]
             outputs["l14"] = outputs_l14[0]
             outputs["l14_pooled"] = outputs_l14[1]
         if self.load_g14:
-            outputs_g14 = self.get_g14_embeddings(context_g14)  # [batch_size, n_ctx, 1280]
+            outputs_g14 = self.get_g14_embeddings(context)  # [batch_size, n_ctx, 1280]
             outputs["g14"] = outputs_g14[0]
             outputs["g14_pooled"] = outputs_g14[1]
         if self.load_t5:
-            outputs_t5 = self.get_t5_embeddings(context_t5)  # [batch_size, n_ctx, 4096]
+            outputs_t5 = self.get_t5_embeddings(context)  # [batch_size, n_ctx, 4096]
             outputs["t5"] = outputs_t5
         return outputs
 
     def create_cache_from_list(
         self, context: list[str], batch_size: int = 8, path_to_save: str | Path = Path.home() / "saved_embeddings"
     ) -> None:
+        """Compute and persist embeddings for a list of prompts.
+
+        Each prompt's pooled CLIP embedding and composite full encoding are
+        stored separately as ``<index>.pt`` along with a ``<index>.txt`` file
+        containing the raw prompt string to allow later reconstruction.
+
+        Existing cached indices are detected so new prompts append seamlessly.
+
+        Args:
+            context: List of prompt strings to encode.
+            batch_size: Number of prompts per forward pass. ``-1`` processes all at once.
+            path_to_save: Directory where embeddings will be written / appended.
+        """
         path_to_save = Path(path_to_save)
         path_to_save.mkdir(parents=True, exist_ok=True)
 
@@ -129,16 +226,38 @@ class SD3TextEmbedder(ContextEmbedder):
                 with (path_to_save / f"{begins + i + b}.txt").open("r") as f:
                     f.write(context[i + b])
 
-    def drop_conditions(self, context: list[str], p: float) -> tuple[list[str], list[str], list[str]]:
-        context_l14 = ["" if random.random() < p else c for c in context]
-        context_g14 = ["" if random.random() < p else c for c in context]
-        context_t5 = ["" if random.random() < p else c for c in context]
-        return context_l14, context_g14, context_t5
+    def drop_conditions(self, context: list[str], p: float) -> list[str]:
+        """Randomly drop prompts for classifier-free guidance style training.
 
-    def forward(self, context: list[str], p: float) -> tuple[Tensor, Tensor]:
+        Args:
+            context (list[str]): Original list of prompt strings.
+            p (float): Drop probability.
+
+        Returns:
+            list[str]: context with some entries replaced by empty strings.
+        """
+        return ["" if random.random() < p else c for c in context]
+
+    def forward(
+        self, context: list[str], p: float
+    ) -> tuple[Float[Tensor, "batch_size 2048"], Float[Tensor, "batch_size seq_len 4096"]]:
+        """Forward pass producing pooled and composite sequence embeddings.
+
+        Args:
+            context: List of input prompt strings.
+            p: Probability to drop each prompt (per encoder) for classifier-free guidance.
+
+        Returns:
+            tuple[Tensor, Tensor]:
+                * pooled: Shape ``[B, 2048]`` concatenated pooled CLIP features.
+                * full_encoding: Shape ``[B, seq_len, 4096]`` composite sequence embedding.
+
+        Raises:
+            AssertionError: If any of the required encoders (l14, g14, t5) were disabled at init.
+        """
         assert self.load_l14 and self.load_g14 and self.load_t5
-        context_l14, context_g14, context_t5 = self.drop_conditions(context, p)
-        embeddings = self.get_embeddings(context_l14, context_g14, context_t5)
+        context = self.drop_conditions(context, p)
+        embeddings = self.get_embeddings(context)
         pooled = torch.cat([embeddings["l14_pooled"], embeddings["g14_pooled"]], dim=-1)
         full_encoding_clip = torch.cat(
             [
