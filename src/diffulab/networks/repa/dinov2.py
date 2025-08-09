@@ -3,6 +3,7 @@ from typing import cast
 import timm
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from torch import Tensor
 from torchvision.transforms import Normalize  # type: ignore[reportMissingTypeStub]
@@ -64,7 +65,9 @@ class DinoV2(REPA):
         """
         return self._embedding_dim
 
-    def preprocess(self, x: Tensor) -> Tensor:
+    def preprocess(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size channels height width"]:
         # Normalize the input tensor to be between 0 and 1
         if x.min() >= 0 and x.max() <= 255:  # Case: 0-255
             x = x.float() / 255.0
@@ -86,7 +89,7 @@ class DinoV2(REPA):
         )
         return x
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Float[Tensor, "batch_size channels height width"]) -> Float[Tensor, "batch_size seq_len dim"]:
         """
         Forward pass of the encoder.
         Args:

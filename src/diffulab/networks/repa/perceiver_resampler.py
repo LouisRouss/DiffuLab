@@ -12,14 +12,29 @@ from diffulab.networks.utils.nn import RotaryPositionalEmbedding
 
 
 def exists(val: Any) -> bool:
-    """
-    Check if an object is not None.
+    """Return True if ``val`` is not ``None``.
+
+    Args:
+        val: Object to test.
+
+    Returns:
+        bool: ``True`` when the object is not ``None`` else ``False``.
     """
     return val is not None
 
 
-# ROPE only on k
 class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
+    """Rotary positional embedding applied only to keys.
+
+    This subclass restricts rotary application to the key tensor (``k``) while
+    passing queries and values through unchanged. It caches precomputed cosine
+    and sine tables via the parent implementation.
+
+    Args:
+        dim (int): Rotary embedding dimension (applied to the leading slice of the key head dimension).
+        base (int): Base for rotary frequency computation.
+    """
+
     def __init__(self, dim: int = 32, base: int = 10_000) -> None:
         super().__init__(dim, base)  # type: ignore
 
@@ -33,6 +48,17 @@ class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
     ]:
+        """Apply rotary embedding to the key tensor only.
+
+        Args:
+            q (Tensor): Query tensor of shape ``[B, N, H, D]``.
+            k (Tensor): Key tensor of shape ``[B, N, H, D]``.
+            v (Tensor): Value tensor of shape ``[B, N, H, D]``.
+
+        Returns:
+            tuple: ``(q, k_rot, v)`` with identical shapes where ``k_rot`` has
+            the first ``dim`` key channels rotated.
+        """
         seq_len = k.shape[1]
         self._cache(seq_len)
         cos = self.cos.to(device=k.device, dtype=k.dtype)
@@ -54,13 +80,16 @@ class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
 
 
 def FeedForward(dim: int, mult: float = 4) -> nn.Sequential:
-    """
-    A simple feed-forward module with a GELU activation function.
+    """Feed-forward MLP block with GELU activation.
+
+    Structure: LayerNorm -> Linear(dim, dim*mult) -> GELU -> Linear(dim*mult, dim).
+
     Args:
-        dim (int): Input and output dimension of the network.
-        mult (float): Multiplier for the inner dimension.
+        dim (int): Input / output embedding dimension.
+        mult (int): Width multiplier for the hidden layer.
+
     Returns:
-        nn.Sequential: A sequential model containing LayerNorm, Linear, GELU, and another Linear layer.
+        nn.Sequential: Configured feed-forward network.
     """
     inner_dim = int(dim * mult)
     return nn.Sequential(
@@ -69,7 +98,22 @@ def FeedForward(dim: int, mult: float = 4) -> nn.Sequential:
 
 
 class PerceiverAttention(nn.Module):
-    def __init__(self, dim: int, head_dim: int = 64, num_heads: int = 8, partial_rotary_factor: int = 1) -> None:
+    """Cross-attention layer between inputs and a set of latent tokens.
+
+    Queries are derived from latent tokens; keys/values are concatenation of
+    (projected) input tokens and latent tokens (self-attention augmentation).
+
+    Rotary positional embedding (optionally partial) is applied only to the key
+    originating from the input tokens.
+
+    Args:
+        dim (int): Embedding dimension of inputs and latents.
+        head_dim (int): Dimension per attention head.
+        num_heads (int): Number of attention heads.
+        partial_rotary_factor (float): Fraction (0..1] of ``head_dim`` receiving rotary embedding.
+    """
+
+    def __init__(self, dim: int, head_dim: int = 64, num_heads: int = 8, partial_rotary_factor: float = 1) -> None:
         super().__init__()  # type: ignore[reportUnknownMemberType]
         self.scale = head_dim**-0.5
         self.num_heads = num_heads
@@ -88,6 +132,16 @@ class PerceiverAttention(nn.Module):
     def forward(
         self, x: Float[Tensor, "batch n dim"], latents: Float[Tensor, "batch m dim"]
     ) -> Float[Tensor, "batch m dim"]:
+        """
+        Perform Perceiver cross/self attention update on latent tokens.
+
+        Args:
+            x (Tensor): Input sequence embeddings of shape ``[B, N, D]``.
+            latents (Tensor): Current latent tokens of shape ``[B, M, D]``.
+
+        Returns:
+            Tensor: Updated latent tokens of shape ``[B, M, D]``.
+        """
         x = self.norm_x(x)
         latents = self.norm_latents(latents)
 
@@ -124,6 +178,22 @@ class PerceiverAttention(nn.Module):
 
 
 class PerceiverResampler(nn.Module):
+    """
+    Stack of Perceiver attention + feed-forward layers producing latents.
+
+    A learned set of ``num_latents`` tokens is iteratively refined via cross-
+    attention with the input sequence followed by a feed-forward block (each
+    with residual connections). The final normalized latent set is returned.
+
+    Args:
+        dim (int): Embedding dimension for inputs and latents.
+        depth (int): Number of attention + feed-forward layers.
+        head_dim (int): Dimension per attention head.
+        num_heads (int): Number of attention heads.
+        ff_mult (int): Multiplier for hidden dimension in feed-forward layers.
+        num_latents (int): Number of learned latent tokens to maintain.
+    """
+
     def __init__(
         self, dim: int, depth: int, head_dim: int = 64, num_heads: int = 8, ff_mult: int = 4, num_latents: int = 16
     ):
@@ -144,6 +214,14 @@ class PerceiverResampler(nn.Module):
         self.norm = nn.LayerNorm(dim)
 
     def forward(self, x: Float[Tensor, "batch n dim"]) -> Float[Tensor, "batch m dim"]:
+        """Encode an input sequence into a fixed set of latent tokens.
+
+        Args:
+            x: Input embeddings of shape ``[B, N, D]``.
+
+        Returns:
+            Tensor: Latent tokens of shape ``[B, M, D]`` where ``M = num_latents``.
+        """
         latents = repeat(self.latents, "n d -> b n d", b=x.shape[0])
 
         for attn, ff in self.layers:  # type: ignore
