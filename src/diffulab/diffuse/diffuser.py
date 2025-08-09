@@ -16,29 +16,29 @@ class Diffuser:
     This class provides a unified interface to work with different diffusion model architectures
     by encapsulating the specific diffusion implementation details.
     Args:
-        - denoiser (Denoiser): The neural network model used for denoising.
-        - sampling_method (str, optional): Method used for sampling.
-        - model_type (str, optional): Type of diffusion model to use. Defaults to "rectified_flow".
+        denoiser (Denoiser): The neural network model used for denoising.
+        sampling_method (str, optional): Method used for sampling.
+        model_type (str, optional): Type of diffusion model to use. Defaults to "rectified_flow".
             Available options:
                 - "rectified_flow": Flow-based diffusion model.
                 - "gaussian_diffusion": Gaussian diffusion model.
-        - n_steps (int, optional): Number of diffusion steps. Defaults to 1000.
-        - extra_args (dict[str, Any], optional): Additional arguments to pass to the diffusion model. Defaults to {}.
+        n_steps (int, optional): Number of diffusion steps. Defaults to 1000.
+        extra_args (dict[str, Any], optional): Additional arguments to pass to the diffusion model. Defaults to {}.
 
     Attributes:
-        - model_type (str): Type of diffusion model used.
-        - denoiser (Denoiser): The neural network model used for denoising.
-        - n_steps (int): Number of diffusion steps.
-        - diffusion (Diffusion): The diffusion model implementation.
+        model_type (str): Type of diffusion model used.
+        denoiser (Denoiser): The neural network model used for denoising.
+        n_steps (int): Number of diffusion steps.
+        diffusion (Diffusion): The diffusion model implementation.
 
     Methods:
-        - __init__: Initialize the diffuser with specified parameters.
-        - eval: Set the denoiser model to evaluation mode.
-        - train: Set the denoiser model to training mode.
-        - draw_timesteps: Draw a batch of timesteps for diffusion.
-        - compute_loss: Calculate the loss for the diffusion model.
-        - set_steps: Update the number of diffusion steps and related parameters.
-        - generate: Generate new samples using the diffusion model.
+        __init__: Initialize the diffuser with specified parameters.
+        eval: Set the denoiser model to evaluation mode.
+        train: Set the denoiser model to training mode.
+        draw_timesteps: Draw a batch of timesteps for diffusion.
+        compute_loss: Calculate the loss for the diffusion model.
+        set_steps: Update the number of diffusion steps and related parameters.
+        generate: Generate new samples using the diffusion model.
     """
 
     model_registry: dict[str, type[Diffusion]] = {"rectified_flow": Flow, "gaussian_diffusion": GaussianDiffusion}
@@ -105,11 +105,12 @@ class Diffuser:
         This method serves as a bridge between the Diffuser class and the underlying
         diffusion implementation by forwarding the loss computation to the diffusion model.
         Args:
-            - model_inputs (ModelInput): A dictionary containing the model inputs,
+            model_inputs (ModelInput): A dictionary containing the model inputs,
               including the data tensor keyed as 'x' and any conditional information.
-            - timesteps (Tensor): A tensor of timesteps for the batch.
-            - noise (Tensor | None, optional): Pre-defined noise to add to the input.
+            timesteps (Tensor): A tensor of timesteps for the batch.
+            noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
+            extra_args (dict[str, Any], optional): Additional arguments for the additional losses computation.
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
@@ -150,13 +151,13 @@ class Diffuser:
         generate a sample from the diffusion process. It can handle conditional generation
         with guidance when appropriate settings are provided.
         Args:
-            - data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
+            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
                 If a vision tower is used, this should be the shape of the latent space.
-            - model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
+            model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
                 conditional information, or labels. If 'x' is not provided, random noise will be generated.
-            - use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            - clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
-            - guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
+            use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
+            clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
+            guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
             **kwargs (dict[str, Any]): Additional arguments to pass to the diffusion model's denoise method.
                 These may include parameters like 'classifier', 'classifier_free', etc.
