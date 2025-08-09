@@ -17,23 +17,6 @@ def train(cfg: DictConfig):
     train_dataset = instantiate(cfg.dataset.train)
     val_dataset = instantiate(cfg.dataset.val)
 
-    dl_cfg = cfg.get("dataloader", {})
-    train_loader = DataLoader(
-        dataset=train_dataset,
-        batch_size=dl_cfg.get("batch_size", 32),
-        shuffle=dl_cfg.get("shuffle", True),
-        num_workers=dl_cfg.get("num_workers", 0),
-        pin_memory=dl_cfg.get("pin_memory", False),
-    )
-
-    val_loader = DataLoader(
-        dataset=val_dataset,
-        batch_size=dl_cfg.get("batch_size", 32),
-        shuffle=dl_cfg.get("shuffle", False),
-        num_workers=dl_cfg.get("num_workers", 0),
-        pin_memory=dl_cfg.get("pin_memory", False),
-    )
-
     # Model
     denoiser = instantiate(cfg.model)
 
@@ -54,11 +37,24 @@ def train(cfg: DictConfig):
     )
     vision_tower = instantiate(cfg.vision_tower)
 
-    assert train_dataset.latent_scale == vision_tower.latent_scale, (
-        f"Latent scale mismatch: train dataset {train_dataset.latent_scale} vs vision tower {vision_tower.latent_scale}"
+    train_dataset.set_latent_scale(vision_tower.latent_scale)
+    val_dataset.set_latent_scale(vision_tower.latent_scale)
+
+    dl_cfg = cfg.get("dataloader", {})
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=dl_cfg.get("batch_size", 32),
+        shuffle=dl_cfg.get("shuffle", True),
+        num_workers=dl_cfg.get("num_workers", 0),
+        pin_memory=dl_cfg.get("pin_memory", False),
     )
-    assert val_dataset.latent_scale == vision_tower.latent_scale, (
-        f"Latent scale mismatch: val dataset {val_dataset.latent_scale} vs vision tower {vision_tower.latent_scale}"
+
+    val_loader = DataLoader(
+        dataset=val_dataset,
+        batch_size=dl_cfg.get("batch_size", 32),
+        shuffle=dl_cfg.get("shuffle", False),
+        num_workers=dl_cfg.get("num_workers", 0),
+        pin_memory=dl_cfg.get("pin_memory", False),
     )
 
     # Diffuser

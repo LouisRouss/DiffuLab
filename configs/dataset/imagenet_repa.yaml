@@ -4,7 +4,6 @@ train:
   data_path: "data/imagenet"
   local: true
   batch_size: 128
-  latent_scale: 0.3189
   split: "train"
 
 val:
@@ -12,5 +11,4 @@ val:
   data_path: "data/imagenet"
   local: true
   batch_size: 128
-  latent_scale: 0.3189
   split: "val"

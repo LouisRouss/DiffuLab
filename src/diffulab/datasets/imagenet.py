@@ -16,7 +16,6 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         data_path: str,
         local: bool = True,
         batch_size: int = 64,
-        latent_scale: float = 0.18215,
         split: str = "train",
     ) -> None:
         """Initialize the MNIST dataset.
@@ -36,8 +35,12 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             batch_size=batch_size,
             split=split,
         )
-        self.latent_scale = latent_scale
+        self.latent_scale: float | None = None
         self.transform = transforms.ToTensor()
+
+    def set_latent_scale(self, scale: float) -> None:
+        """Set the latent scale for the dataset."""
+        self.latent_scale = scale
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
@@ -50,7 +53,7 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         Returns:
             BatchData: A dictionary containing model inputs and extra features
         """
-
+        assert self.latent_scale is not None, "Latent scale must be set before getting items"
         sample = self.dataset[idx]
         assert "latent" in sample, "Batch must contain 'latent' key, please precompute the latents before training"
         assert "label" in sample, "Batch must contain 'y' key, please add labels to the dataset"
