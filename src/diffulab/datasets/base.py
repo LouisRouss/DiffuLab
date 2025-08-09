@@ -55,7 +55,7 @@ class BaseDataset(Dataset[BatchData], ABC):
         Returns:
             int: Number of samples in the dataset
         Raises:
-            ValueError: If the dataset has not been initialized properly (e.g., images are None
+            ValueError: If the dataset has not been initialized properly (e.g., images are None)
         """
 
         if self.images is None:
