@@ -208,8 +208,8 @@ class RotaryPositionalEmbedding(nn.Module):
             self.sin = embs.sin().float()
 
     def _neg_half(
-        self, x: Float[Tensor, "batch_size, num_heads, seq_length, head_dim"]
-    ) -> Float[Tensor, "batch_size, num_heads, seq_length, head_dim"]:
+        self, x: Float[Tensor, "batch_size num_heads seq_length head_dim"]
+    ) -> Float[Tensor, "batch_size num_heads seq_length head_dim"]:
         return torch.cat([-x[:, :, :, self.dim // 2 :], x[:, :, :, : self.dim // 2]], dim=-1)
 
     def forward(
