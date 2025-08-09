@@ -15,8 +15,8 @@ class BatchData(TypedDict, total=False):
     extra: NotRequired[dict[str, Tensor | None]]
 
 
-class DiffusionDataset(Dataset[BatchData], ABC):
-    """Base class for datasets used in diffusion models.
+class BaseDataset(Dataset[BatchData], ABC):
+    """Base class for basic datasets used in diffusion models.
 
     This abstract class defines the common interface that all diffusion datasets
     should implement, ensuring consistency across different data sources.

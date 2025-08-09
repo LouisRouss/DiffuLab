@@ -55,15 +55,6 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         assert "latent" in sample, "Batch must contain 'latent' key, please precompute the latents before training"
         assert "label" in sample, "Batch must contain 'y' key, please add labels to the dataset"
 
-        x0: torch.Tensor | None = None
-        dst_features: torch.Tensor | None = None
-        if "dst_features" not in sample:
-            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
-            x0 = self.transform(sample["image"])
-        else:
-            assert "dst_features" in sample, "Batch must contain either 'dst_features' or 'image' key"
-            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
-
         latent = torch.tensor(sample["latent"], dtype=torch.float32)
         y = torch.tensor(sample["label"], dtype=torch.long)
 
@@ -72,9 +63,14 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             "extra": {},
         }
 
-        if dst_features is not None:
-            batch_data["extra"]["dst_features"] = dst_features
-        if x0 is not None:
+        x0: torch.Tensor | None = None
+        dst_features: torch.Tensor | None = None
+        if "dst_features" not in sample:
+            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
+            x0 = self.transform(sample["image"])
             batch_data["extra"]["x0"] = x0
+        else:
+            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
+            batch_data["extra"]["dst_features"] = dst_features
 
         return batch_data

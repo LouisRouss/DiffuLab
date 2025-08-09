@@ -1,20 +1,19 @@
 import pickle
 from pathlib import Path
-from typing import List
 
 import numpy as np
 from numpy.typing import NDArray
 
-from diffulab.datasets.base import DiffusionDataset
+from diffulab.datasets.base import BaseDataset
 
 
-class CIFAR10Dataset(DiffusionDataset):
+class CIFAR10Dataset(BaseDataset):
     """CIFAR10 dataset for diffusion models."""
 
     def __init__(
         self,
         data_path: str,
-        batches_to_load: List[str] = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4", "data_batch_5"],
+        batches_to_load: list[str] = ["data_batch_1", "data_batch_2", "data_batch_3", "data_batch_4", "data_batch_5"],
     ):
         """
         Initialize the CIFAR10 dataset.
