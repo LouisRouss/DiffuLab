@@ -19,11 +19,15 @@ def checkpoint(func: Callable[..., Tensor], inputs: Any, params: Any, flag: bool
 
     Evaluate a function without caching intermediate activations, allowing for
     reduced memory at the expense of extra compute in the backward pass.
-    :param func: the function to evaluate.
-    :param inputs: the argument sequence to pass to `func`.
-    :param params: a sequence of parameters `func` depends on but does not
-                   explicitly take as arguments.
-    :param flag: if False, disable gradient checkpointing.
+
+    Args:
+        func (Callable[..., Tensor]): the function to evaluate.
+        inputs (Any): the argument sequence to pass to `func`.
+        params (Any): a sequence of parameters `func` depends on but does not
+                      explicitly take as arguments.
+        flag (bool): if False, disable gradient checkpointing.
+    Returns:
+        Any: the output of the function, either directly or through checkpointing.
     """
     if flag:
         args = tuple(inputs) + tuple(params)

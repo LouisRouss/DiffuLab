@@ -17,23 +17,6 @@ def train(cfg: DictConfig):
     train_dataset = instantiate(cfg.dataset.train)
     val_dataset = instantiate(cfg.dataset.val)
 
-    dl_cfg = cfg.get("dataloader", {})
-    train_loader = DataLoader(
-        dataset=train_dataset,
-        batch_size=dl_cfg.get("batch_size", 32),
-        shuffle=dl_cfg.get("shuffle", True),
-        num_workers=dl_cfg.get("num_workers", 0),
-        pin_memory=dl_cfg.get("pin_memory", False),
-    )
-
-    val_loader = DataLoader(
-        dataset=val_dataset,
-        batch_size=dl_cfg.get("batch_size", 32),
-        shuffle=dl_cfg.get("shuffle", False),
-        num_workers=dl_cfg.get("num_workers", 0),
-        pin_memory=dl_cfg.get("pin_memory", False),
-    )
-
     # Model
     denoiser = instantiate(cfg.model)
 
@@ -53,6 +36,26 @@ def train(cfg: DictConfig):
         coeff=0.5,
     )
     vision_tower = instantiate(cfg.vision_tower)
+
+    train_dataset.set_latent_scale(vision_tower.latent_scale)
+    val_dataset.set_latent_scale(vision_tower.latent_scale)
+
+    dl_cfg = cfg.get("dataloader", {})
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=dl_cfg.get("batch_size", 32),
+        shuffle=dl_cfg.get("shuffle", True),
+        num_workers=dl_cfg.get("num_workers", 0),
+        pin_memory=dl_cfg.get("pin_memory", False),
+    )
+
+    val_loader = DataLoader(
+        dataset=val_dataset,
+        batch_size=dl_cfg.get("batch_size", 32),
+        shuffle=dl_cfg.get("shuffle", False),
+        num_workers=dl_cfg.get("num_workers", 0),
+        pin_memory=dl_cfg.get("pin_memory", False),
+    )
 
     # Diffuser
     diffuser = Diffuser(
@@ -81,6 +84,9 @@ def train(cfg: DictConfig):
         ema_update_after_step=cfg.trainer.get("ema_update_after_step", 0),
         ema_update_every=cfg.trainer.get("ema_update_every", 10),
         run_config=OmegaConf.to_container(cfg, resolve=True),  # type: ignore[reportArgumentType]
+        init_kwargs={
+            "wandb": cfg.trainer.get("wandb", {}),
+        },
     )
 
     trainer.train(
@@ -90,6 +96,7 @@ def train(cfg: DictConfig):
         val_dataloader=val_loader,
         log_validation_images=cfg.trainer.log_validation_images,
         val_steps=cfg.trainer.get("val_steps", 50),
+        p_classifier_free_guidance=cfg.trainer.get("p_classifier_free_guidance", 0),
     )
 
 

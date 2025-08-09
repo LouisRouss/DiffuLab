@@ -16,17 +16,16 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         data_path: str,
         local: bool = True,
         batch_size: int = 64,
-        latent_scale: float = 0.18215,
         split: str = "train",
     ) -> None:
         """Initialize the MNIST dataset.
 
         Args:
-            - data_path: Path to the dataset leading to MDS shard files
-            - local: Whether to use local files or remote files
-            - batch_size: Batch size for optimized streaming dataset and future data loading
-            - latent_scale: Scale factor for latent features
-            - split: Dataset split to use (train, val, test)
+            data_path: Path to the dataset leading to MDS shard files
+            local: Whether to use local files or remote files
+            batch_size: Batch size for optimized streaming dataset and future data loading
+            latent_scale: Scale factor for latent features
+            split: Dataset split to use (train, val, test)
         """
         super().__init__()
         self.data_path = Path(data_path)
@@ -36,8 +35,12 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             batch_size=batch_size,
             split=split,
         )
-        self.latent_scale = latent_scale
+        self.latent_scale: float | None = None
         self.transform = transforms.ToTensor()
+
+    def set_latent_scale(self, scale: float) -> None:
+        """Set the latent scale for the dataset."""
+        self.latent_scale = scale
 
     def __len__(self) -> int:
         """Return the number of samples in the dataset."""
@@ -50,19 +53,10 @@ class ImageNetLatentREPA(Dataset[BatchData]):
         Returns:
             BatchData: A dictionary containing model inputs and extra features
         """
-
+        assert self.latent_scale is not None, "Latent scale must be set before getting items"
         sample = self.dataset[idx]
         assert "latent" in sample, "Batch must contain 'latent' key, please precompute the latents before training"
         assert "label" in sample, "Batch must contain 'y' key, please add labels to the dataset"
-
-        x0: torch.Tensor | None = None
-        dst_features: torch.Tensor | None = None
-        if "dst_features" not in sample:
-            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
-            x0 = self.transform(sample["image"])
-        else:
-            assert "dst_features" in sample, "Batch must contain either 'dst_features' or 'image' key"
-            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
 
         latent = torch.tensor(sample["latent"], dtype=torch.float32)
         y = torch.tensor(sample["label"], dtype=torch.long)
@@ -72,9 +66,14 @@ class ImageNetLatentREPA(Dataset[BatchData]):
             "extra": {},
         }
 
-        if dst_features is not None:
-            batch_data["extra"]["dst_features"] = dst_features
-        if x0 is not None:
+        x0: torch.Tensor | None = None
+        dst_features: torch.Tensor | None = None
+        if "dst_features" not in sample:
+            assert "image" in sample, "Batch must contain either 'dst_features' or 'image' key"
+            x0 = self.transform(sample["image"])
             batch_data["extra"]["x0"] = x0
+        else:
+            dst_features = torch.tensor(sample["dst_features"], dtype=torch.float32)
+            batch_data["extra"]["dst_features"] = dst_features
 
         return batch_data

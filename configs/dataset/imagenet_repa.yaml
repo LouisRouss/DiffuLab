@@ -3,12 +3,12 @@ train:
   _target_: diffulab.datasets.ImageNetLatentREPA
   data_path: "data/imagenet"
   local: true
-  batch_size: 256
+  batch_size: 128
   split: "train"
 
 val:
   _target_: diffulab.datasets.ImageNetLatentREPA
   data_path: "data/imagenet"
   local: true
-  batch_size: 256
+  batch_size: 128
   split: "val"

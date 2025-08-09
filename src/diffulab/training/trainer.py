@@ -2,7 +2,7 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, cast
 
 import torch
 import wandb
@@ -19,6 +19,7 @@ from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:
     from diffulab.diffuse.diffuser import Diffuser
+    from diffulab.training.losses.common import LossFunction
 
 HOME_PATH = Path.home()
 
@@ -236,19 +237,22 @@ class Trainer:
                 If provided, its state will be saved. Defaults to None.
         Note:
             The following files are created in self.save_path:
-            - denoiser.pth: Main model state dict
-            - optimizer.pth: Optimizer state dict
-            - ema.pth: EMA model state dict (if EMA is used)
-            - scheduler.pth: Scheduler state dict (if scheduler is used)
+            - denoiser.pt: Main model state dict
+            - optimizer.pt: Optimizer state dict
+            - ema.pt: EMA model state dict (if EMA is used)
+            - scheduler.pt: Scheduler state dict (if scheduler is used)
         """
         unwrapped_denoiser: Denoiser = self.accelerator.unwrap_model(diffuser.denoiser)  # type: ignore
-        self.accelerator.save(unwrapped_denoiser.state_dict(), self.save_path / "denoiser.pth")  # type: ignore
-        self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pth")  # type: ignore
+        self.accelerator.save(unwrapped_denoiser.state_dict(), self.save_path / "denoiser.pt")  # type: ignore
+        self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pt")  # type: ignore
         if ema_denoiser is not None:
             unwrapped_ema: Denoiser = self.accelerator.unwrap_model(ema_denoiser)  # type: ignore
-            self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pth")  # type: ignore
+            self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pt")  # type: ignore
         if scheduler is not None:
-            self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pth")  # type: ignore
+            self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pt")  # type: ignore
+        for extra_loss in diffuser.extra_losses:
+            unwrapped_loss: "LossFunction" = self.accelerator.unwrap_model(extra_loss)  # type: ignore
+            unwrapped_loss.save(self.save_path, self.accelerator)  # type: ignore
 
     @torch.no_grad()  # type: ignore
     def log_images(
@@ -284,14 +288,15 @@ class Trainer:
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
+        guidance_scale = 4 if diffuser.denoiser.classifier_free else 0
 
         if self.use_ema and ema_eval is not None:
             original_model = diffuser.denoiser
             diffuser.denoiser = ema_eval
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
             diffuser.denoiser = original_model
         else:
-            images = diffuser.generate(data_shape=x.shape, model_inputs=batch)
+            images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
 
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
@@ -308,8 +313,10 @@ class Trainer:
         per_batch_scheduler: bool = False,
         log_validation_images: bool = False,
         train_embedder: bool = False,
-        p_classifier_free_guidance: float = 0,
+        p_classifier_free_guidance: float = 0.2,
         val_steps: int = 50,
+        optimizer_ckpt: str | None = None,
+        denoiser_ckpt: str | None = None,
         ema_ckpt: str | None = None,
         epoch_start: int = 0,
     ):
@@ -333,7 +340,7 @@ class Trainer:
             train_embedder (bool, optional): Whether to train the context embedder if present.
                 Defaults to False.
             p_classifier_free_guidance (float, optional): Probability of using classifier-free
-                guidance during training. Defaults to 0.
+                guidance during training. Defaults to 0.2
             val_steps (int, optional): Number of steps to use for validation image generation.
                 Defaults to 50.
             ema_ckpt (str | None, optional): Path to EMA model checkpoint for loading pretrained
@@ -347,6 +354,9 @@ class Trainer:
             - Model checkpoints are saved when validation loss improves.
             - EMA model is used for validation if enabled.
         """
+        if not diffuser.denoiser.classifier_free:
+            p_classifier_free_guidance = 0
+
         if self.use_ema:
             ema_denoiser = EMA(
                 diffuser.denoiser,
@@ -356,9 +366,19 @@ class Trainer:
             ).to(self.accelerator.device)
             if ema_ckpt:
                 ema_denoiser.ema_model.load_state_dict(torch.load(ema_ckpt, weights_only=True))  # type: ignore
-            ema_denoiser = self.accelerator.prepare(ema_denoiser)  # type: ignore
+            ema_denoiser = cast(EMA, self.accelerator.prepare(ema_denoiser))  # type: ignore
         else:
             ema_denoiser = None
+
+        if denoiser_ckpt:
+            diffuser.denoiser.load_state_dict(
+                torch.load(denoiser_ckpt),  # type: ignore
+            )
+
+        if optimizer_ckpt:
+            optimizer.load_state_dict(
+                torch.load(optimizer_ckpt, weights_only=False),  # type: ignore
+            )
 
         if diffuser.vision_tower:
             diffuser.vision_tower = self.accelerator.prepare(diffuser.vision_tower)  # type: ignore
@@ -366,6 +386,14 @@ class Trainer:
         diffuser.denoiser, train_dataloader, val_dataloader, optimizer = self.accelerator.prepare(  # type: ignore
             diffuser.denoiser, train_dataloader, val_dataloader, optimizer
         )
+
+        if optimizer_ckpt:
+            device = self.accelerator.device
+            for state in optimizer.state.values():  # type: ignore
+                for k, v in state.items():  # type: ignore
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
+
         for loss_idx in range(len(diffuser.extra_losses)):
             diffuser.extra_losses[loss_idx] = self.accelerator.prepare(diffuser.extra_losses[loss_idx])  # type: ignore
 
@@ -416,10 +444,12 @@ class Trainer:
 
             if val_dataloader is not None:
                 diffuser.eval()  # type: ignore
+                ema_eval: Denoiser | None = None
                 if ema_denoiser is not None:
-                    ema_eval = ema_denoiser.eval()  # type: ignore
-                else:
-                    ema_eval = None
+                    ema_eval = cast(
+                        Denoiser,
+                        ema_denoiser.eval(),
+                    )
                 tq_val_batch = tqdm(
                     val_dataloader,  # type: ignore
                     disable=not self.accelerator.is_main_process,

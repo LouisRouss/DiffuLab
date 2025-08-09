@@ -1,7 +1,7 @@
 # configs/train_cifar10_flow_matching.yaml
 # @package _global_
 defaults:
-  - model: mmdit
+  - model: dit
   - diffuser: rectified_flow
   - trainer: default
   - dataset: cifar10

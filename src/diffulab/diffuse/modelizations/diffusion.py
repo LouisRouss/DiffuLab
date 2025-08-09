@@ -116,6 +116,10 @@ class Diffusion(ABC):
                 which to compute the loss for each example in the batch.
             noise (Tensor | None, optional): Pre-defined noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
+            extra_losses (list[LossFunction], optional): Additional loss functions to compute
+                alongside the main loss. Defaults to an empty list.
+            extra_args (dict[str, Any], optional): Additional arguments for the loss computation.
+                Defaults to an empty dictionary.
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
@@ -151,7 +155,7 @@ class Diffusion(ABC):
         data_shape: tuple[int, ...],
         model_inputs: ModelInput,
         use_tqdm: bool = True,
-        clamp_x: bool = True,
+        clamp_x: bool = False,
         guidance_scale: float = 0,
     ) -> Tensor:
         """
@@ -166,7 +170,7 @@ class Diffusion(ABC):
             use_tqdm (bool, optional): Whether to show a progress bar during generation.
                 Defaults to True.
             clamp_x (bool, optional): Whether to clamp output values to [-1, 1] range.
-                Defaults to True.
+                Defaults to False.
             guidance_scale (float, optional): Scale factor for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
         Returns:
