@@ -52,17 +52,19 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 - [x] Make the implementation of the DiT architecture more versatile
 - [x] Check DiT is working (both mm and basic)
 - [x] Add RePA training
-- [ ] add the different possible parametrization for the loss (eps, xo, v etc... + learn variance) to ddpm
-- [ ] create unit tests and add them to the CI
+- [x] add mixed precision training
+- [x] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)
 - [ ] add gradient checkpointing to DiT
+- [ ] add torch compile support
+- [ ] use flash attn
+- [ ] create unit tests and add them to the CI
+- [ ] add the different possible parametrization for the loss (eps, xo, v etc... + learn variance) to ddpm
 - [ ] add some more context embedders
 - [ ] add reflow algorithm
-- [x] add mixed precision training
 - [ ] add EDM
 - [ ] think about how to add a sampler abstraction and use it in the different Diffusion classes (generalist class with euler, heuns etc)
 - [ ] Train our models on toy datasets for different tasks (conditional generation, Image to Image ...)
 - [ ] Add possibility to train LORA/DORA
-- [x] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)
 - [ ] add different sampler
 - [ ] Try out Differential Transformers
 - [ ] Check to add https://arxiv.org/pdf/2406.02507
