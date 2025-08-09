@@ -109,7 +109,7 @@ class SD3TextEmbedder(ContextEmbedder):
         path_to_save.mkdir(parents=True, exist_ok=True)
 
         # Check for existing embeddings and set the starting index
-        existing_files = list(path_to_save.glob("*.pth"))
+        existing_files = list(path_to_save.glob("*.pt"))
         if existing_files:
             existing_indices = [int(f.stem) for f in existing_files if f.stem.isdigit()]
             begins = max(existing_indices) + 1
@@ -124,7 +124,7 @@ class SD3TextEmbedder(ContextEmbedder):
             for b in range(batch_size):
                 torch.save(  # type: ignore
                     {"pooled": embeddings[0][b], "full_encoding": embeddings[1][b]},
-                    path_to_save / f"{begins + i + b}.pth",
+                    path_to_save / f"{begins + i + b}.pt",
                 )
                 with (path_to_save / f"{begins + i + b}.txt").open("r") as f:
                     f.write(context[i + b])
