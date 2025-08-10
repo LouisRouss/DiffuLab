@@ -54,9 +54,9 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 - [x] Add RePA training
 - [x] add mixed precision training
 - [x] Add the possibility to diffuse in the latent space (add a vae at initialization of our denoisers)
-- [ ] add gradient checkpointing to DiT
-- [ ] add torch compile support
-- [ ] use flash attn
+- [x] add gradient checkpointing to DiT
+- [x] add torch compile support
+- [x] use flash attn
 - [ ] create unit tests and add them to the CI
 - [ ] add the different possible parametrization for the loss (eps, xo, v etc... + learn variance) to ddpm
 - [ ] add some more context embedders
