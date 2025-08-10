@@ -95,9 +95,12 @@ class DiTAttention(nn.Module):
         q, k, v = self.rope(q=q, k=k, v=v)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
-        attn_weights: Tensor = (q @ k.transpose(-2, -1)) * self.scale
-        attn_weights = attn_weights.softmax(dim=-1)
-        attn_output = attn_weights @ v
+        attn_output = nn.functional.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            scale=self.scale,
+        )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
 
@@ -197,9 +200,12 @@ class MMDiTAttention(nn.Module):
         q, k, v = self.rope(q=q, k=k, v=v)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
-        attn_weights = (q @ k.transpose(-2, -1)) * self.scale
-        attn_weights = attn_weights.softmax(dim=-1)
-        attn_output = attn_weights @ v
+        attn_output = nn.functional.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            scale=self.scale,
+        )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
 
