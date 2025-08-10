@@ -23,7 +23,7 @@ Classes:
     TestMMDiTEdgeCases: Tests for edge cases and error conditions.
 """
 
-from typing import cast
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,6 +40,38 @@ from diffulab.networks.denoisers.mmdit import (
     ModulatedLastLayer,
 )
 from diffulab.networks.embedders.common import ContextEmbedder
+
+
+class MockContextEmbedder(ContextEmbedder):
+    """Mock context embedder for testing."""
+
+    def __init__(self, pooled_dim: int = 64, sequence_dim: int = 128, sequence_len: int = 32):
+        super().__init__()
+        self.pooled_dim = pooled_dim
+        self.sequence_dim = sequence_dim
+        self.sequence_len = sequence_len
+
+    @property
+    def n_output(self) -> int:
+        return 2
+
+    @property
+    def output_size(self) -> tuple[int, int]:
+        return (self.pooled_dim, self.sequence_dim)
+
+    def drop_conditions(self, context: Any, p: float) -> Any:
+        return context
+
+    def forward(self, context: Any = None, p: float = 0.0) -> tuple[torch.Tensor, torch.Tensor]:
+        pooled = torch.randn(context, self.pooled_dim)
+        sequence = torch.randn(context, self.sequence_len, self.sequence_dim)
+        return pooled, sequence
+
+
+@pytest.fixture(scope="module")
+def mock_context_embedder():
+    """Create a mock context embedder for testing."""
+    return MockContextEmbedder()
 
 
 class TestDiTAttention:
@@ -61,6 +93,31 @@ class TestDiTAttention:
         test_partial_rotary_factor: Tests rotary embedding dimension calculation.
         test_gradient_flow: Tests gradient propagation through the attention mechanism.
     """
+
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        """Standard input dimension for testing."""
+        return 128
+
+    @pytest.fixture(scope="class")
+    def hidden_dim(self):
+        """Standard hidden dimension for testing."""
+        return 128
+
+    @pytest.fixture(scope="class")
+    def num_heads(self):
+        """Standard number of attention heads for testing."""
+        return 4
+
+    @pytest.fixture(scope="class")
+    def batch_size(self):
+        """Standard batch size for testing."""
+        return 2
+
+    @pytest.fixture(scope="class")
+    def seq_len(self):
+        """Standard sequence length for testing."""
+        return 32
 
     @pytest.fixture
     def dit_attention(self, input_dim: int, hidden_dim: int, num_heads: int):
@@ -237,7 +294,42 @@ class TestMMDiTAttention:
         test_gradient_flow: Tests gradient propagation through the multi-modal attention.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
+    def context_dim(self):
+        """Standard context dimension for testing."""
+        return 128
+
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        """Standard input dimension for testing."""
+        return 256
+
+    @pytest.fixture(scope="class")
+    def hidden_dim(self):
+        """Standard hidden dimension for testing."""
+        return 384
+
+    @pytest.fixture(scope="class")
+    def num_heads(self):
+        """Standard number of attention heads for testing."""
+        return 4
+
+    @pytest.fixture(scope="class")
+    def batch_size(self):
+        """Standard batch size for testing."""
+        return 2
+
+    @pytest.fixture(scope="class")
+    def seq_len(self):
+        """Standard sequence length for testing."""
+        return 28
+
+    @pytest.fixture(scope="class")
+    def context_seq_len(self):
+        """Standard context sequence length for testing."""
+        return 32
+
+    @pytest.fixture(scope="class")
     def mmdit_attention(self, context_dim: int, input_dim: int, hidden_dim: int, num_heads: int):
         """
         Create MMDiTAttention instance for testing.
@@ -418,7 +510,42 @@ class TestDiTBlock:
         test_gradient_flow: Tests gradient propagation through the transformer block.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        """Standard input dimension for testing."""
+        return 256
+
+    @pytest.fixture(scope="class")
+    def hidden_dim(self):
+        """Standard hidden dimension for testing."""
+        return 384
+
+    @pytest.fixture(scope="class")
+    def num_heads(self):
+        """Standard number of attention heads for testing."""
+        return 4
+
+    @pytest.fixture(scope="class")
+    def batch_size(self):
+        """Standard batch size for testing."""
+        return 2
+
+    @pytest.fixture(scope="class")
+    def embedding_dim(self):
+        """Standard embedding dimension for testing."""
+        return 64
+
+    @pytest.fixture(scope="class")
+    def mlp_ratio(self):
+        """Standard MLP ratio for testing."""
+        return 4
+
+    @pytest.fixture(scope="class")
+    def seq_len(self):
+        """Standard sequence length for testing."""
+        return 16
+
+    @pytest.fixture(scope="class")
     def dit_block(self, input_dim: int, hidden_dim: int, embedding_dim: int, num_heads: int, mlp_ratio: int):
         """
         Create DiTBlock instance for testing.
@@ -442,9 +569,7 @@ class TestDiTBlock:
             partial_rotary_factor=1.0,
         )
 
-    def test_init(
-        self, dit_block: DiTBlock, input_dim: int, hidden_dim: int, embedding_dim: int, num_heads: int, mlp_ratio: int
-    ):
+    def test_init(self, dit_block: DiTBlock, input_dim: int, mlp_ratio: int):
         """
         Test DiTBlock initialization.
 
@@ -455,9 +580,6 @@ class TestDiTBlock:
         Args:
             dit_block (DiTBlock): The transformer block to test.
             input_dim (int): Expected input dimension.
-            hidden_dim (int): Expected hidden dimension.
-            embedding_dim (int): Expected embedding dimension.
-            num_heads (int): Expected number of attention heads.
             mlp_ratio (int): Expected MLP expansion ratio.
 
         Raises:
@@ -489,7 +611,7 @@ class TestDiTBlock:
             batch_size (int): Size of the input batch.
             seq_len (int): Length of the input sequence.
             input_dim (int): Dimension of input features.
-            embedding_dim (int): Dimension of conditioning embeddings.
+            embedding_dim (int): Dimension of the conditioning embeddings.
 
         Raises:
             AssertionError: If output shape or data type doesn't match input.
@@ -524,7 +646,7 @@ class TestDiTBlock:
             batch_size (int): Size of the input batch.
             seq_len (int): Length of the input sequence.
             input_dim (int): Dimension of input features.
-            embedding_dim (int): Dimension of conditioning embeddings.
+            embedding_dim (int): Dimension of the conditioning embeddings.
 
         Raises:
             AssertionError: If modulate is not called the expected number of times (twice).
@@ -554,7 +676,7 @@ class TestDiTBlock:
             batch_size (int): Size of the input batch.
             seq_len (int): Length of the input sequence.
             input_dim (int): Dimension of input features.
-            embedding_dim (int): Dimension of conditioning embeddings.
+            embedding_dim (int): Dimension of the conditioning embeddings.
 
         Raises:
             AssertionError: If gradients are not computed for input tensor or embeddings.
@@ -588,7 +710,52 @@ class TestMMDiTBlock:
         test_gradient_flow: Tests gradient propagation through the multi-modal block.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        """Standard input dimension for testing."""
+        return 256
+
+    @pytest.fixture(scope="class")
+    def context_dim(self):
+        """Standard context dimension for testing."""
+        return 128
+
+    @pytest.fixture(scope="class")
+    def hidden_dim(self):
+        """Standard hidden dimension for testing."""
+        return 384
+
+    @pytest.fixture(scope="class")
+    def num_heads(self):
+        """Standard number of attention heads for testing."""
+        return 4
+
+    @pytest.fixture(scope="class")
+    def batch_size(self):
+        """Standard batch size for testing."""
+        return 2
+
+    @pytest.fixture(scope="class")
+    def embedding_dim(self):
+        """Standard embedding dimension for testing."""
+        return 64
+
+    @pytest.fixture(scope="class")
+    def mlp_ratio(self):
+        """Standard MLP ratio for testing."""
+        return 4
+
+    @pytest.fixture(scope="class")
+    def seq_len(self):
+        """Standard sequence length for testing."""
+        return 16
+
+    @pytest.fixture(scope="class")
+    def context_seq_len(self):
+        """Standard context sequence length for testing."""
+        return 32
+
+    @pytest.fixture(scope="class")
     def mmdit_block(
         self, context_dim: int, input_dim: int, hidden_dim: int, embedding_dim: int, num_heads: int, mlp_ratio: int
     ):
@@ -743,7 +910,37 @@ class TestModulatedLastLayer:
         test_gradient_flow: Tests gradient propagation through the output layer.
     """
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
+    def embedding_dim(self):
+        """Standard embedding dimension for testing."""
+        return 64
+
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        """Standard input dimension for testing."""
+        return 128
+
+    @pytest.fixture(scope="class")
+    def patch_size(self):
+        """Standard patch size for testing."""
+        return 16
+
+    @pytest.fixture(scope="class")
+    def input_channels(self):
+        """Standard number of output channels for testing."""
+        return 3
+
+    @pytest.fixture(scope="class")
+    def batch_size(self):
+        """Standard batch size for testing."""
+        return 2
+
+    @pytest.fixture(scope="class")
+    def seq_len(self):
+        """Standard sequence length for testing."""
+        return 32
+
+    @pytest.fixture(scope="class")
     def last_layer(self, embedding_dim: int, input_dim: int, patch_size: int, input_channels: int):
         """
         Create ModulatedLastLayer instance for testing.
@@ -765,7 +962,11 @@ class TestModulatedLastLayer:
         )
 
     def test_init(
-        self, last_layer: ModulatedLastLayer, input_dim: int, patch_size: int, input_channels: int, embedding_dim: int
+        self,
+        last_layer: ModulatedLastLayer,
+        input_dim: int,
+        patch_size: int,
+        input_channels: int,
     ):
         """
         Test ModulatedLastLayer initialization.
@@ -779,7 +980,6 @@ class TestModulatedLastLayer:
             input_dim (int): Expected hidden feature dimension.
             patch_size (int): Expected patch size.
             input_channels (int): Expected number of output channels.
-            embedding_dim (int): Expected embedding dimension.
 
         Raises:
             AssertionError: If any component is not initialized correctly or has wrong dimensions.
@@ -898,7 +1098,53 @@ class TestMMDiT:
         test_weight_initialization: Tests proper weight initialization.
     """
 
-    @pytest.fixture
+    # Hyperparameter fixtures (mirroring other test classes for consistency)
+    @pytest.fixture(scope="class")
+    def input_channels(self):
+        return 3
+
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        return 256
+
+    @pytest.fixture(scope="class")
+    def hidden_dim(self):
+        return 384
+
+    @pytest.fixture(scope="class")
+    def embedding_dim(self):
+        return 64
+
+    @pytest.fixture(scope="class")
+    def num_heads(self):
+        return 4
+
+    @pytest.fixture(scope="class")
+    def mlp_ratio(self):
+        return 4
+
+    @pytest.fixture(scope="class")
+    def patch_size(self):
+        return 16
+
+    @pytest.fixture(scope="class")
+    def context_dim(self):
+        return 128
+
+    # Sample data fixtures
+    @pytest.fixture(scope="class")
+    def sample_image(self, input_channels: int):
+        return torch.randn(2, input_channels, 64, 64)
+
+    @pytest.fixture(scope="class")
+    def sample_timesteps(self):
+        return torch.randn(2)
+
+    @pytest.fixture(scope="class")
+    def sample_labels(self):
+        return torch.randint(0, 10, (2,))
+
+    @pytest.fixture(scope="class")
     def simple_dit(
         self,
         input_channels: int,
@@ -938,7 +1184,7 @@ class TestMMDiT:
             classifier_free=True,
         )
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def mmdit_with_context(
         self,
         input_channels: int,
@@ -1141,8 +1387,7 @@ class TestMMDiT:
         Raises:
             AssertionError: If output shape or keys are incorrect.
         """
-        initial_context = "test context"  # Mock context
-        output: ModelOutput = mmdit_with_context(sample_image, sample_timesteps, initial_context=initial_context)
+        output: ModelOutput = mmdit_with_context(sample_image, sample_timesteps, initial_context=sample_image.shape[0])
 
         assert "x" in output
         assert output["x"].shape == sample_image.shape
@@ -1359,7 +1604,7 @@ class TestMMDiT:
         sample_image.requires_grad_(True)
         sample_timesteps.requires_grad_(True)
 
-        output: ModelOutput = mmdit_with_context(sample_image, sample_timesteps, initial_context="test")
+        output: ModelOutput = mmdit_with_context(sample_image, sample_timesteps, initial_context=sample_image.shape[0])
         loss = output["x"].sum()
         loss.backward()  # type: ignore[reportUnknownMemberType]
 
@@ -1509,7 +1754,61 @@ class TestMMDiTEdgeCases:
         test_very_small_dimensions: Tests model with minimal dimension settings.
     """
 
-    def test_zero_batch_size(self, input_channels: int):
+    # Fixtures (mirroring style used in other test classes for consistency)
+    @pytest.fixture(scope="class")
+    def input_channels(self):
+        return 3
+
+    @pytest.fixture(scope="class")
+    def input_dim(self):
+        return 64
+
+    @pytest.fixture(scope="class")
+    def hidden_dim(self):
+        return 128
+
+    @pytest.fixture(scope="class")
+    def embedding_dim(self):
+        return 128
+
+    @pytest.fixture(scope="class")
+    def num_heads(self):
+        return 2  # small for tests
+
+    @pytest.fixture(scope="class")
+    def mlp_ratio(self):
+        return 4
+
+    @pytest.fixture(scope="class")
+    def patch_size(self):
+        return 16
+
+    @pytest.fixture(scope="class")
+    def small_image(self, input_channels: int):
+        return torch.randn(2, input_channels, 32, 32)
+
+    @pytest.fixture(scope="class")
+    def empty_image(self, input_channels: int):
+        return torch.empty((0, input_channels, 64, 64))
+
+    @pytest.fixture(scope="class")
+    def sample_timesteps(self):
+        return torch.randn(2)
+
+    @pytest.fixture(scope="class")
+    def sample_labels(self):
+        return torch.randint(0, 10, (2,))
+
+    def test_zero_batch_size(
+        self,
+        input_channels: int,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        patch_size: int,
+    ):
         """
         Test behavior with zero batch size.
 
@@ -1518,6 +1817,12 @@ class TestMMDiTEdgeCases:
 
         Args:
             input_channels (int): Number of input image channels.
+            input_dim (int): Dimension of the input features.
+            hidden_dim (int): Hidden dimension for attention computation.
+            embedding_dim (int): Dimension of the conditioning embeddings.
+            num_heads (int): Number of attention heads.
+            mlp_ratio (int): Ratio for MLP hidden dimension expansion.
+            patch_size (int): Size of image patches.
 
         Raises:
             AssertionError: If the model doesn't handle empty batches correctly or
@@ -1526,20 +1831,31 @@ class TestMMDiTEdgeCases:
         model = MMDiT(
             simple_dit=True,
             input_channels=input_channels,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            embedding_dim=embedding_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
+            patch_size=patch_size,
             n_classes=10,
             depth=1,
         )
-
-        # Empty tensor
         sample_image = torch.empty((0, input_channels, 64, 64))
         sample_timesteps = torch.empty((0,))
         sample_labels = torch.empty((0,), dtype=torch.long)
-
-        # Should handle empty batch gracefully
         output: ModelOutput = model(sample_image, sample_timesteps, y=sample_labels)
         assert output["x"].shape[0] == 0
 
-    def test_non_square_images(self, input_channels: int):
+    def test_non_square_images(
+        self,
+        input_channels: int,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        patch_size: int,
+    ):
         """
         Test model behavior with non-square image inputs.
 
@@ -1549,30 +1865,45 @@ class TestMMDiTEdgeCases:
 
         Args:
             input_channels (int): Number of input image channels.
+            input_dim (int): Dimension of the input features.
+            hidden_dim (int): Hidden dimension for attention computation.
+            embedding_dim (int): Dimension of the conditioning embeddings.
+            num_heads (int): Number of attention heads.
+            mlp_ratio (int): Ratio for MLP hidden dimension expansion.
+            patch_size (int): Size of image patches.
 
         Raises:
             AssertionError: If the model fails to process non-square images correctly
                           or if output dimensions don't match expected values.
             ValueError: If the patch size doesn't divide evenly into the image dimensions.
         """
-        patch_size = 16
         model = MMDiT(
             simple_dit=True,
             input_channels=input_channels,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            embedding_dim=embedding_dim,
+            num_heads=num_heads,
+            mlp_ratio=mlp_ratio,
             patch_size=patch_size,
             n_classes=10,
             depth=1,
         )
-
-        # Non-square but divisible by patch size
-        sample_image = torch.randn(2, input_channels, 64, 128)  # 64x128
+        sample_image = torch.randn(2, input_channels, 64, 128)
         sample_timesteps = torch.randn(2)
         sample_labels = torch.randint(0, 10, (2,))
-
         output: ModelOutput = model(sample_image, sample_timesteps, y=sample_labels)
         assert output["x"].shape == sample_image.shape
 
-    def test_single_head_attention(self, input_channels: int):
+    def test_single_head_attention(
+        self,
+        input_channels: int,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        mlp_ratio: int,
+        patch_size: int,
+    ):
         """
         Test model with single attention head configuration.
 
@@ -1582,6 +1913,11 @@ class TestMMDiTEdgeCases:
 
         Args:
             input_channels (int): Number of input image channels.
+            input_dim (int): Dimension of the input features.
+            hidden_dim (int): Hidden dimension for attention computation.
+            embedding_dim (int): Dimension of the conditioning embeddings.
+            mlp_ratio (int): Ratio for MLP hidden dimension expansion.
+            patch_size (int): Size of image patches.
 
         Raises:
             AssertionError: If the model fails with single head attention or
@@ -1590,15 +1926,18 @@ class TestMMDiTEdgeCases:
         model = MMDiT(
             simple_dit=True,
             input_channels=input_channels,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            embedding_dim=embedding_dim,
             num_heads=1,
+            mlp_ratio=mlp_ratio,
+            patch_size=patch_size,
             n_classes=10,
             depth=1,
         )
-
         sample_image = torch.randn(2, input_channels, 64, 64)
         sample_timesteps = torch.randn(2)
         sample_labels = torch.randint(0, 10, (2,))
-
         output: ModelOutput = model(sample_image, sample_timesteps, y=sample_labels)
         assert output["x"].shape == sample_image.shape
 
