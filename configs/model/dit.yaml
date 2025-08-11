@@ -12,3 +12,4 @@ patch_size: 2
 depth: 10
 n_classes: 10
 classifier_free: false
+use_checkpoint: false

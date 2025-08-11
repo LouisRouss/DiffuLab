@@ -81,8 +81,8 @@ class Trainer:
         init_kwargs: dict[str, Any] = {},
         use_ema: bool = False,
         ema_rate: float = 0.999,
-        ema_update_after_step: int = 100,
-        ema_update_every: int = 1,
+        ema_update_after_step: int = 0,
+        ema_update_every: int = 10,
         compile: bool = False,
         dynamo_plugin_kwargs: dict[str, Any] = {
             "backend": "inductor",

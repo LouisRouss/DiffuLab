@@ -69,7 +69,7 @@ class DinoV2(REPA):
         self, x: Float[Tensor, "batch_size channels height width"]
     ) -> Float[Tensor, "batch_size channels height width"]:
         # Normalize the input tensor to be between 0 and 1
-        if x.min() >= 1 and x.max() <= 255:  # Case: 0-255
+        if x.min() > 1 and x.max() <= 255:  # Case: 0-255
             x = x.float() / 255.0
         elif (x.min() >= -1.0 and x.min() < 0) and x.max() <= 1.0:  # Case: -1 to 1
             x = (x + 1.0) / 2.0
