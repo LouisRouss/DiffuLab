@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Iterable, cast
 import torch
 import wandb
 from accelerate import Accelerator  # type: ignore [stub file not found]
+from accelerate.utils import TorchDynamoPlugin  # type: ignore [stub file not found]
 from ema_pytorch import EMA  # type: ignore [stub file not found]
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
@@ -49,6 +50,9 @@ class Trainer:
         ema_update_after_step (int, optional): Number of steps before starting EMA updates.
             Defaults to 100.
         ema_update_every (int, optional): Frequency of EMA updates. Defaults to 1.
+        compile (bool, optional): Whether to compile the model using TorchDynamo. Defaults to True.
+        dynam_plugin_kwargs (dict[str, Any], optional): Additional arguments for the TorchDynamo plugin.
+            Defaults to {}.
     Attributes:
         n_epoch (int): Number of training epochs.
         use_ema (bool): Whether EMA is enabled.
@@ -77,8 +81,15 @@ class Trainer:
         init_kwargs: dict[str, Any] = {},
         use_ema: bool = False,
         ema_rate: float = 0.999,
-        ema_update_after_step: int = 100,
-        ema_update_every: int = 1,
+        ema_update_after_step: int = 0,
+        ema_update_every: int = 10,
+        compile: bool = False,
+        dynamo_plugin_kwargs: dict[str, Any] = {
+            "backend": "inductor",
+            "mode": "default",
+            "fullgraph": False,
+            "dynamic": False,
+        },
     ):
         assert (HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml").exists(), (
             "please run `accelerate config` first in the CLI and save the config at the default location"
@@ -88,11 +99,13 @@ class Trainer:
         self.ema_rate = ema_rate
         self.ema_update_after_step = ema_update_after_step * gradient_accumulation_step
         self.ema_update_every = ema_update_every * gradient_accumulation_step
+        dynamo_plugin = TorchDynamoPlugin(**dynamo_plugin_kwargs) if compile else None
         self.accelerator = Accelerator(
             split_batches=True,
             mixed_precision=precision_type,
             gradient_accumulation_steps=gradient_accumulation_step,
             log_with="wandb",
+            dynamo_plugin=dynamo_plugin,
         )
         self.save_path = Path(save_path) / project_name
         Path(self.save_path).mkdir(parents=True, exist_ok=True)
