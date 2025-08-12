@@ -1,15 +1,22 @@
 from abc import ABC
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import torch.nn as nn
-from accelerate import Accelerator  # type: ignore
+
+if TYPE_CHECKING:
+    from accelerate import Accelerator  # type: ignore
+    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel
+    from torch.nn.parallel import DistributedDataParallel
+
+    from diffulab.networks.denoisers.mmdit import MMDiT
 
 
 class LossFunction(ABC, nn.Module):  # to be completed
     def __init__(self) -> None:
         super().__init__()  # type: ignore
 
-    def save(self, path: str | Path, accelerator: Accelerator | None) -> None:
+    def save(self, path: str | Path, accelerator: "Accelerator") -> None:
         """
         Save eventual learnable parameters of the loss function.
 
@@ -19,4 +26,26 @@ class LossFunction(ABC, nn.Module):  # to be completed
                 accelerator.save if provided
         """
         # By default, doesn't save anything.
+        pass
+
+    def accelerate_prepare(
+        self, accelerator: "Accelerator"
+    ) -> "list[nn.Module | DistributedDataParallel | FullyShardedDataParallel]":
+        """
+        Prepare the loss function for distributed training.
+
+        Args:
+            accelerator (Accelerator): Accelerator instance for distributed training.
+        """
+        # By default, doesn't prepare anything.
+        return []
+
+    def set_model(self, model: "MMDiT") -> None:
+        """
+        Set the model for the loss function.
+
+        Args:
+            model (nn.Module): The model to set.
+        """
+        # By default, doesn't do anything.
         pass
