@@ -1,5 +1,7 @@
 import hydra
 import torch
+
+torch._dynamo.config.cache_size_limit = 64  # type: ignore
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
