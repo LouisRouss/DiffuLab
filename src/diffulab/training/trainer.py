@@ -142,11 +142,12 @@ class Trainer:
         p_classifier_free_guidance: float = 0,
         scheduler: LRScheduler | None = None,
         per_batch_scheduler: bool = False,
+        ema_denoiser: EMA | None = None,
     ) -> None:
         """
         Performs a single training step for the diffusion model.
         This method executes one complete training iteration including forward pass, loss computation,
-        backpropagation, and optimizer updates. It also handles learning rate scheduling
+        backpropagation, and optimizer updates. It also handles EMA updates and learning rate scheduling
         if enabled.
         Args:
             diffuser (Diffuser): The diffusion model wrapper that handles the diffusion process.
@@ -178,6 +179,8 @@ class Trainer:
         optimizer.step()
         if scheduler is not None and per_batch_scheduler:
             scheduler.step()
+        if ema_denoiser is not None:
+            ema_denoiser.update()  # type: ignore
 
     @torch.no_grad()  # type: ignore
     def validation_step(
@@ -343,7 +346,6 @@ class Trainer:
                 beta=self.ema_rate,
                 update_after_step=self.ema_update_after_step,
                 update_every=self.ema_update_every,
-                include_online_model=False,
             ).to(self.accelerator.device)
             if ema_ckpt:
                 ema_denoiser.ema_model.load_state_dict(torch.load(ema_ckpt, weights_only=True))  # type: ignore
@@ -409,9 +411,8 @@ class Trainer:
                             p_classifier_free_guidance=p_classifier_free_guidance,
                             scheduler=scheduler,
                             per_batch_scheduler=per_batch_scheduler,
+                            ema_denoiser=ema_denoiser,  # type: ignore
                         )
-                        if ema_denoiser is not None:
-                            ema_denoiser.update()  # type: ignore
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
@@ -428,8 +429,9 @@ class Trainer:
 
             if val_dataloader is not None:
                 diffuser.eval()
-                original_model = diffuser.denoiser  # type: ignore
+                original_model: Denoiser | None = None
                 if ema_denoiser is not None:
+                    original_model = diffuser.denoiser  # type: ignore
                     diffuser.denoiser = ema_denoiser.eval()  # type: ignore
                     for loss in diffuser.extra_losses:
                         if hasattr(loss, "set_model"):
@@ -478,10 +480,11 @@ class Trainer:
                                 epoch,
                                 val_steps,
                                 guidance_scale=4 if original_model.classifier_free else 0,  # type: ignore
-                            )  # type: ignore
+                            )
 
                 if ema_denoiser is not None:
                     # Restore original model and eventual hooks
+                    assert original_model is not None
                     diffuser.denoiser = original_model
                     for loss in diffuser.extra_losses:
                         if hasattr(loss, "set_model"):
