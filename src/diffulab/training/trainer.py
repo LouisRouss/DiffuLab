@@ -431,9 +431,8 @@ class Trainer:
 
             if val_dataloader is not None:
                 diffuser.eval()
-                original_model: Denoiser | None = None
+                original_model: Denoiser = diffuser.denoiser  # type: ignore
                 if ema_denoiser is not None:
-                    original_model = diffuser.denoiser  # type: ignore
                     diffuser.denoiser = ema_denoiser.eval()  # type: ignore
                     for loss in diffuser.extra_losses:
                         loss.set_model(ema_denoiser.eval())  # type: ignore
@@ -485,7 +484,6 @@ class Trainer:
 
                 if ema_denoiser is not None:
                     # Restore original model and eventual hooks
-                    assert original_model is not None
                     diffuser.denoiser = original_model
                     for loss in diffuser.extra_losses:
                         loss.set_model(original_model)  # type: ignore
