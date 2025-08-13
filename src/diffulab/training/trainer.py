@@ -398,7 +398,7 @@ class Trainer:
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
             tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
-            for idx_batch, batch in enumerate(tq_batch):
+            for batch in tq_batch:
                 with self.accelerator.accumulate(diffuser.denoiser, *additional_prepared):  # type: ignore
                     with self.accelerator.autocast():
                         self.training_step(
@@ -410,7 +410,7 @@ class Trainer:
                             scheduler=scheduler,
                             per_batch_scheduler=per_batch_scheduler,
                         )
-                        if ema_denoiser is not None and idx_batch % self.accelerator.gradient_accumulation_steps == 0:
+                        if ema_denoiser is not None:
                             ema_denoiser.update()  # type: ignore
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
