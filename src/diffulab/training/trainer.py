@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 import torch
-
-torch._dynamo.config.cache_size_limit = 64  # type: ignore
 import torch.nn as nn
 import wandb
 from accelerate import Accelerator  # type: ignore [stub file not found]
@@ -255,6 +253,7 @@ class Trainer:
         val_dataloader: Iterable[BatchData],
         epoch: int,
         val_steps: int = 50,
+        guidance_scale: float = 0,
     ) -> None:
         """
         Logs generated images during the validation phase.
@@ -278,7 +277,6 @@ class Trainer:
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
-        guidance_scale = 4 if diffuser.denoiser.classifier_free else 0
         images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
         images = wandb.Image(images, caption="Validation Images")
@@ -474,7 +472,13 @@ class Trainer:
                     logging.info("creating validation images")
                     if self.accelerator.is_main_process:
                         with self.accelerator.autocast():
-                            self.log_images(diffuser, val_dataloader, epoch, val_steps)  # type: ignore
+                            self.log_images(
+                                diffuser,
+                                val_dataloader,  # type: ignore
+                                epoch,
+                                val_steps,
+                                guidance_scale=4 if original_model.classifier_free else 0,  # type: ignore
+                            )  # type: ignore
 
                 if ema_denoiser is not None:
                     # Restore original model and eventual hooks
