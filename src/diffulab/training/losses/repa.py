@@ -84,7 +84,7 @@ class RepaLoss(LossFunction):
             self._hook_handle.remove()
             self._hook_handle = None
 
-    def set_model(self, model: MMDiT) -> None:
+    def set_model(self, model: MMDiT) -> None:  # type: ignore
         """Switch the hook to a different model (e.g., EMA model)."""
         self._register_hook(model)
 

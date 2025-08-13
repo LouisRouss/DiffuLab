@@ -160,6 +160,8 @@ class Trainer:
             scheduler (LRScheduler | None, optional): Learning rate scheduler. Defaults to None.
             per_batch_scheduler (bool, optional): Whether to step the scheduler after each batch.
                 Defaults to False.
+            ema_denoiser (EMA | None, optional): Exponential Moving Average model for parameter
+                averaging. Defaults to None.
         Note:
             - The method automatically handles device placement through the accelerator.
             - Gradient accumulation is handled by the accelerator if configured.
@@ -180,7 +182,7 @@ class Trainer:
         if scheduler is not None and per_batch_scheduler:
             scheduler.step()
         if ema_denoiser is not None:
-            ema_denoiser.update()  # type: ignore
+            ema_denoiser.update()
 
     @torch.no_grad()  # type: ignore
     def validation_step(
@@ -434,8 +436,7 @@ class Trainer:
                     original_model = diffuser.denoiser  # type: ignore
                     diffuser.denoiser = ema_denoiser.eval()  # type: ignore
                     for loss in diffuser.extra_losses:
-                        if hasattr(loss, "set_model"):
-                            loss.set_model(ema_denoiser.ema_model)  # type: ignore
+                        loss.set_model(ema_denoiser.eval())  # type: ignore
 
                 tq_val_batch = tqdm(
                     val_dataloader,  # type: ignore
@@ -487,8 +488,7 @@ class Trainer:
                     assert original_model is not None
                     diffuser.denoiser = original_model
                     for loss in diffuser.extra_losses:
-                        if hasattr(loss, "set_model"):
-                            loss.set_model(original_model)  # type: ignore
+                        loss.set_model(original_model)  # type: ignore
 
             self.accelerator.wait_for_everyone()
 

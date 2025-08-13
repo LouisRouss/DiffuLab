@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel
     from torch.nn.parallel import DistributedDataParallel
 
-    from diffulab.networks.denoisers.mmdit import MMDiT
+    from diffulab.networks.denoisers import Denoiser
 
 
 class LossFunction(ABC, nn.Module):  # to be completed
@@ -40,7 +40,7 @@ class LossFunction(ABC, nn.Module):  # to be completed
         # By default, doesn't prepare anything.
         return []
 
-    def set_model(self, model: "MMDiT") -> None:
+    def set_model(self, model: "Denoiser") -> None:
         """
         Set the model for the loss function.
 
