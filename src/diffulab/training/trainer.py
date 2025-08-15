@@ -2,10 +2,9 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, cast
 
 import torch
-import torch.nn as nn
 import wandb
 from accelerate import Accelerator  # type: ignore [stub file not found]
 from accelerate.utils import TorchDynamoPlugin  # type: ignore [stub file not found]
@@ -20,11 +19,7 @@ from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel
-    from torch.nn.parallel import DistributedDataParallel
-
-    from diffulab.diffuse.diffuser import Diffuser
-
+    from diffulab.diffuse import Diffuser
 HOME_PATH = Path.home()
 
 
@@ -91,7 +86,7 @@ class Trainer:
             "backend": "inductor",
             "mode": "default",
             "fullgraph": False,
-            "dynamic": False,
+            "dynamic": True,
         },
     ):
         assert (HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml").exists(), (
@@ -103,6 +98,7 @@ class Trainer:
         self.ema_update_after_step = ema_update_after_step * gradient_accumulation_step
         self.ema_update_every = ema_update_every * gradient_accumulation_step
         dynamo_plugin = TorchDynamoPlugin(**dynamo_plugin_kwargs) if compile else None
+        self.compile = compile
         self.accelerator = Accelerator(
             split_batches=True,
             mixed_precision=precision_type,
@@ -241,15 +237,26 @@ class Trainer:
             - scheduler.pt: Scheduler state dict (if scheduler is used)
         """
         unwrapped_denoiser: Denoiser = self.accelerator.unwrap_model(diffuser.denoiser)  # type: ignore
-        self.accelerator.save(unwrapped_denoiser.state_dict(), self.save_path / "denoiser.pt")  # type: ignore
+        state_dict = cast(dict[str, Tensor], unwrapped_denoiser.state_dict())  # type: ignore
+        if self.compile:
+            state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+        self.accelerator.save(state_dict, self.save_path / "denoiser.pt")  # type: ignore
+
         self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pt")  # type: ignore
+
         if ema_denoiser is not None:
             unwrapped_ema = self.accelerator.unwrap_model(ema_denoiser)  # type: ignore
             self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pt")  # type: ignore
+
         if scheduler is not None:
             self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pt")  # type: ignore
+
         for extra_loss in diffuser.extra_losses:
-            extra_loss.save(self.save_path, self.accelerator)
+            unwrapped_loss = self.accelerator.unwrap_model(extra_loss)  # type: ignore
+            state_dict = cast(dict[str, Tensor], unwrapped_loss.state_dict())  # type: ignore
+            if self.compile:
+                state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
+            self.accelerator.save(state_dict, self.save_path / f"{unwrapped_loss.name}.pt")  # type: ignore
 
     @torch.no_grad()  # type: ignore
     def log_images(
@@ -355,6 +362,10 @@ class Trainer:
         else:
             ema_denoiser = None
 
+        for i, loss in enumerate(diffuser.extra_losses):
+            loss.set_model(diffuser.denoiser)
+            diffuser.extra_losses[i] = self.accelerator.prepare(loss)  # type: ignore
+
         if denoiser_ckpt:
             diffuser.denoiser.load_state_dict(
                 torch.load(denoiser_ckpt),  # type: ignore
@@ -379,11 +390,6 @@ class Trainer:
                     if isinstance(v, torch.Tensor):
                         state[k] = v.to(device)
 
-        additional_prepared: "list[nn.Module | DistributedDataParallel | FullyShardedDataParallel]" = []
-        for loss in diffuser.extra_losses:
-            loss.set_model(diffuser.denoiser)  # type: ignore
-            additional_prepared.extend(loss.accelerate_prepare(self.accelerator))
-
         if scheduler is not None:
             scheduler = self.accelerator.prepare_scheduler(scheduler)  # type: ignore
         best_val_loss = float("inf")
@@ -402,8 +408,8 @@ class Trainer:
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
             tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
-            for batch in tq_batch:
-                with self.accelerator.accumulate(diffuser.denoiser, *additional_prepared):  # type: ignore
+            for i, batch in enumerate(tq_batch):
+                with self.accelerator.accumulate(diffuser.denoiser, *diffuser.extra_losses):  # type: ignore
                     with self.accelerator.autocast():
                         self.training_step(
                             diffuser=diffuser,
@@ -418,6 +424,9 @@ class Trainer:
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
+                if i > 20:
+                    logging.info("breaking after 20 batches for testing purposes")
+                    break
 
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
@@ -433,9 +442,9 @@ class Trainer:
                 diffuser.eval()
                 original_model: Denoiser = diffuser.denoiser  # type: ignore
                 if ema_denoiser is not None:
-                    diffuser.denoiser = ema_denoiser.eval()  # type: ignore
+                    diffuser.denoiser = ema_denoiser.ema_model.eval()  # type: ignore
                     for loss in diffuser.extra_losses:
-                        loss.set_model(ema_denoiser.eval())  # type: ignore
+                        loss.set_model(ema_denoiser.ema_model)  # type: ignore
 
                 tq_val_batch = tqdm(
                     val_dataloader,  # type: ignore
