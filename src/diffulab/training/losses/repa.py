@@ -1,10 +1,10 @@
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypedDict, cast
+from typing import Any, Callable, TypedDict
+from weakref import WeakKeyDictionary
 
 import torch
-from accelerate import Accelerator  # type: ignore
 from jaxtyping import Float
 from torch import Tensor, nn
+from torch.utils.hooks import RemovableHandle
 
 from diffulab.networks.denoisers.mmdit import MMDiT
 from diffulab.networks.repa.common import REPA
@@ -12,9 +12,12 @@ from diffulab.networks.repa.dinov2 import DinoV2
 from diffulab.networks.repa.perceiver_resampler import PerceiverResampler
 from diffulab.training.losses.common import LossFunction
 
-if TYPE_CHECKING:
-    from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel
-    from torch.nn.parallel import DistributedDataParallel
+try:
+    from torch._dynamo import disable as _dynamo_disable  # type: ignore
+except Exception:
+
+    def _dynamo_disable(fn: Any) -> Any:
+        return fn
 
 
 class ResamplerParams(TypedDict):
@@ -28,6 +31,7 @@ class ResamplerParams(TypedDict):
 
 class RepaLoss(LossFunction):
     encoder_registry: dict[str, type[REPA]] = {"dinov2": DinoV2}
+    name: str = "RepaLoss"
 
     def __init__(
         self,
@@ -69,79 +73,50 @@ class RepaLoss(LossFunction):
                 **resampler_params,
             )
         self.alignment_layer = alignment_layer
-        self._hook_handle = None
-        self.src_features: Tensor | None = None
+        self._handles: "WeakKeyDictionary[nn.Module, RemovableHandle]" = WeakKeyDictionary()
+        self._features: "WeakKeyDictionary[nn.Module, torch.Tensor]" = WeakKeyDictionary()
+        self._active_model: nn.Module | None = None
+        self._hook_layer_idx = self.alignment_layer - 1  # as before
         self.coeff = coeff
 
-    def _register_hook(self, model: MMDiT) -> None:
-        """Register the forward hook on the specified layer of the model."""
-        self._unregister_hook()  # Ensure no previous hook is registered
-        self._hook_handle = model.layers[self.alignment_layer - 1].register_forward_hook(self._forward_hook)
+    @_dynamo_disable
+    def _make_forward_hook(self, key_model: MMDiT) -> Callable[[nn.Module, tuple[Any, ...], torch.Tensor], None]:
+        def _hook(_mod: nn.Module, _inp: tuple[Any, ...], out: torch.Tensor):
+            self._features[key_model] = out
 
-    def _unregister_hook(self) -> None:
-        """Remove the forward hook."""
-        if self._hook_handle is not None:
-            self._hook_handle.remove()
-            self._hook_handle = None
+        return _hook
+
+    def _attach_once(self, model: MMDiT) -> None:
+        if model in self._handles:
+            return
+        layer = model.layers[self._hook_layer_idx]
+        handle = layer.register_forward_hook(self._make_forward_hook(model))  # type: ignore
+        self._handles[model] = handle
 
     def set_model(self, model: MMDiT) -> None:  # type: ignore
-        """Switch the hook to a different model (e.g., EMA model)."""
-        self._register_hook(model)
-
-    def _forward_hook(self, net: nn.Module, input: tuple[Any, ...], output: Tensor) -> None:
         """
-        Hook to capture the output of the specified layer during the forward pass.
+        Select which model's captured features to use. If we haven't attached to this model yet,
+        attach exactly once and keep the handle for the lifetime of the process.
         """
-        self.src_features = output
+        self._attach_once(model)
+        self._active_model = model
 
-    def save(self, path: str | Path, accelerator: Accelerator) -> None:
-        """
-        Save state dict containing projection (and resampler if present).
-
-        Args:
-            path (str | Path): Path to save the loss function.
-            accelerator (Accelerator | None): Accelerator instance for distributed training. Uses
-                accelerator.save if provided.
-        """
-        file_path = Path(path) / "RepaLoss.pt"
-
-        unwrapped_proj = cast(nn.Module, accelerator.unwrap_model(self.proj))  # type: ignore
-        merged_state = {}
-        for k, v in unwrapped_proj.state_dict().items():
-            merged_state[f"proj.{k}"] = v
-        if self.resampler is not None:
-            unwrapped_resampler = cast(nn.Module, accelerator.unwrap_model(self.resampler))  # type: ignore
-            for k, v in unwrapped_resampler.state_dict().items():
-                merged_state[f"resampler.{k}"] = v
-
-        accelerator.save(merged_state, file_path)  # type: ignore
-
-    def accelerate_prepare(
-        self, accelerator: Accelerator
-    ) -> "list[nn.Module | DistributedDataParallel | FullyShardedDataParallel]":
-        """
-        Prepare the loss function for distributed training.
-
-        Args:
-            accelerator (Accelerator): Accelerator instance for distributed training.
-        """
-        trainable_modules: "list[nn.Module | DistributedDataParallel | FullyShardedDataParallel]" = []
-        self.proj = accelerator.prepare_model(self.proj)  # type: ignore
-        trainable_modules.append(self.proj)  # type: ignore
-        if self.resampler is not None:
-            self.resampler = accelerator.prepare_model(self.resampler)  # type: ignore
-            trainable_modules.append(self.resampler)  # type: ignore
-        if self.repa_encoder is not None:
-            self.repa_encoder = accelerator.prepare_model(self.repa_encoder)  # type: ignore
-
-        return trainable_modules
+    def _unregister_all(self) -> None:
+        for h in list(self._handles.values()):
+            h.remove()
+        self._handles.clear()
+        self._features.clear()
+        self._active_model = None
 
     def forward(
         self,
         x0: Float[Tensor, "batch 3 H W"] | None = None,
         dst_features: Float[Tensor, "batch seq_len n_dim"] | None = None,
     ) -> Tensor:
-        assert self.src_features is not None, "Source features are not computed. Ensure the forward hook is registered."
+        if self._active_model is None or self._active_model not in self._features:
+            raise RuntimeError(
+                "REPA: no captured features for the active model. Did you call set_model(...) and run a forward pass?"
+            )
         assert x0 is not None or dst_features is not None, "Either x0 or dst_features must be provided."
         if dst_features is None:
             assert self.repa_encoder is not None, "REPA encoder must be initialized to compute features."
@@ -151,7 +126,8 @@ class RepaLoss(LossFunction):
                 )  # batch size seqlen embedding_dim # SEE HOW TO HANDLE THE PRE COMPUTING OF FEATURES
         assert dst_features is not None, "Destination features must be provided or computed."
 
-        projected_src_features: Tensor = self.proj(self.src_features)  # type: ignore
+        src_features = self._features[self._active_model]
+        projected_src_features: Tensor = self.proj(src_features)
 
         if self.resampler is not None:
             projected_src_features = self.resampler(projected_src_features)
