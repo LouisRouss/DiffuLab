@@ -465,11 +465,6 @@ class Trainer:
                         )
                         total_loss += gathered_loss.mean().item()
 
-                if total_loss < best_val_loss:  # type: ignore
-                    best_val_loss = total_loss
-                    self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
-                tracker.reset()
-
                 if log_validation_images:
                     logging.info("creating validation images")
                     if self.accelerator.is_main_process:
@@ -487,6 +482,11 @@ class Trainer:
                     diffuser.denoiser = original_model
                     for loss in diffuser.extra_losses:
                         loss.set_model(original_model)  # type: ignore
+
+                if total_loss < best_val_loss:  # type: ignore
+                    best_val_loss = total_loss
+                    self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
+                tracker.reset()
 
             self.accelerator.wait_for_everyone()
 
