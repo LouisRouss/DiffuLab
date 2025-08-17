@@ -30,6 +30,51 @@ class ResamplerParams(TypedDict):
 
 
 class RepaLoss(LossFunction):
+    """Representation Alignment (REPA) loss.
+
+    Aligns intermediate features from a denoiser (MMDiT) to features from an
+    external vision encoder (e.g., DINOv2) using a projection MLP and, optionally,
+    a Perceiver resampler. Denoiser features are captured via a forward hook on a
+    specified transformer block and compared to encoder features using cosine
+    similarity. The loss is averaged over the sequence dimension and scaled by
+    ``coeff``.
+
+    Typical usage:
+        loss_fn = RepaLoss(...)
+        loss_fn.set_model(denoiser)
+        # Run a forward pass through the denoiser to populate captured features
+        loss = loss_fn(x0=batch_images)  # or pass dst_features=...
+
+    Args:
+        repa_encoder: Key of the encoder to instantiate. Supported values are
+            keys of ``encoder_registry``, e.g. "dinov2".
+        encoder_args: Keyword arguments forwarded to the encoder constructor.
+        alignment_layer: 1-based index of the MMDiT layer from which to capture
+            features.
+        denoiser_dimension: Feature dimensionality of the denoiser at the
+            alignment layer.
+        hidden_dim: Hidden size of the projection MLP.
+        load_dino: Whether to instantiate and load the encoder. Set to ``False``
+            when precomputed ``dst_features`` will be supplied at call time.
+        embedding_dim: Target embedding dimensionality when the encoder is not
+            instantiated (i.e., when ``load_dino=False``).
+        use_resampler: Whether to apply a :class:`PerceiverResampler` after the
+            projection MLP.
+        resampler_params: Configuration for the :class:`PerceiverResampler`.
+            Required if ``use_resampler=True``.
+        coeff: Multiplicative weight applied to the returned loss value.
+
+    Attributes:
+        repa_encoder: The instantiated encoder or ``None`` if
+            ``load_dino=False``.
+        proj: Projection MLP mapping denoiser features to the encoder embedding
+            space.
+        resampler: Optional :class:`PerceiverResampler` applied after the
+            projection.
+        alignment_layer: 1-based index of the hooked MMDiT layer.
+        coeff: Multiplicative weight applied to the returned loss.
+    """
+
     encoder_registry: dict[str, type[REPA]] = {"dinov2": DinoV2}
     name: str = "RepaLoss"
 
@@ -94,9 +139,16 @@ class RepaLoss(LossFunction):
         self._handles[model] = handle
 
     def set_model(self, model: MMDiT) -> None:  # type: ignore
-        """
-        Select which model's captured features to use. If we haven't attached to this model yet,
-        attach exactly once and keep the handle for the lifetime of the process.
+        """Register the model to capture features from a specific layer.
+
+        This attaches a forward hook to the specified ``alignment_layer`` of the
+        provided model (only once). A forward pass on ``model`` must be executed
+        after calling this method so that features are captured before computing
+        the loss.
+
+        Args:
+            model (MMDiT): The model whose intermediate features will be
+                aligned to the encoder features.
         """
         self._attach_once(model)
         self._active_model = model
@@ -113,6 +165,26 @@ class RepaLoss(LossFunction):
         x0: Float[Tensor, "batch 3 H W"] | None = None,
         dst_features: Float[Tensor, "batch seq_len n_dim"] | None = None,
     ) -> Tensor:
+        """Compute the REPA cosine-similarity loss.
+
+        Either provide input images via ``x0`` to compute destination features
+        with the encoder, or pass precomputed ``dst_features`` directly.
+
+        Args:
+            x0 (Tensor): Input images of shape ``[B, 3, H, W]`` used to compute encoder
+                features when an encoder is available.
+            dst_features (Tensor): Precomputed encoder features of shape ``[B, S, D]``.
+                If provided, ``x0`` is ignored.
+
+        Returns:
+            Tensor: A scalar tensor containing the REPA loss.
+
+        Raises:
+            RuntimeError: If no captured features are available for the active
+                model. Ensure ``set_model(...)`` was called and a forward pass
+                on the model was executed first.
+            AssertionError: If neither ``x0`` nor ``dst_features`` is provided.
+        """
         if self._active_model is None or self._active_model not in self._features:
             raise RuntimeError(
                 "REPA: no captured features for the active model. Did you call set_model(...) and run a forward pass?"

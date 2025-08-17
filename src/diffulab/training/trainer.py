@@ -124,10 +124,7 @@ class Trainer:
             dict[str, Any]: A new dictionary with the same structure as the input, but with all
                 tensor values moved to the accelerator's device.
         """
-        return {
-            k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v
-            for k, v in batch.items()  # type: ignore
-        }
+        return {k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
 
     def training_step(
         self,
@@ -279,13 +276,15 @@ class Trainer:
             epoch (int): Current training epoch number, used for logging.
             val_steps (int, optional): Number of diffusion steps to use for validation
                 image generation. Using fewer steps speeds up generation. Defaults to 50.
+            guidance_scale (float, optional): Guidance scale for classifier-free guidance.
+                Defaults to 0.
         Note:
             - The method temporarily changes the number of diffusion steps to val_steps
               for faster generation, then restores the original number of steps.
             - Generated images are normalized from [-1, 1] to [0, 1] range before logging.
             - Images are logged to wandb with the key 'val/images'.
         """
-        batch: ModelInput = next(iter(val_dataloader))["model_inputs"]  # type: ignore
+        batch: ModelInput = next(iter(val_dataloader))["model_inputs"]
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
