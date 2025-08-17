@@ -424,9 +424,6 @@ class Trainer:
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
-                if i > 20:
-                    logging.info("breaking after 20 batches for testing purposes")
-                    break
 
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
