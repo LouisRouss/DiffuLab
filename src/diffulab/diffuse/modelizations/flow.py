@@ -247,7 +247,7 @@ class Flow(Diffusion):
         # Compute extra losses if any
         for extra_loss in extra_losses:
             e_loss = cast(Tensor, extra_loss(**extra_args))
-            loss_dict[extra_loss.__class__.__name__] = e_loss
+            loss_dict[extra_loss.name] = e_loss
         return loss_dict
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:

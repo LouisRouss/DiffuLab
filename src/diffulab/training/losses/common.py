@@ -7,8 +7,8 @@ if TYPE_CHECKING:
     from diffulab.networks.denoisers import Denoiser
 
 
-class LossFunction(ABC, nn.Module):  # to be completed
-    name: str
+class LossFunction(ABC, nn.Module):
+    name: str = "extra_loss"
 
     def __init__(self) -> None:
         super().__init__()  # type: ignore
