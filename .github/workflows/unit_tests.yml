@@ -1,15 +1,30 @@
-name: CI
+name: Unit Tests
+
 on:
   push:
-    branches: ["**"]
-  pull_request_target:
-    types: [labeled]
+    branches: [ main ]
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/unit_tests.yml'
+      - 'tests/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: unit-tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  lint_and_typecheck:
-    if: ${{ github.event_name == 'push' || github.event.label.name == 'run-ci' }}
+  if: github.event.pull_request.draft == false
+  tests:
     runs-on: ubuntu-latest
-
     steps:
       - name: checkout
         uses: actions/checkout@v4
@@ -22,8 +37,7 @@ jobs:
             sources:
               - src/**
               - tests/**
-              - scripts/**
-              - .github/workflows/ci.yml
+              - .github/workflows/unit_tests.yml
 
       - name: Install uv
         if: steps.changes.outputs.sources == 'true'
@@ -41,14 +55,13 @@ jobs:
         if: steps.changes.outputs.sources == 'true'
         run: uv sync --all-extras
 
-      - name: fmt
+      - name: Run tests
         if: steps.changes.outputs.sources == 'true'
-        run: uv run ruff format --check
+        run: uv run pytest --junitxml=results.xml
 
-      - name: lint
+      - name: Upload test report
         if: steps.changes.outputs.sources == 'true'
-        run: uv run ruff check
-
-      - name: typecheck
-        if: steps.changes.outputs.sources == 'true'
-        run: uv run pyright
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: results.xml
