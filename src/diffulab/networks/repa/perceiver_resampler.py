@@ -1,7 +1,7 @@
 # This implementation has been adapted from https://github.com/lucidrains/flamingo-pytorch/tree/main
 # Under MIT license
 
-from typing import Any, cast
+from typing import cast
 
 import torch
 from einops import rearrange, repeat
@@ -9,18 +9,6 @@ from jaxtyping import Float
 from torch import Tensor, einsum, nn
 
 from diffulab.networks.utils.nn import RotaryPositionalEmbedding
-
-
-def exists(val: Any) -> bool:
-    """Return True if ``val`` is not ``None``.
-
-    Args:
-        val: Object to test.
-
-    Returns:
-        bool: ``True`` when the object is not ``None`` else ``False``.
-    """
-    return val is not None
 
 
 class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):

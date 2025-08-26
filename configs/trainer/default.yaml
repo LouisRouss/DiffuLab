@@ -8,3 +8,4 @@ ema_update_after_step: 0
 ema_update_every: 10
 log_validation_images: true
 val_steps: 50
+compile: true

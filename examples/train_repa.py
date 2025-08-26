@@ -1,5 +1,7 @@
 import hydra
 import torch
+
+torch._dynamo.config.cache_size_limit = 64  # type: ignore
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
@@ -27,7 +29,6 @@ def train(cfg: DictConfig):
 
     # Repa Specific parameters
     repa_loss = RepaLoss(
-        denoiser=denoiser,
         denoiser_dimension=cfg.model.get("input_dim"),
         embedding_dim=1024,  # dimension of the DINO features (precomputed here)
         load_dino=False,
@@ -47,6 +48,7 @@ def train(cfg: DictConfig):
         shuffle=dl_cfg.get("shuffle", True),
         num_workers=dl_cfg.get("num_workers", 0),
         pin_memory=dl_cfg.get("pin_memory", False),
+        drop_last=True,
     )
 
     val_loader = DataLoader(
@@ -71,7 +73,7 @@ def train(cfg: DictConfig):
     optimizer = instantiate(
         cfg.optimizer,
         params=list(denoiser.parameters())
-        + list(repa_loss.proj.parameters())
+        + list(repa_loss.proj.parameters())  # type: ignore
         + list(repa_loss.resampler.parameters() if repa_loss.resampler else []),
     )
 
@@ -84,6 +86,7 @@ def train(cfg: DictConfig):
         ema_update_after_step=cfg.trainer.get("ema_update_after_step", 0),
         ema_update_every=cfg.trainer.get("ema_update_every", 10),
         run_config=OmegaConf.to_container(cfg, resolve=True),  # type: ignore[reportArgumentType]
+        compile=cfg.trainer.get("compile", False),
         init_kwargs={
             "wandb": cfg.trainer.get("wandb", {}),
         },

@@ -7,6 +7,7 @@ import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float, Int
 from torch import Tensor
+from torch.utils.checkpoint import checkpoint  # type: ignore
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
 from diffulab.networks.embedders.common import ContextEmbedder
@@ -94,9 +95,12 @@ class DiTAttention(nn.Module):
         q, k, v = self.rope(q=q, k=k, v=v)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
-        attn_weights: Tensor = (q @ k.transpose(-2, -1)) * self.scale
-        attn_weights = attn_weights.softmax(dim=-1)
-        attn_output = attn_weights @ v
+        attn_output = nn.functional.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            scale=self.scale,
+        )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
 
@@ -196,9 +200,12 @@ class MMDiTAttention(nn.Module):
         q, k, v = self.rope(q=q, k=k, v=v)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
-        attn_weights = (q @ k.transpose(-2, -1)) * self.scale
-        attn_weights = attn_weights.softmax(dim=-1)
-        attn_output = attn_weights @ v
+        attn_output = nn.functional.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            scale=self.scale,
+        )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
 
@@ -245,6 +252,7 @@ class DiTBlock(nn.Module):
         num_heads: int,
         mlp_ratio: int,
         partial_rotary_factor: float = 1,
+        use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
         self.modulation = Modulation(embedding_dim, input_dim)
@@ -256,8 +264,28 @@ class DiTBlock(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(mlp_ratio * input_dim, input_dim),
         )
+        self.use_checkpoint = use_checkpoint
 
     def forward(
+        self,
+        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        y: Float[Tensor, "batch_size embedding_dim"],
+    ) -> Float[Tensor, "batch_size seq_len embedding_dim"]:
+        """
+        Forward pass of the DiTBlock applying modulation and attention mechanisms.
+        Args:
+            - input (Tensor): The input tensor to be processed
+            - y (Tensor): The conditioning tensor used for modulation
+        Returns:
+            Tensor: The processed input tensor with residual connection
+        """
+        return (
+            checkpoint(self._forward, *(input, y), use_reentrant=False)
+            if self.use_checkpoint
+            else self._forward(input, y)
+        )  # type: ignore
+
+    def _forward(
         self, input: Float[Tensor, "batch_size seq_len embedding_dim"], y: Float[Tensor, "batch_size embedding_dim"]
     ) -> Tensor:
         modulation: ModulationOut = self.modulation(y)
@@ -318,6 +346,7 @@ class MMDiTBlock(nn.Module):
         num_heads: int,
         mlp_ratio: int,
         partial_rotary_factor: float = 1,
+        use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
         self.modulation_context = Modulation(embedding_dim, context_dim)
@@ -343,13 +372,14 @@ class MMDiTBlock(nn.Module):
             nn.GELU(approximate="tanh"),
             nn.Linear(mlp_ratio * input_dim, input_dim),
         )
+        self.use_checkpoint = use_checkpoint
 
     def forward(
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
         context: Float[Tensor, "batch_size seq_len context_dim"],
-    ):
+    ) -> tuple[Float[Tensor, "batch_size seq_len embedding_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
         """
         Forward pass of the MMDiT module applying modulation and attention mechanisms.
         Args:
@@ -367,6 +397,18 @@ class MMDiTBlock(nn.Module):
         4. MLP processing with modulation
         5. Residual connections for both input and context paths
         """
+        return (
+            checkpoint(self._forward, *(input, y, context), use_reentrant=False)
+            if self.use_checkpoint
+            else self._forward(input, y, context)
+        )  # type: ignore
+
+    def _forward(
+        self,
+        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        y: Float[Tensor, "batch_size embedding_dim"],
+        context: Float[Tensor, "batch_size seq_len context_dim"],
+    ):
         modulation_input: ModulationOut = self.modulation_input(y)
         modulation_context: ModulationOut = self.modulation_context(y)
 
@@ -440,6 +482,7 @@ class MMDiT(Denoiser):
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
+        use_checkpoint: bool = False,
     ):
         super().__init__()
         assert not (n_classes is not None and context_embedder is not None), (
@@ -498,6 +541,7 @@ class MMDiT(Denoiser):
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     partial_rotary_factor=partial_rotary_factor,
+                    use_checkpoint=use_checkpoint,
                 )
                 if not self.simple_dit
                 else DiTBlock(
@@ -507,6 +551,7 @@ class MMDiT(Denoiser):
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     partial_rotary_factor=partial_rotary_factor,
+                    use_checkpoint=use_checkpoint,
                 )
                 for _ in range(depth)
             ]

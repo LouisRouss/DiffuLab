@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 from jaxtyping import Float, Int
 from torch import Tensor
+from torch.utils.checkpoint import checkpoint  # type: ignore
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
 from diffulab.networks.embedders.common import ContextEmbedder
@@ -15,7 +16,7 @@ from diffulab.networks.utils.nn import (
     normalization,
     timestep_embedding,
 )
-from diffulab.networks.utils.utils import checkpoint, default, zero_module
+from diffulab.networks.utils.utils import default, zero_module
 
 
 class TimestepBlock(nn.Module):
@@ -203,7 +204,9 @@ class ResBlock(TimestepBlock):
             - The underlying computation is delegated to self._forward(x, emb).
             - The channel dimension of x is preserved.
         """
-        return checkpoint(self._forward, (x, emb), self.parameters(), self.use_checkpoint)
+        return (
+            checkpoint(self._forward, *(x, emb), use_reentrant=False) if self.use_checkpoint else self._forward(x, emb)
+        )  # type: ignore
 
     def _forward(
         self, x: Float[Tensor, "batch_size channels height width"], emb: Float[Tensor, "batch_size emb_channels"]
@@ -269,12 +272,15 @@ class AttentionBlock(ContextBlock):
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
-        return checkpoint(
-            self._forward,
-            (x, context),
-            self.parameters(),
-            True if self.use_checkpoint else False,
-        )
+        return (
+            checkpoint(
+                self._forward,
+                *(x, context),
+                use_reentrant=False,
+            )
+            if self.use_checkpoint
+            else self._forward(x, context)
+        )  # type: ignore
 
     def _forward(
         self,
