@@ -545,7 +545,7 @@ class GaussianDiffusion(Diffusion):
 
         if classifier_free and guidance_scale > 0:
             prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)["x"]
-            prediction = prediction + guidance_scale * (prediction - prediction_uncond)
+            prediction = prediction_uncond + guidance_scale * (prediction - prediction_uncond)
 
         mean, _, log_var, x_start = self._get_p_mean_var(prediction, model_inputs["x"], timesteps, clamp_x)
 
