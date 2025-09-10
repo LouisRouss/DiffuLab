@@ -31,6 +31,9 @@ dev = [
 repa = [
     "timm>=1.0.15",
 ]
+prefgrpo = [
+    "qwen-vl-utils>=0.0.11",
+]
 
 [tool.uv.sources]
 diffulab = {workspace = true}
