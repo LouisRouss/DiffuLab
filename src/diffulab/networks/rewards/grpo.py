@@ -4,7 +4,9 @@ from typing import TYPE_CHECKING, Literal, TypedDict, Union, cast  # added Typed
 
 import numpy as np
 import torch
+from einops import rearrange
 from jaxtyping import Float
+from numpy.typing import NDArray
 from PIL import Image
 from qwen_vl_utils import process_vision_info  # type: ignore[reportUnknownVariableType]
 from torch import Tensor
@@ -50,7 +52,7 @@ class PrefGRPORewardModel(RewardModel):
         "72b": "CodeGoat24/UnifiedReward-2.0-qwen-72b",
     }
 
-    def __init__(self, version: str = "7b"):
+    def __init__(self, version: str = "7b", n_image_per_prompt: int = 16):
         super().__init__()
         self.use_cot = version.startswith("cot")
         self.version = version
@@ -62,6 +64,10 @@ class PrefGRPORewardModel(RewardModel):
         )
         self.processor: Qwen2_5_VLProcessor = AutoProcessor.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
         self.tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
+        self.n_image_per_prompt = n_image_per_prompt
+
+    def set_n_image_per_prompt(self, n: int) -> None:
+        self.n_image_per_prompt = n
 
     @staticmethod
     def _extract_cot_answer(text: str) -> str | None:
@@ -137,6 +143,21 @@ class PrefGRPORewardModel(RewardModel):
 
         return sections
 
+    @staticmethod
+    def convert_to_image(image: Float[Tensor, "C H W"]) -> Image.Image:
+        """
+        Convert a tensor image to a PIL Image.
+        Assume
+
+        Args:
+            image (Float[Tensor, "C H W"]): The input tensor image.
+        Returns:
+            Image.Image: The converted PIL Image.
+        """
+        image = ((image * 0.5 + 0.5).clamp(0, 1) * 255).byte()
+        np_image: NDArray[np.uint8] = rearrange(image.cpu(), "C H W -> H W C").numpy()  # type: ignore[reportUnknownMemberType]
+        return Image.fromarray(np_image)
+
     def get_template(self, prompt: str) -> str:
         if self.use_cot:
             return f"""Given a caption and two images generated based on this caption, please analyze in detail the
@@ -179,7 +200,7 @@ class PrefGRPORewardModel(RewardModel):
             Your task is provided as follows:\n
             Text Caption: [{prompt}]"""
 
-    def get_cot_message(self, image_1: Image.Image, image_2: Image.Image, prompt: str) -> list[ChatMessage]:
+    def get_message(self, image_1: Image.Image, image_2: Image.Image, prompt: str) -> list[ChatMessage]:
         template = self.get_template(prompt)
         message: list[ChatMessage] = [
             {
@@ -215,62 +236,160 @@ class PrefGRPORewardModel(RewardModel):
         return None
 
     def parse_and_aggregate(
-        self, outputs: list[str], pairs: list[tuple[tuple[int, Image.Image], tuple[int, Image.Image]]]
-    ) -> tuple[list[float], list[int]]:
-        win_count: list[float] = [0] * (max(itertools.chain.from_iterable(pairs), key=lambda x: x[0])[0] + 1)
-        compare_count: list[int] = [0] * (max(itertools.chain.from_iterable(pairs), key=lambda x: x[0])[0] + 1)
+        self,
+        outputs: list[str],
+        pairs: torch.Tensor,
+        P: int,
+    ) -> tuple[Float[Tensor, "P n_image_per_prompt"], Float[Tensor, "P n_image_per_prompt"]]:
+        """
+        Aggregate pairwise preferences into per-image win and compare counts.
 
-        for output, ((idx1, _), (idx2, _)) in zip(outputs, pairs):
-            idx_winner = self._assess_winner(output)
+        Args:
+            outputs: Model text outputs, ordered by prompt first, then pair index.
+            pairs: Tensor of shape (n_pairs, 2) with image indices per prompt (0..n_images_per_prompt-1).
+            P: Number of prompts in the batch.
 
-            compare_count[idx1] += 1
-            compare_count[idx2] += 1
+        Returns:
+            win_count: (P, n_images_per_prompt) float tensor where each entry is the accumulated wins
+                       (ties contribute 0.5).
+            compare_count: (P, n_images_per_prompt) int tensor with number of comparisons per image.
+        """
+        assert pairs.ndim == 2 and pairs.shape[1] == 2, "pairs must have shape (n_pairs, 2)"
+        n_pairs = pairs.shape[0]
 
-            if idx_winner is None:
-                win_count[idx1] += 0.5
-                win_count[idx2] += 0.5
-            elif idx_winner == 0:
-                win_count[idx1] += 1
-            elif idx_winner == 1:
-                win_count[idx2] += 1
+        # Initialize counts
+        win_count = torch.zeros(P, self.n_image_per_prompt, dtype=torch.float32)
+        compare_count = torch.zeros(P, self.n_image_per_prompt, dtype=torch.int32)
+
+        # Ensure pairs on CPU for indexing ops; we only need indices here
+        pairs_cpu = pairs.to("cpu")
+
+        for i, output in enumerate(outputs):
+            p = i // n_pairs  # prompt index
+            j = i % n_pairs  # pair index within the prompt
+            # Extract explicit Python ints for stable typing
+            idx1 = int(pairs_cpu[j, 0].item())
+            idx2 = int(pairs_cpu[j, 1].item())
+
+            # Each image in the pair participates in one comparison
+            compare_count[p, idx1] += 1
+            compare_count[p, idx2] += 1
+
+            winner = self._assess_winner(output)
+            if winner is None:
+                # tie: split the point
+                win_count[p, idx1] += 0.5
+                win_count[p, idx2] += 0.5
+            elif winner == 0:
+                win_count[p, idx1] += 1.0
+            else:  # winner == 1
+                win_count[p, idx2] += 1.0
 
         return win_count, compare_count
 
-    def compute_reward(self, win_count: list[float], compare_count: list[int]) -> Float[Tensor, "n_images"]:
-        win_rates = np.array(win_count) / np.array(compare_count)
-        mean_win_rate = np.mean(win_rates)
-        std_win_rate = np.std(win_rates)
-        rewards = (win_rates - mean_win_rate) / std_win_rate
+    def compute_reward(
+        self,
+        win_count: Float[Tensor, "P n_image_per_prompt"],
+        compare_count: Float[Tensor, "P n_image_per_prompt"],
+        advantage_per_prompt: bool = True,
+    ) -> Float[Tensor, "n_images"]:
+        """
+        Compute standardized rewards from win and compare counts.
+
+        """
+        compare_count = compare_count.to(torch.float32)
+        win_rates = torch.where(compare_count > 0, win_count / compare_count, torch.zeros_like(win_count))
+
+        if advantage_per_prompt:
+            mean = win_rates.mean(dim=1, keepdim=True)
+            std = win_rates.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-6)
+            rewards = (win_rates - mean) / std
+        else:
+            mean = win_rates.mean()
+            std = win_rates.std(unbiased=False).clamp_min(1e-6)
+            rewards = (win_rates - mean) / std
         return torch.tensor(rewards, dtype=torch.float32)
 
+    @torch.inference_mode()
     def forward(
         self,
-        images: list[Image.Image],
-        context: str,
-    ) -> Float[Tensor, "n_images"]:
-        pairs = list(itertools.combinations(enumerate(images), 2))
-
-        data_to_process: list[list[ChatMessage]] = []
-        for (_, img1), (_, img2) in pairs:
-            message = self.get_cot_message(img1, img2, context)
-            data_to_process.append(message)
-
-        chat_input = self.processor.apply_chat_template(
-            data_to_process,  # type: ignore[reportArgumentType]
-            tokenize=False,
-            add_generation_prompt=True,
+        images: Float[Tensor, "batch n_channels height width"],
+        context: list[str],
+        advantage_per_prompt: bool = True,
+    ) -> Float[Tensor, "batch"]:
+        """
+        Compute per-image standardized rewards from pairwise preference judgments within each prompt group.
+        This method groups the input batch into P prompts, each containing `self.n_image_per_prompt` images.
+        For every prompt, it forms all unordered image pairs, builds chat inputs with the corresponding
+        text context, queries the underlying vision-language model to obtain pairwise preferences, aggregates
+        the results into per-image win rates, and returns z-scored rewards either per prompt or globally.
+        Args:
+            images (torch.Tensor): Float tensor of shape (B, C, H, W) containing a batch of images.
+                The batch size B must be divisible by `self.n_image_per_prompt`. Images are implicitly
+                partitioned into P = B // `self.n_image_per_prompt` prompts.
+            context (list[str]): A list of length P with the textual context (e.g., prompt) for each
+                group of images. Each context entry is replicated across all intra-group pairs.
+            advantage_per_prompt (bool, optional): If True, compute a per-prompt z-score (mean/std computed
+                across the images within each prompt). If False, compute a global z-score across all images
+                in the batch. Defaults to True.
+        Returns:
+            torch.Tensor: Float tensor of shape (B,) on the same device as `images`, containing the
+                standardized reward for each image.
+        Raises:
+            AssertionError: If B % `self.n_image_per_prompt` != 0.
+            RuntimeError: Propagated from underlying model/processor during tokenization or generation.
+            ValueError: Propagated from parsing/aggregation if model outputs cannot be interpreted.
+        Notes:
+            - Pairs are formed as all unordered combinations of the `self.n_image_per_prompt` images
+              within each prompt (r=2).
+            - Win rates are computed as wins / comparisons per image; images with zero comparisons
+              receive a zero win rate before standardization.
+            - Standard deviation uses unbiased=False and is clamped with a minimum of 1e-6 to avoid
+              division by zero.
+            - Inference is batched with an upper bound of B pairwise conversations per generation call
+              and uses max_new_tokens=4096.
+        """
+        B, C, H, W = images.shape
+        assert B % self.n_image_per_prompt == 0, (
+            f"Batch size {images.shape[0]} is not divisible by n_image_per_prompt {self.n_image_per_prompt}"
         )
-        image_inputs, _ = process_vision_info(data_to_process)  # type: ignore[reportArgumentType]
 
-        inputs = self.processor(text=chat_input, images=image_inputs, return_tensors="pt", padding=True).to(  # type: ignore[reportUnknownMemberType]
-            self.model.device
-        )
+        P = B // self.n_image_per_prompt
 
-        with torch.no_grad():
+        imgs = images.view(P, self.n_image_per_prompt, C, H, W)
+        pairs = torch.combinations(torch.arange(self.n_image_per_prompt, device=images.device), r=2)
+
+        trg_tensor = imgs[:, pairs]
+        trg_tensor = trg_tensor.reshape(-1, 2, C, H, W)  # (P * n_pairs, 2, C, H, W)
+
+        context_extended = list(itertools.chain.from_iterable(itertools.repeat(c, pairs.shape[0]) for c in context))
+
+        data_to_process: list[list[ChatMessage]] = [
+            self.get_message(self.convert_to_image(pair[0]), self.convert_to_image(pair[1]), pair_context)
+            for pair, pair_context in zip(trg_tensor, context_extended)
+        ]
+
+        outputs: list[str] = []
+        # Batch processing respecing the original batch size
+        for batch in range(0, len(data_to_process), B):
+            batch_data = data_to_process[batch : batch + B]
+            chat_input = self.processor.apply_chat_template(  # type: ignore[reportArgumentType]
+                batch_data,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            image_inputs, _ = process_vision_info(batch_data)  # type: ignore[reportArgumentType]
+
+            inputs = self.processor(text=chat_input, images=image_inputs, return_tensors="pt", padding=True).to(  # type: ignore[reportUnknownMemberType]
+                self.model.device
+            )
+
             generated_ids = self.model.generate(**inputs, max_new_tokens=4096)  # type: ignore[reportUnknownMemberType]
-        generated_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)]
-        outputs = cast(list[str], self.processor.batch_decode(generated_trimmed, skip_special_tokens=True))  # type: ignore[reportUnknownMemberType]
+            generated_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)]
+            outputs.extend(cast(list[str], self.processor.batch_decode(generated_trimmed, skip_special_tokens=True)))  # type: ignore[reportUnknownMemberType]
 
-        win_count, compare_count = self.parse_and_aggregate(outputs, pairs)
-
-        return self.compute_reward(win_count, compare_count)
+        # Aggregate pairwise preferences into per-image counts per prompt
+        win_count, compare_count = self.parse_and_aggregate(outputs, pairs, P=P)
+        rewards = self.compute_reward(win_count, compare_count, advantage_per_prompt)
+        rewards_flat = rewards.reshape(-1).to(images.device)
+        return rewards_flat

@@ -3,7 +3,8 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from PIL import Image
+from jaxtyping import Float
+from torch import Tensor
 
 
 class RewardModel(nn.Module, ABC):
@@ -11,14 +12,14 @@ class RewardModel(nn.Module, ABC):
         super().__init__()  # type: ignore
 
     @abstractmethod
-    def forward(self, images: list[Image.Image], context: Any) -> torch.Tensor:
+    @torch.inference_mode()
+    def forward(self, images: Float[Tensor, "batch n_channels height width"], context: Any) -> Float[Tensor, "batch"]:
         """
         Apply the model to an input batch.
 
         Args:
-            x (torch.Tensor): the input batch.
-            *args (Any): additional positional arguments.
-            **kwargs (Any): additional keyword arguments.
+            images (torch.Tensor): the input batch.
+            context (Any): additional context information.
         Returns:
             torch.Tensor: a tensor representing the reward for the given input batch.
         """
