@@ -60,7 +60,7 @@ class PrefGRPORewardModel(RewardModel):
             f"Unsupported model version: {self.version}, available versions: {list(self.model_registry.keys())}"
         )
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(  # type: ignore[reportUnknownMemberType]
-            self.model_registry[self.version], torch_dtype="auto", device_map="auto"
+            self.model_registry[self.version], dtype="auto", device_map="auto"
         )
         self.processor: Qwen2_5_VLProcessor = AutoProcessor.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
         self.tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
