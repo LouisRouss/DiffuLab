@@ -143,6 +143,7 @@ class Diffuser:
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
+        return_latents: bool = False,
         **kwargs: dict[str, Any],
     ) -> Tensor:
         """
@@ -159,6 +160,8 @@ class Diffuser:
             clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
             guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
+            return_latents (bool, optional): Whether to return the latent representation when using a
+                vision tower instead of decoded data. Defaults to False.
             **kwargs (dict[str, Any]): Additional arguments to pass to the diffusion model's denoise method.
                 These may include parameters like 'classifier', 'classifier_free', etc.
         Returns:
@@ -186,8 +189,7 @@ class Diffuser:
                 guidance_scale=guidance_scale,
                 **kwargs,
             )
-            z = z / self.latent_scale
-            return self.vision_tower.decode(z)
+            return z if return_latents else self.vision_tower.decode(z / self.latent_scale)
 
         return self.diffusion.denoise(
             self.denoiser,
