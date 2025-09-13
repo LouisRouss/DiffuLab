@@ -71,6 +71,27 @@ class Diffuser:
         else:
             raise NotImplementedError(f"Model type {self.model_type} is not implemented")
 
+    def __getattr__(self, name: str) -> Any:
+        """
+        Delegate unknown attributes/methods to the underlying diffusion object.
+        This lets you call `diffuser.func(...)` and it will resolve to
+        `diffuser.diffusion.func(...)` if it exists.
+
+        Raises:
+            AttributeError if the attribute/method doesn't exist on the diffusion.
+        """
+        try:
+            attr = getattr(self.diffusion, name)
+        except AttributeError as e:
+            raise AttributeError(f"Nor {self.model_type!r} nor Diffuser has attribute {name!r}") from e
+        return attr
+
+    def __dir__(self):
+        """
+        Extend the dir() output to include attributes/methods from the diffusion object.
+        """
+        return sorted(set(super().__dir__()) | set(dir(self.diffusion)))
+
     def eval(self) -> None:
         """
         Set the denoiser model to evaluation mode.
