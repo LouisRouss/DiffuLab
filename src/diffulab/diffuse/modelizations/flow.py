@@ -199,6 +199,73 @@ class Flow(Diffusion):
             raise NotImplementedError
         return x_t_minus_one
 
+    def one_step_denoise_grpo(
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        t_prev: float,
+        t_curr: float,
+        guidance_scale: float,
+        x_t_minus_one_grpo: Tensor | None = None,
+        eta: float = 0.7,
+    ):
+        """
+        Performs one denoising step of flow matching following GRPO method (conversion to SDE).
+        This method is used during GRPO training.
+        Args:
+            model (Denoiser): The neural network model used for denoising.
+            model_inputs (ModelInput): A dictionary containing the model inputs, including
+                the current state tensor keyed as 'x' and any conditional information.
+            t_prev (float): The previous (target) timestep value to move toward.
+            t_curr (float): The current timestep value.
+            guidance_scale (float): Scale factor for classifier-free guidance. If greater than 0,
+                the method computes both conditional and unconditional predictions and
+                interpolates between them, with higher values emphasizing the conditional prediction.
+            x_t_minus_one_grpo (Tensor | None, optional): If provided, this tensor will be used
+                as the next state instead of sampling a new one. Defaults to None.
+            eta (float, optional): The noise scale parameter for GRPO. Controls the amount of
+                stochasticity in the update. Defaults to 0.7.
+        Returns:
+            tuple: A tuple containing:
+                - original_x0 (Tensor): The estimated original data at timestep 0 following the flow matching ODE.
+                - x_t_minus_one_grpo (Tensor): The updated state tensor after one step of denoising.
+                - log_probs_x_t_minus_one_grpo (Tensor): The log probabilities of the updated state.
+                - x_t_minus_one_grpo_mean (Tensor): The mean of the updated state before adding noise.
+                - sigma * sqrt(t_curr - t_prev) (Tensor): The standard deviation of the noise added.
+        """
+        assert self.sampling_method == "euler", "GRPO is only implemented for Euler method (Euler-Maruyama)"
+
+        v = self.get_v(model, ModelInput({**model_inputs, "p": 0}), t_curr)
+        if guidance_scale > 0:
+            v_dropped = self.get_v(model, {**model_inputs, "p": 1}, t_curr)
+            v = v_dropped + guidance_scale * (v - v_dropped)
+
+        original_x0 = model_inputs["x"] - v * t_curr
+        sigma: float = ((t_curr / (1 - min(t_curr, self.timesteps[1]))) ** 0.5) * eta
+
+        x_t_minus_one_grpo_mean = model_inputs["x"] - (
+            v + sigma**2 / (2 * t_curr) * (model_inputs["x"] + (1 - t_curr) * v)
+        ) * (t_curr - t_prev)
+
+        if not x_t_minus_one_grpo:
+            noise = torch.randn_like(model_inputs["x"])
+            x_t_minus_one_grpo = x_t_minus_one_grpo_mean + sigma * (t_curr - t_prev) ** 0.5 * noise
+
+        assert x_t_minus_one_grpo is not None
+        log_probs_x_t_minus_one_grpo = -(
+            (x_t_minus_one_grpo.detach() - x_t_minus_one_grpo_mean) ** 2 / (2 * sigma**2 * (t_curr - t_prev))
+            + torch.log(sigma * (t_curr - t_prev) ** 0.5)
+            + 0.5 * torch.log(torch.tensor(2 * torch.pi))
+        )
+
+        return (
+            original_x0,
+            x_t_minus_one_grpo,
+            log_probs_x_t_minus_one_grpo,
+            x_t_minus_one_grpo_mean,
+            sigma * (t_curr - t_prev) ** 0.5,
+        )
+
     def compute_loss(
         self,
         model: Denoiser,
