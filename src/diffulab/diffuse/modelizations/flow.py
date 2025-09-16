@@ -1,3 +1,4 @@
+import random
 from typing import Any, cast
 
 import torch
@@ -5,6 +6,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from diffulab.diffuse.modelizations.diffusion import Diffusion
+from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
 from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelOutput
 from diffulab.training.losses.common import LossFunction
 
@@ -208,7 +210,7 @@ class Flow(Diffusion):
         guidance_scale: float,
         x_t_minus_one_grpo: Tensor | None = None,
         eta: float = 0.7,
-    ):
+    ) -> tuple[Tensor, Tensor, Tensor, Tensor, float]:
         """
         Performs one denoising step of flow matching following GRPO method (conversion to SDE).
         This method is used during GRPO training.
@@ -247,14 +249,14 @@ class Flow(Diffusion):
             v + sigma**2 / (2 * t_curr) * (model_inputs["x"] + (1 - t_curr) * v)
         ) * (t_curr - t_prev)
 
-        if not x_t_minus_one_grpo:
+        if x_t_minus_one_grpo is None:
             noise = torch.randn_like(model_inputs["x"])
             x_t_minus_one_grpo = x_t_minus_one_grpo_mean + sigma * (t_curr - t_prev) ** 0.5 * noise
 
         assert x_t_minus_one_grpo is not None
         log_probs_x_t_minus_one_grpo = -(
             (x_t_minus_one_grpo.detach() - x_t_minus_one_grpo_mean) ** 2 / (2 * sigma**2 * (t_curr - t_prev))
-            + torch.log(sigma * (t_curr - t_prev) ** 0.5)
+            + torch.log(torch.tensor(sigma * (t_curr - t_prev) ** 0.5))
             + 0.5 * torch.log(torch.tensor(2 * torch.pi))
         )
 
@@ -316,6 +318,46 @@ class Flow(Diffusion):
             e_loss = cast(Tensor, extra_loss(**extra_args))
             loss_dict[extra_loss.name] = e_loss
         return loss_dict
+
+    def compute_loss_grpo(
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        grpo_sampling_output: GRPOSamplingOutput,  # each torch stacked element has shape (1, steps+1, C, H, W)
+        advantage: float,
+        kl_beta: float = 0,
+        eps: float = 1e-4,
+        timestep_fraction: float = 0.6,
+        guidance_scale: float = 4,
+        eta: float = 0.7,
+    ) -> dict[str, Tensor]:
+        # we only work on one trajectory, loss computation for each trajectory of the batch
+        indices = random.sample(range(0, self.steps), k=round(self.steps * timestep_fraction))
+        loss = torch.empty()
+        for idx in indices:
+            model_inputs["x"] = grpo_sampling_output["x_t"][:, idx]
+            _, _, new_log_probs_x_t_minus_one_grpo, new_x_t_minus_one_grpo_mean, std_t = self.one_step_denoise_grpo(
+                model=model,
+                model_inputs=model_inputs,
+                t_curr=self.timesteps[idx],
+                t_prev=self.timesteps[idx + 1],
+                guidance_scale=guidance_scale,
+                x_t_minus_one_grpo=grpo_sampling_output["x_t"][:, idx + 1],
+                eta=eta,
+            )
+            prob_ratios = torch.exp(new_log_probs_x_t_minus_one_grpo - grpo_sampling_output["log_probs"][:, idx])
+            unclipped_objective = advantage * prob_ratios
+            clipped_objective = advantage * torch.clamp(prob_ratios, 1 - eps, 1 + eps)
+
+            kl_loss = (
+                (new_x_t_minus_one_grpo_mean - grpo_sampling_output["x_t_minus_one_mean"][:, idx]) ** 2
+            ).mean() / (2 * std_t**2)
+            loss = -torch.min(unclipped_objective, clipped_objective).mean() + kl_beta * kl_loss
+            loss.backward()  # type: ignore[reportUnknownMemberType]
+
+        return {"loss": loss}
+
+    # put the loop in the compute loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """
@@ -405,3 +447,60 @@ class Flow(Diffusion):
         if clamp_x:
             model_inputs["x"] = model_inputs["x"].clamp(-1, 1)
         return model_inputs["x"]
+
+    @torch.inference_mode()
+    def denoise_grpo(
+        self,
+        model: Denoiser,
+        data_shape: tuple[int, ...],
+        model_inputs: ModelInput,
+        use_tqdm: bool = True,
+        clamp_x: bool = False,
+        guidance_scale: float = 0,
+        eta: float = 0.7,
+    ) -> GRPOSamplingOutput:
+        device = next(model.parameters()).device
+        dtype = next(model.parameters()).dtype
+        if "x" not in model_inputs:
+            model_inputs["x"] = torch.randn(data_shape, device=device, dtype=dtype)
+
+        all_x_t: list[Tensor] = [model_inputs["x"]]
+        all_x_t_minus_one_mean: list[Tensor] = []
+        all_log_probs: list[Tensor] = []
+
+        for t_curr, t_prev in tqdm(
+            zip(self.timesteps[:-1], self.timesteps[1:]),
+            desc="generating image",
+            total=self.steps,
+            disable=not use_tqdm,
+            leave=False,
+        ):
+            original_x0, x_t_minus_one_grpo, log_probs_x_t_minus_one_grpo, x_t_minus_one_grpo_mean, _ = (
+                self.one_step_denoise_grpo(
+                    model,
+                    model_inputs,
+                    t_curr=t_curr,
+                    t_prev=t_prev,
+                    guidance_scale=guidance_scale,
+                    x_t_minus_one_grpo=None,
+                    eta=eta,
+                )
+            )
+            model_inputs["x"] = x_t_minus_one_grpo
+
+            all_x_t.append(x_t_minus_one_grpo)
+            all_x_t_minus_one_mean.append(x_t_minus_one_grpo_mean)
+            all_log_probs.append(log_probs_x_t_minus_one_grpo)
+
+        if clamp_x:
+            model_inputs["x"] = model_inputs["x"].clamp(-1, 1)
+            original_x0 = original_x0.clamp(-1, 1)  # type: ignore[reportPossiblyUnboundVariable]
+
+        out: GRPOSamplingOutput = {
+            "x": model_inputs["x"],
+            "x_0_original": original_x0,  # type: ignore[reportPossiblyUnboundVariable]
+        }
+        out["x_t"] = torch.stack(all_x_t, dim=1)
+        out["x_t_minus_one_mean"] = torch.stack(all_x_t_minus_one_mean, dim=1)
+        out["log_probs"] = torch.stack(all_log_probs, dim=1)
+        return out

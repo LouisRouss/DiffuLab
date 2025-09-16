@@ -3,6 +3,7 @@ from typing import Any
 
 from torch import Tensor
 
+from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.losses import LossFunction
 
@@ -92,6 +93,16 @@ class Diffusion(ABC):
         """
         pass
 
+    def one_step_denoise_grpo(
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        guidance_scale: float,
+        *args: Any,
+        **kwargs: Any,
+    ) -> tuple[Tensor | float, ...]:
+        raise NotImplementedError("This model does not implement GRPO.")
+
     @abstractmethod
     def compute_loss(
         self,
@@ -124,6 +135,19 @@ class Diffusion(ABC):
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
         pass
+
+    # def compute_loss_grpo(
+    #     self,
+    #     model: Denoiser,
+    #     model_inputs: ModelInput,
+    #     timesteps: Tensor,
+    #     noise: Tensor | None = None,
+    #     extra_losses: list[LossFunction] = [],
+    #     extra_args: dict[str, Any] = {},
+    #     *args: Any,
+    #     **kwargs: Any,
+    # ) -> dict[str, Tensor]:
+    #     raise NotImplementedError("This model does not implement GRPO.")
 
     @abstractmethod
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
@@ -178,6 +202,19 @@ class Diffusion(ABC):
         """
         pass
 
+    def denoise_grpo(
+        self,
+        model: Denoiser,
+        data_shape: tuple[int, ...],
+        model_inputs: ModelInput,
+        use_tqdm: bool = True,
+        clamp_x: bool = False,
+        guidance_scale: float = 0,
+        *args: Any,
+        **kwargs: Any,
+    ) -> GRPOSamplingOutput:
+        raise NotImplementedError("This model does not implement GRPO.")
+
     @abstractmethod
     def draw_timesteps(self, batch_size: int) -> Tensor:
         """
@@ -198,5 +235,4 @@ class Diffusion(ABC):
             - Gaussian diffusion typically samples integers from [0, num_diffusion_steps-1]
             - Flow-based diffusion typically samples continuous values from [0, 1]
         """
-
         pass

@@ -5,6 +5,7 @@ from torch import Tensor
 from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
+from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.networks.vision_towers.common import VisionTower
 from diffulab.training.losses import LossFunction
@@ -70,27 +71,6 @@ class Diffuser:
             )
         else:
             raise NotImplementedError(f"Model type {self.model_type} is not implemented")
-
-    def __getattr__(self, name: str) -> Any:
-        """
-        Delegate unknown attributes/methods to the underlying diffusion object.
-        This lets you call `diffuser.func(...)` and it will resolve to
-        `diffuser.diffusion.func(...)` if it exists.
-
-        Raises:
-            AttributeError if the attribute/method doesn't exist on the diffusion.
-        """
-        try:
-            attr = getattr(self.diffusion, name)
-        except AttributeError as e:
-            raise AttributeError(f"Nor {self.model_type!r} nor Diffuser has attribute {name!r}") from e
-        return attr
-
-    def __dir__(self):
-        """
-        Extend the dir() output to include attributes/methods from the diffusion object.
-        """
-        return sorted(set(super().__dir__()) | set(dir(self.diffusion)))
 
     def eval(self) -> None:
         """
@@ -213,6 +193,43 @@ class Diffuser:
             return z if return_latents else self.vision_tower.decode(z / self.latent_scale)
 
         return self.diffusion.denoise(
+            self.denoiser,
+            data_shape,
+            model_inputs,
+            use_tqdm=use_tqdm,
+            clamp_x=clamp_x,
+            guidance_scale=guidance_scale,
+            **kwargs,
+        )
+
+    def generate_GRPO(
+        self,
+        data_shape: tuple[int, ...],
+        model_inputs: ModelInput,
+        use_tqdm: bool = True,
+        clamp_x: bool = False,
+        guidance_scale: float = 0,
+        return_latents: bool = False,
+        **kwargs: dict[str, Any],
+    ) -> GRPOSamplingOutput:
+        if self.vision_tower:
+            grpo_sampling_output = self.diffusion.denoise_grpo(
+                self.denoiser,
+                data_shape,
+                model_inputs,
+                use_tqdm=use_tqdm,
+                clamp_x=clamp_x,
+                guidance_scale=guidance_scale,
+                **kwargs,
+            )
+            if return_latents:
+                return grpo_sampling_output
+            grpo_sampling_output["x_0_original"] = self.vision_tower.decode(
+                grpo_sampling_output["x_0_original"] / self.latent_scale
+            )
+            grpo_sampling_output["x"] = self.vision_tower.decode(grpo_sampling_output["x"] / self.latent_scale)
+            return grpo_sampling_output
+        return self.diffusion.denoise_grpo(
             self.denoiser,
             data_shape,
             model_inputs,
