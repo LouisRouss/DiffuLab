@@ -52,8 +52,8 @@ class PrefGRPORewardModel(RewardModel):
         "72b": "CodeGoat24/UnifiedReward-2.0-qwen-72b",
     }
 
-    def __init__(self, version: str = "7b", n_image_per_prompt: int = 16):
-        super().__init__()
+    def __init__(self, version: str = "7b", n_image_per_prompt: int | None = None, advantage_clip_max: float = 5.0):
+        super().__init__(n_image_per_prompt)
         self.use_cot = version.startswith("cot")
         self.version = version
         assert self.version in self.model_registry, (
@@ -62,12 +62,13 @@ class PrefGRPORewardModel(RewardModel):
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self.model_registry[self.version], dtype="auto", device_map="auto"
         )
+
+        for param in self.model.parameters():  # type: ignore
+            param.requires_grad = False
+
         self.processor: Qwen2_5_VLProcessor = AutoProcessor.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
         self.tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
-        self.n_image_per_prompt = n_image_per_prompt
-
-    def set_n_image_per_prompt(self, n: int) -> None:
-        self.n_image_per_prompt = n
+        self.advantage_clip_max = advantage_clip_max
 
     @staticmethod
     def _extract_cot_answer(text: str) -> str | None:
@@ -254,6 +255,9 @@ class PrefGRPORewardModel(RewardModel):
                        (ties contribute 0.5).
             compare_count: (P, n_images_per_prompt) int tensor with number of comparisons per image.
         """
+        assert self.n_image_per_prompt is not None, (
+            "n_image_per_prompt must be set before calling parse_and_aggregate()"
+        )
         assert pairs.ndim == 2 and pairs.shape[1] == 2, "pairs must have shape (n_pairs, 2)"
         n_pairs = pairs.shape[0]
 
@@ -287,15 +291,30 @@ class PrefGRPORewardModel(RewardModel):
 
         return win_count, compare_count
 
-    def compute_reward(
+    def compute_advantages(
         self,
         win_count: Float[Tensor, "P n_image_per_prompt"],
         compare_count: Float[Tensor, "P n_image_per_prompt"],
         advantage_per_prompt: bool = True,
     ) -> Float[Tensor, "n_images"]:
         """
-        Compute standardized rewards from win and compare counts.
-
+        Compute per-image standardized advantages from win and compare counts.
+        Args:
+            win_count (Float[Tensor, "P n_image_per_prompt"]): Float tensor with per-image win counts.
+            compare_count (Float[Tensor, "P n_image_per_prompt"]): Float tensor with per-image comparison counts.
+            advantage_per_prompt (bool, optional): If True, compute a per-prompt z-score (mean/std computed
+                across the images within each prompt). If False, compute a global z-score across all images
+                in the batch. Defaults to True.
+        Returns:
+            Float[Tensor, "n_images"]: Float tensor of shape (P * n_image_per_prompt,) with standardized advantages.
+        Raises:
+            ValueError: If shapes of win_count and compare_count do not match.
+        Notes:
+            - Win rates are computed as wins / comparisons per image; images with zero comparisons
+              receive a zero win rate before standardization.
+            - Standard deviation uses unbiased=False and is clamped with a minimum of 1e-6 to avoid
+              division by zero.
+            - Advantages are clipped to the range [-self.advantage_clip_max, self.advantage_clip_max].
         """
         compare_count = compare_count.to(torch.float32)
         win_rates = torch.where(compare_count > 0, win_count / compare_count, torch.zeros_like(win_count))
@@ -303,12 +322,12 @@ class PrefGRPORewardModel(RewardModel):
         if advantage_per_prompt:
             mean = win_rates.mean(dim=1, keepdim=True)
             std = win_rates.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-6)
-            rewards = (win_rates - mean) / std
+            advantages = (win_rates - mean) / std
         else:
             mean = win_rates.mean()
             std = win_rates.std(unbiased=False).clamp_min(1e-6)
-            rewards = (win_rates - mean) / std
-        return torch.tensor(rewards, dtype=torch.float32)
+            advantages = (win_rates - mean) / std
+        return torch.tensor(advantages, dtype=torch.float32).clamp(-self.advantage_clip_max, self.advantage_clip_max)
 
     @torch.inference_mode()
     def forward(
@@ -350,6 +369,7 @@ class PrefGRPORewardModel(RewardModel):
               and uses max_new_tokens=4096.
         """
         B, C, H, W = images.shape
+        assert self.n_image_per_prompt is not None, "n_image_per_prompt must be set before calling forward()"
         assert B % self.n_image_per_prompt == 0, (
             f"Batch size {images.shape[0]} is not divisible by n_image_per_prompt {self.n_image_per_prompt}"
         )
@@ -374,7 +394,7 @@ class PrefGRPORewardModel(RewardModel):
         for batch in range(0, len(data_to_process), B):
             batch_data = data_to_process[batch : batch + B]
             chat_input = self.processor.apply_chat_template(  # type: ignore[reportArgumentType]
-                batch_data,
+                batch_data,  # type: ignore[reportArgumentType]
                 tokenize=False,
                 add_generation_prompt=True,
             )
@@ -390,6 +410,6 @@ class PrefGRPORewardModel(RewardModel):
 
         # Aggregate pairwise preferences into per-image counts per prompt
         win_count, compare_count = self.parse_and_aggregate(outputs, pairs, P=P)
-        rewards = self.compute_reward(win_count, compare_count, advantage_per_prompt)
-        rewards_flat = rewards.reshape(-1).to(images.device)
-        return rewards_flat
+        advantages = self.compute_advantages(win_count, compare_count, advantage_per_prompt)
+        advantages = advantages.reshape(-1).to(images.device)
+        return advantages

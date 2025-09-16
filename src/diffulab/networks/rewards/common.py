@@ -8,8 +8,9 @@ from torch import Tensor
 
 
 class RewardModel(nn.Module, ABC):
-    def __init__(self):
+    def __init__(self, n_image_per_prompt: int | None = None):
         super().__init__()  # type: ignore
+        self._n_image_per_prompt = n_image_per_prompt
 
     @abstractmethod
     @torch.inference_mode()
@@ -24,3 +25,17 @@ class RewardModel(nn.Module, ABC):
             torch.Tensor: a tensor representing the reward for the given input batch.
         """
         pass
+
+    def set_n_image_per_prompt(self, n: int) -> None:
+        self._n_image_per_prompt = n
+
+    @property
+    @abstractmethod
+    def n_image_per_prompt(self) -> int | None:
+        """
+        Returns the number of images per prompt that the model has generated.
+
+        Returns:
+            int or None: the number of images per prompt, or None if not set.
+        """
+        return self._n_image_per_prompt
