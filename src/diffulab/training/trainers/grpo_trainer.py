@@ -204,11 +204,13 @@ class GRPOTrainer(Trainer):
         advantages: Tensor = reward_model(images=samples["x"], context=batch["extra"]["captions"])
         for batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
             batch_inputs: ModelInputGRPO = {
-                k: v[batch_idx : batch_idx + original_batch_size] for k, v in repeated_batch["model_inputs"].items()
+                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
+                for k, v in repeated_batch["model_inputs"].items()
             }  # type: ignore
             batch_samples: GRPOSamplingOutput = {
-                k: v[batch_idx : batch_idx + original_batch_size] for k, v in samples.items()
-            }  # type: ignore
+                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
+                for k, v in samples.items()  # type: ignore
+            }
             batch_advantages = advantages[batch_idx : batch_idx + original_batch_size]
 
             losses = diffuser.compute_grpo_loss(
@@ -306,7 +308,7 @@ class GRPOTrainer(Trainer):
         for param in diffuser.denoiser.context_embedder.parameters():  # type: ignore
             param.requires_grad = False
 
-        best_val_loss = float("inf")
+        # best_val_loss = float("inf")
 
         tracker = AverageMeter()
         tq_epoch = tqdm(
