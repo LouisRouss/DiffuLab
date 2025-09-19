@@ -7,12 +7,17 @@ from numpy.typing import NDArray
 from torch import Tensor
 from torch.utils.data import Dataset
 
-from diffulab.networks.denoisers.common import ModelInput
+from diffulab.networks.denoisers.common import ExtraInputGRPO, ModelInput, ModelInputGRPO
 
 
 class BatchData(TypedDict, total=False):
     model_inputs: Required[ModelInput]
-    extra: NotRequired[dict[str, Tensor | None]]
+    extra: NotRequired[dict[str, Tensor | list[str] | None]]
+
+
+class BatchDataGRPO(TypedDict, total=False):
+    model_inputs: Required[ModelInputGRPO]
+    extra: Required[ExtraInputGRPO]
 
 
 class BaseDataset(Dataset[BatchData], ABC):

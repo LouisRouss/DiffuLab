@@ -296,7 +296,7 @@ class BaseTrainer(Trainer):
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
             tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
-            for i, batch in enumerate(tq_batch):
+            for batch in tq_batch:
                 with self.accelerator.accumulate(diffuser.denoiser, *diffuser.extra_losses):  # type: ignore
                     with self.accelerator.autocast():
                         self.training_step(

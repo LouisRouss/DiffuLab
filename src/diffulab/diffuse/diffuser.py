@@ -6,7 +6,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
-from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelInputGRPO
 from diffulab.networks.vision_towers.common import VisionTower
 from diffulab.training.losses import LossFunction
 
@@ -117,6 +117,29 @@ class Diffuser:
         """
         return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
+    def compute_grpo_loss(
+        self,
+        model_inputs: ModelInputGRPO,
+        grpo_sampling_output: GRPOSamplingOutput,
+        advantages: Tensor,
+        kl_beta: float = 0,
+        eps: float = 1e-4,
+        timestep_fraction: float = 0.6,
+        guidance_scale: float = 4,
+        eta: float = 0.7,
+    ) -> dict[str, Tensor]:
+        return self.diffusion.compute_loss_grpo(
+            self.denoiser,
+            model_inputs,
+            grpo_sampling_output,
+            advantages,
+            kl_beta,
+            eps,
+            timestep_fraction,
+            guidance_scale,
+            eta,
+        )
+
     def set_steps(self, n_steps: int, **extra_args: dict[str, Any]) -> None:
         """
         Update the number of diffusion steps and related parameters.
@@ -204,15 +227,28 @@ class Diffuser:
 
     def generate_GRPO(
         self,
-        data_shape: tuple[int, ...],
-        model_inputs: ModelInput,
+        model_inputs: ModelInputGRPO,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
         return_latents: bool = False,
-        **kwargs: dict[str, Any],
+        data_shape: tuple[int, ...] | None = None,
+        image_shape: tuple[int, int, int, int] | None = None,
+        **kwargs: Any,
     ) -> GRPOSamplingOutput:
+        assert data_shape is not None or image_shape is not None, "Either data_shape or image_shape must be provided."
+        assert not (data_shape is not None and image_shape is not None), (
+            "Only one of data_shape or image_shape should be provided."
+        )
+
         if self.vision_tower:
+            if data_shape is None:
+                assert image_shape is not None
+                batch_size = image_shape[0]
+                channels = self.vision_tower.latent_channels
+                height = image_shape[2] // self.vision_tower.compression_factor
+                width = image_shape[3] // self.vision_tower.compression_factor
+                data_shape = (batch_size, channels, height, width)
             grpo_sampling_output = self.diffusion.denoise_grpo(
                 self.denoiser,
                 data_shape,
@@ -229,9 +265,10 @@ class Diffuser:
             )
             grpo_sampling_output["x"] = self.vision_tower.decode(grpo_sampling_output["x"] / self.latent_scale)
             return grpo_sampling_output
+        data_shape = data_shape or image_shape
         return self.diffusion.denoise_grpo(
             self.denoiser,
-            data_shape,
+            data_shape,  # type: ignore[reportArgumentType]
             model_inputs,
             use_tqdm=use_tqdm,
             clamp_x=clamp_x,

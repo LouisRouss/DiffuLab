@@ -390,9 +390,9 @@ class PrefGRPORewardModel(RewardModel):
         ]
 
         outputs: list[str] = []
-        # Batch processing respecing the original batch size
-        for batch in range(0, len(data_to_process), B):
-            batch_data = data_to_process[batch : batch + B]
+        # Batch processing respecting the original batch size
+        for batch in range(0, len(data_to_process), P):
+            batch_data = data_to_process[batch : batch + P]
             chat_input = self.processor.apply_chat_template(  # type: ignore[reportArgumentType]
                 batch_data,  # type: ignore[reportArgumentType]
                 tokenize=False,

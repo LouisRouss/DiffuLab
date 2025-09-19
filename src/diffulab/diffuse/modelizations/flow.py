@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
-from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelOutput
+from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelInputGRPO, ModelOutput
 from diffulab.training.losses.common import LossFunction
 
 
@@ -204,7 +204,7 @@ class Flow(Diffusion):
     def one_step_denoise_grpo(
         self,
         model: Denoiser,
-        model_inputs: ModelInput,
+        model_inputs: ModelInputGRPO,
         t_prev: float,
         t_curr: float,
         guidance_scale: float,
@@ -236,7 +236,7 @@ class Flow(Diffusion):
                 - sigma * sqrt(t_curr - t_prev) (Tensor): The standard deviation of the noise added.
         """
         assert self.sampling_method == "euler", "GRPO is only implemented for Euler method (Euler-Maruyama)"
-
+        assert "x" in model_inputs
         v = self.get_v(model, ModelInput({**model_inputs, "p": 0}), t_curr)
         if guidance_scale > 0:
             v_dropped = self.get_v(model, {**model_inputs, "p": 1}, t_curr)
@@ -253,7 +253,7 @@ class Flow(Diffusion):
             noise = torch.randn_like(model_inputs["x"])
             x_t_minus_one_grpo = x_t_minus_one_grpo_mean + sigma * (t_curr - t_prev) ** 0.5 * noise
 
-        assert x_t_minus_one_grpo is not None
+        assert x_t_minus_one_grpo is not None  # for pyright
         log_probs_x_t_minus_one_grpo = -(
             (x_t_minus_one_grpo.detach() - x_t_minus_one_grpo_mean) ** 2 / (2 * sigma**2 * (t_curr - t_prev))
             + torch.log(torch.tensor(sigma * (t_curr - t_prev) ** 0.5))
@@ -322,16 +322,15 @@ class Flow(Diffusion):
     def compute_loss_grpo(
         self,
         model: Denoiser,
-        model_inputs: ModelInput,
-        grpo_sampling_output: GRPOSamplingOutput,  # each torch stacked element has shape (1, steps+1, C, H, W)
-        advantage: float,
+        model_inputs: ModelInputGRPO,
+        grpo_sampling_output: GRPOSamplingOutput,
+        advantages: Tensor,
         kl_beta: float = 0,
         eps: float = 1e-4,
         timestep_fraction: float = 0.6,
         guidance_scale: float = 4,
         eta: float = 0.7,
     ) -> dict[str, Tensor]:
-        # we only work on one trajectory, loss computation for each trajectory of the batch
         indices = random.sample(range(0, self.steps), k=round(self.steps * timestep_fraction))
         loss = torch.empty()
         for idx in indices:
@@ -346,18 +345,15 @@ class Flow(Diffusion):
                 eta=eta,
             )
             prob_ratios = torch.exp(new_log_probs_x_t_minus_one_grpo - grpo_sampling_output["log_probs"][:, idx])
-            unclipped_objective = advantage * prob_ratios
-            clipped_objective = advantage * torch.clamp(prob_ratios, 1 - eps, 1 + eps)
+            unclipped_objective = advantages * prob_ratios
+            clipped_objective = advantages * torch.clamp(prob_ratios, 1 - eps, 1 + eps)
 
-            kl_loss = (
-                (new_x_t_minus_one_grpo_mean - grpo_sampling_output["x_t_minus_one_mean"][:, idx]) ** 2
-            ).mean() / (2 * std_t**2)
+            diff = (new_x_t_minus_one_grpo_mean - grpo_sampling_output["x_t_minus_one_mean"][:, idx]) ** 2
+            kl_loss = diff.mean(dim=tuple(range(1, diff.dim()))).mean() / (2 * std_t**2)
             loss = -torch.min(unclipped_objective, clipped_objective).mean() + kl_beta * kl_loss
             loss.backward()  # type: ignore[reportUnknownMemberType]
 
         return {"loss": loss}
-
-    # put the loop in the compute loss
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """
@@ -453,7 +449,7 @@ class Flow(Diffusion):
         self,
         model: Denoiser,
         data_shape: tuple[int, ...],
-        model_inputs: ModelInput,
+        model_inputs: ModelInputGRPO,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
