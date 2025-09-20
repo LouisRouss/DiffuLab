@@ -332,7 +332,7 @@ class Flow(Diffusion):
         eta: float = 0.7,
     ) -> dict[str, Tensor]:
         indices = random.sample(range(0, self.steps), k=round(self.steps * timestep_fraction))
-        loss = torch.empty()
+        losses: list[Tensor] = []
         for idx in indices:
             model_inputs["x"] = grpo_sampling_output["x_t"][:, idx]
             _, _, new_log_probs_x_t_minus_one_grpo, new_x_t_minus_one_grpo_mean, std_t = self.one_step_denoise_grpo(
@@ -344,15 +344,20 @@ class Flow(Diffusion):
                 x_t_minus_one_grpo=grpo_sampling_output["x_t"][:, idx + 1],
                 eta=eta,
             )
+
             prob_ratios = torch.exp(new_log_probs_x_t_minus_one_grpo - grpo_sampling_output["log_probs"][:, idx])
             unclipped_objective = advantages * prob_ratios
             clipped_objective = advantages * torch.clamp(prob_ratios, 1 - eps, 1 + eps)
+            policy_loss = -torch.min(unclipped_objective, clipped_objective).mean()
 
             diff = (new_x_t_minus_one_grpo_mean - grpo_sampling_output["x_t_minus_one_mean"][:, idx]) ** 2
-            kl_loss = diff.mean(dim=tuple(range(1, diff.dim()))).mean() / (2 * std_t**2)
-            loss = (-torch.min(unclipped_objective, clipped_objective).mean() + kl_beta * kl_loss) / len(indices)
-            loss.backward()  # type: ignore[reportUnknownMemberType]
+            kl_loss = diff.mean(dim=tuple(range(1, diff.dim()))) / (2 * std_t**2)
+            kl_loss = kl_loss.mean()
 
+            step_loss = policy_loss + kl_beta * kl_loss
+            losses.append(step_loss)
+
+        loss = torch.stack(losses).mean()
         return {"loss": loss}
 
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
