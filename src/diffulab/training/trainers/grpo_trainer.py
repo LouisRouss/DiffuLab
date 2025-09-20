@@ -354,7 +354,7 @@ class GRPOTrainer(Trainer):
         for param in diffuser.denoiser.context_embedder.parameters():  # type: ignore
             param.requires_grad = False
 
-        # best_val_loss = float("inf")
+        best_val_loss = float("inf")
 
         tracker = AverageMeter()
         tq_epoch = tqdm(
@@ -389,6 +389,10 @@ class GRPOTrainer(Trainer):
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
+
+            if scheduler is not None and not per_batch_scheduler:
+                scheduler.step()
+
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
                     gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
@@ -439,3 +443,28 @@ class GRPOTrainer(Trainer):
                             {key: gathered_loss.mean().item()}, step=epoch + 1
                         )
                         total_loss += gathered_loss.mean().item()
+
+                if log_validation_images:
+                    logging.info("creating validation images")
+                    if self.accelerator.is_main_process:
+                        with self.accelerator.autocast():
+                            self.log_images(
+                                diffuser,
+                                val_dataloader,  # type: ignore
+                                epoch,
+                                val_steps,
+                                guidance_scale=4,
+                            )
+
+                if ema_denoiser is not None:
+                    diffuser.denoiser = original_model
+
+                if total_loss < best_val_loss:
+                    best_val_loss = total_loss
+                    self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
+                tracker.reset()
+
+            self.accelerator.wait_for_everyone()
+
+        self.accelerator.end_training()
+        logging.info("Training complete")

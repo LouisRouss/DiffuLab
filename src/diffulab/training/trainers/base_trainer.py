@@ -312,6 +312,8 @@ class BaseTrainer(Trainer):
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
+            if scheduler is not None and not per_batch_scheduler:
+                scheduler.step()
 
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
@@ -377,7 +379,7 @@ class BaseTrainer(Trainer):
                     for loss in diffuser.extra_losses:
                         loss.set_model(original_model)  # type: ignore
 
-                if total_loss < best_val_loss:  # type: ignore
+                if total_loss < best_val_loss:
                     best_val_loss = total_loss
                     self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
                 tracker.reset()
