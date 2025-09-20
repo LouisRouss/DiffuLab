@@ -350,7 +350,7 @@ class Flow(Diffusion):
 
             diff = (new_x_t_minus_one_grpo_mean - grpo_sampling_output["x_t_minus_one_mean"][:, idx]) ** 2
             kl_loss = diff.mean(dim=tuple(range(1, diff.dim()))).mean() / (2 * std_t**2)
-            loss = -torch.min(unclipped_objective, clipped_objective).mean() + kl_beta * kl_loss
+            loss = (-torch.min(unclipped_objective, clipped_objective).mean() + kl_beta * kl_loss) / len(indices)
             loss.backward()  # type: ignore[reportUnknownMemberType]
 
         return {"loss": loss}
