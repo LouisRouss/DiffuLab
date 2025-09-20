@@ -19,6 +19,7 @@ from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:
     from diffulab.diffuse import Diffuser
+    from diffulab.networks.denoisers import Denoiser
 
 
 class GRPOTrainer(Trainer):
@@ -233,8 +234,53 @@ class GRPOTrainer(Trainer):
             if ema_denoiser is not None:
                 ema_denoiser.update()
 
-    # def validation_step(self):
-    #     pass
+    @torch.no_grad()  # type: ignore
+    def validation_step(
+        self,
+        diffuser: "Diffuser",
+        batch: BatchDataGRPO,
+        tracker: AverageMeter,
+        reward_model: RewardModel,
+        n_image_per_prompt: int,
+        image_resolution: tuple[int, int],
+        guidance_scale: float = 4.0,
+        eta: float = 0.7,
+        kl_beta: float = 0.0,
+        eps: float = 1e-4,
+    ):
+        original_batch_size = batch["model_inputs"]["context"].shape[0]
+        repeated_batch, samples = self.sample_model(
+            diffuser,
+            batch,
+            n_image_per_prompt=n_image_per_prompt,
+            image_resolution=image_resolution,
+            guidance_scale=guidance_scale,
+            eta=eta,
+        )
+        advantages: Tensor = reward_model(images=samples["x"], context=batch["extra"]["captions"])
+        for batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
+            batch_inputs: ModelInputGRPO = {
+                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
+                for k, v in repeated_batch["model_inputs"].items()
+            }  # type: ignore
+            batch_samples: GRPOSamplingOutput = {
+                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
+                for k, v in samples.items()  # type: ignore
+            }
+            batch_advantages = advantages[batch_idx : batch_idx + original_batch_size]
+
+            losses = diffuser.compute_grpo_loss(
+                model_inputs=batch_inputs,
+                grpo_sampling_output=batch_samples,
+                advantages=batch_advantages,
+                kl_beta=kl_beta,
+                eps=eps,
+                timestep_fraction=1,
+                guidance_scale=guidance_scale,
+                eta=eta,
+            )
+            for key, loss in losses.items():
+                tracker.update(loss.item(), key=f"val/{key}")
 
     def train(
         self,
@@ -343,3 +389,53 @@ class GRPOTrainer(Trainer):
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
+            for key, value in tracker.avg.items():
+                if key.startswith("train/"):
+                    gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
+                        torch.tensor(value, device=self.accelerator.device)
+                    )
+                    self.accelerator.log(  # type: ignore
+                        {key: gathered_loss.mean().item()}, step=epoch + 1
+                    )
+            tracker.reset()
+
+            if val_dataloader is not None:
+                diffuser.eval()
+                original_model: Denoiser = diffuser.denoiser  # type: ignore
+                if ema_denoiser is not None:
+                    diffuser.denoiser = ema_denoiser.ema_model.eval()  # type: ignore
+
+                tq_val_batch = tqdm(
+                    val_dataloader,  # type: ignore
+                    disable=not self.accelerator.is_main_process,
+                    leave=False,
+                    position=1,
+                )
+                for val_batch in tq_val_batch:
+                    with self.accelerator.autocast():
+                        self.validation_step(
+                            diffuser=diffuser,
+                            batch=val_batch,
+                            tracker=tracker,
+                            reward_model=reward_model,  # type: ignore
+                            n_image_per_prompt=n_image_per_prompt,
+                            image_resolution=image_resolution,
+                            guidance_scale=guidance_scale,
+                            eta=eta,
+                            kl_beta=kl_beta,
+                            eps=eps,
+                        )
+                    tq_val_batch.set_description(
+                        f"Val Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('val/')):.4f}"
+                    )
+
+                total_loss = 0
+                for key, value in tracker.avg.items():
+                    if key.startswith("val/"):
+                        gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
+                            torch.tensor(value, device=self.accelerator.device)
+                        )
+                        self.accelerator.log(  # type: ignore
+                            {key: gathered_loss.mean().item()}, step=epoch + 1
+                        )
+                        total_loss += gathered_loss.mean().item()
