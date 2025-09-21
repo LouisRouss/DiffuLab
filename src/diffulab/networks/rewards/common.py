@@ -8,7 +8,7 @@ from torch import Tensor
 
 
 class RewardModel(nn.Module, ABC):
-    def __init__(self, n_image_per_prompt: int | None = None):
+    def __init__(self, n_image_per_prompt: int):
         super().__init__()  # type: ignore
         self._n_image_per_prompt = n_image_per_prompt
 
@@ -31,7 +31,7 @@ class RewardModel(nn.Module, ABC):
 
     @property
     @abstractmethod
-    def n_image_per_prompt(self) -> int | None:
+    def n_image_per_prompt(self) -> int:
         """
         Returns the number of images per prompt that the model has generated.
 

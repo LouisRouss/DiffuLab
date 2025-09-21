@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
 
 import torch
-from ema_pytorch import EMA  # type: ignore [stub file not found]
+from ema_pytorch import EMA  # type: ignore[reportMissingTypeStubs]
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer

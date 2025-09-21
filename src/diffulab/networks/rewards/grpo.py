@@ -1,25 +1,26 @@
-import itertools
 import re
-from typing import TYPE_CHECKING, Literal, TypedDict, Union, cast  # added TypedDict related imports
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Union, cast  # added TypedDict related imports
 
 import numpy as np
+import open_clip  # type: ignore[reportMissingTypeStubs]
 import torch
+import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
-from numpy.typing import NDArray
 from PIL import Image
 from qwen_vl_utils import process_vision_info  # type: ignore[reportUnknownVariableType]
 from torch import Tensor
 from transformers import (  # type: ignore[reportMissingTypeStubs]
     AutoProcessor,
-    AutoTokenizer,
     Qwen2_5_VLForConditionalGeneration,
 )
 
 from diffulab.networks.rewards.common import RewardModel
 
 if TYPE_CHECKING:
-    from transformers import Qwen2_5_VLProcessor, Qwen2TokenizerFast  # type: ignore[reportMissingTypeStubs]
+    from numpy.typing import NDArray
+    from torchvision.transforms import Compose  # type: ignore[reportMissingTypeStubs]
+    from transformers import Qwen2_5_VLProcessor  # type: ignore[reportMissingTypeStubs]
 
 
 class ImageContent(TypedDict):
@@ -52,22 +53,45 @@ class PrefGRPORewardModel(RewardModel):
         "72b": "CodeGoat24/UnifiedReward-2.0-qwen-72b",
     }
 
-    def __init__(self, version: str = "7b", n_image_per_prompt: int | None = None, advantage_clip_max: float = 5.0):
+    def __init__(
+        self,
+        version: str = "7b",
+        n_image_per_prompt: int = 16,
+        advantage_clip_max: float = 5.0,
+        use_clip: bool = False,
+        lambda_base: float = 1.0,
+        lambda_clip: float = 1.0,
+        clip_model_type: str = "ViT-H-14",
+        clip_model_id: str = "laion2b_s32b_b79k",
+    ):
         super().__init__(n_image_per_prompt)
         self.use_cot = version.startswith("cot")
         self.version = version
         assert self.version in self.model_registry, (
             f"Unsupported model version: {self.version}, available versions: {list(self.model_registry.keys())}"
         )
+
         self.model = Qwen2_5_VLForConditionalGeneration.from_pretrained(  # type: ignore[reportUnknownMemberType]
             self.model_registry[self.version], dtype="auto", device_map="auto"
         )
-
+        self.processor: "Qwen2_5_VLProcessor" = AutoProcessor.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
         for param in self.model.parameters():  # type: ignore
             param.requires_grad = False
 
-        self.processor: Qwen2_5_VLProcessor = AutoProcessor.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
-        self.tokenizer: Qwen2TokenizerFast = AutoTokenizer.from_pretrained(self.model_registry[self.version])  # type: ignore[reportUnknownMemberType]
+        self.clip_model: None | open_clip.CLIP = None
+        self.clip_preprocess: "None | Compose" = None
+        self.clip_tokenizer: None | Any = None
+        self.use_clip = use_clip
+        if self.use_clip:
+            self.clip_model, _, self.clip_preprocess = cast(
+                "tuple[open_clip.CLIP, Compose, Compose]",
+                open_clip.create_model_and_transforms(clip_model_type, pretrained=clip_model_id),  # type: ignore[reportUnknownMemberType]
+            )
+            self.clip_model.eval()
+            for param in self.clip_model.parameters():  # type: ignore
+                param.requires_grad = False
+            self.clip_tokenizer = open_clip.get_tokenizer(clip_model_type)  # type: ignore[reportUnknownMemberType]
+
         self.advantage_clip_max = advantage_clip_max
 
     @staticmethod
@@ -156,7 +180,7 @@ class PrefGRPORewardModel(RewardModel):
             Image.Image: The converted PIL Image.
         """
         image = ((image * 0.5 + 0.5).clamp(0, 1) * 255).byte()
-        np_image: NDArray[np.uint8] = rearrange(image.cpu(), "C H W -> H W C").numpy()  # type: ignore[reportUnknownMemberType]
+        np_image: "NDArray[np.uint8]" = rearrange(image.cpu(), "C H W -> H W C").numpy()  # type: ignore[reportUnknownMemberType]
         return Image.fromarray(np_image)
 
     def get_template(self, prompt: str) -> str:
@@ -296,7 +320,7 @@ class PrefGRPORewardModel(RewardModel):
         win_count: Float[Tensor, "P n_image_per_prompt"],
         compare_count: Float[Tensor, "P n_image_per_prompt"],
         advantage_per_prompt: bool = True,
-    ) -> Float[Tensor, "n_images"]:
+    ) -> Float[Tensor, "P n_image_per_prompt"]:
         """
         Compute per-image standardized advantages from win and compare counts.
         Args:
@@ -306,7 +330,7 @@ class PrefGRPORewardModel(RewardModel):
                 across the images within each prompt). If False, compute a global z-score across all images
                 in the batch. Defaults to True.
         Returns:
-            Float[Tensor, "n_images"]: Float tensor of shape (P * n_image_per_prompt,) with standardized advantages.
+            Float[Tensor, "P n_image_per_prompt"]: Float tensor of shape (P, n_image_per_prompt,) with standardized advantages.
         Raises:
             ValueError: If shapes of win_count and compare_count do not match.
         Notes:
@@ -327,15 +351,20 @@ class PrefGRPORewardModel(RewardModel):
             mean = win_rates.mean()
             std = win_rates.std(unbiased=False).clamp_min(1e-6)
             advantages = (win_rates - mean) / std
-        return torch.tensor(advantages, dtype=torch.float32).clamp(-self.advantage_clip_max, self.advantage_clip_max)
+
+        advantages = torch.tensor(advantages, dtype=torch.float32).clamp(
+            -self.advantage_clip_max, self.advantage_clip_max
+        )
+
+        return advantages
 
     @torch.inference_mode()
-    def forward(
+    def compute_pairwise_advantages(
         self,
-        images: Float[Tensor, "batch n_channels height width"],
+        images: Float[Tensor, "n_group images_per_prompt n_channels height width"],
         context: list[str],
         advantage_per_prompt: bool = True,
-    ) -> Float[Tensor, "batch"]:
+    ) -> Float[Tensor, "n_group images_per_prompt"]:
         """
         Compute per-image standardized rewards from pairwise preference judgments within each prompt group.
         This method groups the input batch into P prompts, each containing `self.n_image_per_prompt` images.
@@ -343,16 +372,14 @@ class PrefGRPORewardModel(RewardModel):
         text context, queries the underlying vision-language model to obtain pairwise preferences, aggregates
         the results into per-image win rates, and returns z-scored rewards either per prompt or globally.
         Args:
-            images (torch.Tensor): Float tensor of shape (B, C, H, W) containing a batch of images.
-                The batch size B must be divisible by `self.n_image_per_prompt`. Images are implicitly
-                partitioned into P = B // `self.n_image_per_prompt` prompts.
-            context (list[str]): A list of length P with the textual context (e.g., prompt) for each
-                group of images. Each context entry is replicated across all intra-group pairs.
+            images (torch.Tensor): Float tensor of shape (P, N, C, H, W) containing a batch of images.
+            context (list[str]): A list of length P*N with the textual context (e.g., prompt) for each
+                image.
             advantage_per_prompt (bool, optional): If True, compute a per-prompt z-score (mean/std computed
                 across the images within each prompt). If False, compute a global z-score across all images
                 in the batch. Defaults to True.
         Returns:
-            torch.Tensor: Float tensor of shape (B,) on the same device as `images`, containing the
+            torch.Tensor: Float tensor of shape (P, N) on the same device as `images`, containing the
                 standardized reward for each image.
         Raises:
             AssertionError: If B % `self.n_image_per_prompt` != 0.
@@ -368,25 +395,19 @@ class PrefGRPORewardModel(RewardModel):
             - Inference is batched with an upper bound of B pairwise conversations per generation call
               and uses max_new_tokens=4096.
         """
-        B, C, H, W = images.shape
-        assert self.n_image_per_prompt is not None, "n_image_per_prompt must be set before calling forward()"
-        assert B % self.n_image_per_prompt == 0, (
-            f"Batch size {images.shape[0]} is not divisible by n_image_per_prompt {self.n_image_per_prompt}"
+        P, n_images, C, H, W = images.shape
+        assert n_images == self.n_image_per_prompt, (
+            f"Expected {self.n_image_per_prompt} images per prompt, but got {n_images}"
         )
+        assert len(context) == P * n_images, f"Expected {P * n_images} context entries, but got {len(context)}"
 
-        P = B // self.n_image_per_prompt
-
-        imgs = images.view(P, self.n_image_per_prompt, C, H, W)
         pairs = torch.combinations(torch.arange(self.n_image_per_prompt, device=images.device), r=2)
-
-        trg_tensor = imgs[:, pairs]
+        trg_tensor = images[:, pairs]
         trg_tensor = trg_tensor.reshape(-1, 2, C, H, W)  # (P * n_pairs, 2, C, H, W)
-
-        context_extended = list(itertools.chain.from_iterable(itertools.repeat(c, pairs.shape[0]) for c in context))
 
         data_to_process: list[list[ChatMessage]] = [
             self.get_message(self.convert_to_image(pair[0]), self.convert_to_image(pair[1]), pair_context)
-            for pair, pair_context in zip(trg_tensor, context_extended)
+            for pair, pair_context in zip(trg_tensor, context)
         ]
 
         outputs: list[str] = []
@@ -411,5 +432,65 @@ class PrefGRPORewardModel(RewardModel):
         # Aggregate pairwise preferences into per-image counts per prompt
         win_count, compare_count = self.parse_and_aggregate(outputs, pairs, P=P)
         advantages = self.compute_advantages(win_count, compare_count, advantage_per_prompt)
-        advantages = advantages.reshape(-1).to(images.device)
+        return advantages.to(images.device)
+
+    @torch.inference_mode()
+    def compute_clip_advantages(
+        self,
+        images: Float[Tensor, "n_group images_per_prompt n_channels height width"],
+        context: list[str],
+        advantage_per_prompt: bool = True,
+    ) -> Tensor:
+        assert self.clip_model is not None, "Clip model is not initialized"
+        assert self.clip_preprocess is not None, "Clip preprocess is not initialized"
+        assert self.clip_tokenizer is not None, "Clip tokenizer is not initialized"
+        device = next(self.clip_model.parameters()).device
+
+        P, n_images, C, H, W = images.shape
+        images = images.reshape(-1, C, H, W)
+
+        advantages = torch.zeros((images.shape[0],), dtype=torch.float32, device=device)
+        for batch in range(0, len(images), P):
+            batch_images = images[batch : batch + P]
+            batch_context = context[batch : batch + P]
+
+            batch_images = torch.stack(
+                [cast(Tensor, self.clip_preprocess(self.convert_to_image(img))) for img in batch_images], dim=0
+            ).to(device)
+            batch_context_tokenized = self.clip_tokenizer(batch_context).to(device)
+
+            batch_images_features: Tensor = self.clip_model.encode_image(batch_images)  # type: ignore[reportUnknownMemberType]
+            batch_text_features: Tensor = self.clip_model.encode_text(batch_context_tokenized)  # type: ignore[reportUnknownMemberType]
+            batch_images_features = F.normalize(batch_images_features, dim=-1)
+            batch_text_features = F.normalize(batch_text_features, dim=-1)
+
+            clip_score = batch_images_features @ batch_text_features.T
+            advantages[batch : batch + P] = clip_score.diagonal()
+
+        advantages = advantages.reshape(P, n_images)
         return advantages
+
+    # def forward(
+    #     self,
+    #     images: Float[Tensor, "batch n_channels height width"],
+    #     context: list[str],
+    #     advantage_per_prompt: bool = True,
+    # ) -> Float[Tensor, "batch"]:
+    #     B, C, H, W = images.shape
+    #     assert self.n_image_per_prompt is not None, "n_image_per_prompt must be set before calling forward()"
+    #     assert B % self.n_image_per_prompt == 0, (
+    #         f"Batch size {images.shape[0]} is not divisible by n_image_per_prompt {self.n_image_per_prompt}"
+    #     )
+    #     assert len(context) == B // self.n_image_per_prompt, (
+    #         f"Length of context {len(context)} does not match number of prompts {B // self.n_image_per_prompt}"
+    #     )
+
+    #     # P also corresponds to the original batch size
+    #     P = B // self.n_image_per_prompt
+    #     images = images.view(P, self.n_image_per_prompt, C, H, W)
+
+    #     pairwise_advantages = self.compute_pairwise_advantages(
+    #         images=images,
+    #         context=context,
+    #         advantage_per_prompt=advantage_per_prompt,
+    #     )

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable, cast
 
 import torch
-from ema_pytorch import EMA  # type: ignore [stub file not found]
+from ema_pytorch import EMA  # type: ignore[reportMissingTypeStubs]
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
@@ -50,6 +50,13 @@ class GRPOTrainer(Trainer):
         compile (bool, optional): Whether to compile the model using TorchDynamo. Defaults to True.
         dynam_plugin_kwargs (dict[str, Any], optional): Additional arguments for the TorchDynamo plugin.
             Defaults to {}.
+        eta (float, optional): The eta parameter for GRPO sampling. Defaults to 0.7. Controls the amount of
+            stochasticity during the sampling process.
+        timestep_fraction (float, optional): Fraction of the total timesteps to consider for GRPO loss
+            computation. Defaults to 0.6.
+        kl_beta (float, optional): Weight of the KL divergence term in the GRPO loss. Defaults to 0.0.
+        eps (float, optional): Small constant for numerical stability in GRPO loss computation. Defaults to 1e-4.
+
     Attributes:
         n_epoch (int): Number of training epochs.
         use_ema (bool): Whether EMA is enabled.
@@ -87,6 +94,10 @@ class GRPOTrainer(Trainer):
             "fullgraph": False,
             "dynamic": True,
         },
+        eta: float = 0.7,
+        timestep_fraction: float = 0.6,
+        kl_beta: float = 0.0,
+        eps: float = 1e-4,
     ):
         super().__init__(
             n_epoch=n_epoch,
@@ -103,6 +114,10 @@ class GRPOTrainer(Trainer):
             compile=compile,
             dynamo_plugin_kwargs=dynamo_plugin_kwargs,
         )
+        self.eta = eta
+        self.timestep_fraction = timestep_fraction
+        self.kl_beta = kl_beta
+        self.eps = eps
 
     def repeat_batch(self, batch: BatchDataGRPO, n_repeat: int) -> BatchDataGRPO:
         assert n_repeat > 0, "n_repeat must be a positive integer."
@@ -138,21 +153,18 @@ class GRPOTrainer(Trainer):
         n_image_per_prompt: int,
         image_resolution: tuple[int, int],
         guidance_scale: float = 0,
-        eta: float = 0.7,
     ) -> tuple[BatchDataGRPO, GRPOSamplingOutput]:
         original_batch_size = batch["model_inputs"]["context"].shape[0]
         repeated_batch = self.repeat_batch(batch, n_image_per_prompt)
-        groups_per_minibatch = max(1, original_batch_size // n_image_per_prompt)
 
         grpo_sampling: GRPOSamplingOutput | None = None
-        for group in range(0, original_batch_size, groups_per_minibatch):
-            group_idx_min = group * n_image_per_prompt
-            group_idx_max = min((group + groups_per_minibatch, original_batch_size)) * n_image_per_prompt
-
+        for mini_batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
             model_inputs = cast(
                 ModelInputGRPO,
                 {
-                    k: v[group_idx_min:group_idx_max] if isinstance(v, Tensor) or isinstance(v, list) else v
+                    k: v[mini_batch_idx : mini_batch_idx + original_batch_size]
+                    if isinstance(v, Tensor) or isinstance(v, list)
+                    else v
                     for k, v in repeated_batch["model_inputs"].items()
                 },
             )
@@ -161,7 +173,7 @@ class GRPOTrainer(Trainer):
                 model_inputs=model_inputs,
                 data_shape=(n_image_per_prompt, 3, image_resolution[0], image_resolution[1]),
                 guidance_scale=guidance_scale,
-                eta=eta,
+                eta=self.eta,
                 return_latents=False,
             )
 
@@ -187,10 +199,6 @@ class GRPOTrainer(Trainer):
         per_batch_scheduler: bool = False,
         ema_denoiser: EMA | None = None,
         guidance_scale: float = 0,
-        eta: float = 0.7,
-        timestep_fraction: float = 0.6,
-        kl_beta: float = 0.0,
-        eps: float = 1e-4,
     ):
         optimizer.zero_grad()
         original_batch_size = batch["model_inputs"]["context"].shape[0]
@@ -200,9 +208,8 @@ class GRPOTrainer(Trainer):
             n_image_per_prompt=n_image_per_prompt,
             image_resolution=image_resolution,
             guidance_scale=guidance_scale,
-            eta=eta,
         )
-        advantages: Tensor = reward_model(images=samples["x"], context=batch["extra"]["captions"])
+        advantages: Tensor = reward_model(images=samples["x"], context=repeated_batch["extra"]["captions"])
         for batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
             batch_inputs: ModelInputGRPO = {
                 k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
@@ -218,11 +225,11 @@ class GRPOTrainer(Trainer):
                 model_inputs=batch_inputs,
                 grpo_sampling_output=batch_samples,
                 advantages=batch_advantages,
-                kl_beta=kl_beta,
-                eps=eps,
-                timestep_fraction=timestep_fraction,
+                kl_beta=self.kl_beta,
+                eps=self.eps,
+                timestep_fraction=self.timestep_fraction,
                 guidance_scale=guidance_scale,
-                eta=eta,
+                eta=self.eta,
             )
             for key, loss in losses.items():
                 tracker.update(loss.item(), key=f"train/{key}")
@@ -244,9 +251,6 @@ class GRPOTrainer(Trainer):
         n_image_per_prompt: int,
         image_resolution: tuple[int, int],
         guidance_scale: float = 4.0,
-        eta: float = 0.7,
-        kl_beta: float = 0.0,
-        eps: float = 1e-4,
     ):
         original_batch_size = batch["model_inputs"]["context"].shape[0]
         repeated_batch, samples = self.sample_model(
@@ -255,7 +259,6 @@ class GRPOTrainer(Trainer):
             n_image_per_prompt=n_image_per_prompt,
             image_resolution=image_resolution,
             guidance_scale=guidance_scale,
-            eta=eta,
         )
         advantages: Tensor = reward_model(images=samples["x"], context=batch["extra"]["captions"])
         for batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
@@ -273,11 +276,10 @@ class GRPOTrainer(Trainer):
                 model_inputs=batch_inputs,
                 grpo_sampling_output=batch_samples,
                 advantages=batch_advantages,
-                kl_beta=kl_beta,
-                eps=eps,
+                kl_beta=self.kl_beta,
+                eps=self.eps,
                 timestep_fraction=1,
                 guidance_scale=guidance_scale,
-                eta=eta,
             )
             for key, loss in losses.items():
                 tracker.update(loss.item(), key=f"val/{key}")
@@ -297,13 +299,9 @@ class GRPOTrainer(Trainer):
         denoiser_ckpt: str | None = None,
         ema_ckpt: str | None = None,
         epoch_start: int = 0,
-        eta: float = 0.7,
         n_image_per_prompt: int = 16,
         guidance_scale: float = 4.0,
         image_resolution: tuple[int, int] = (512, 512),
-        timestep_fraction: float = 0.6,
-        kl_beta: float = 0.0,
-        eps: float = 1e-4,
     ):
         assert diffuser.denoiser.context_embedder is not None, (
             "Alignment training requires a context embedder in the denoiser model."
@@ -381,10 +379,6 @@ class GRPOTrainer(Trainer):
                             per_batch_scheduler=per_batch_scheduler,
                             ema_denoiser=ema_denoiser,  # type: ignore
                             guidance_scale=guidance_scale,
-                            eta=eta,
-                            timestep_fraction=timestep_fraction,
-                            kl_beta=kl_beta,
-                            eps=eps,
                         )
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
@@ -425,9 +419,6 @@ class GRPOTrainer(Trainer):
                             n_image_per_prompt=n_image_per_prompt,
                             image_resolution=image_resolution,
                             guidance_scale=guidance_scale,
-                            eta=eta,
-                            kl_beta=kl_beta,
-                            eps=eps,
                         )
                     tq_val_batch.set_description(
                         f"Val Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('val/')):.4f}"
