@@ -1,0 +1,51 @@
+import torch
+from torch import Tensor
+
+from diffulab.diffuse.samplers import StepResult
+from diffulab.diffuse.samplers.flow.common import Sampler
+
+
+class EulerMaruyama(Sampler):
+    name = "euler_maruyama"
+
+    def __init__(self, tmax: float, eta: float = 0.7) -> None:
+        super().__init__()
+        self.eta = eta
+        self.tmax = tmax
+
+    def set_tmax(self, tmax: float) -> None:
+        self.tmax = tmax
+
+    def step(self, x_t: Tensor, v: Tensor, t_curr: float, t_prev: float, x_prev: Tensor | None = None) -> StepResult:
+        """
+        Perform one step of the reverse diffusion process using the Euler-Maruyama method.
+
+        Args:
+            x_t (Tensor): The current state tensor at time t_curr.
+            v (Tensor): The velocity field tensor at time t_curr.
+            t_curr (float): The current timestep in the diffusion process.
+            t_prev (float): The previous timestep in the diffusion process.
+            x_prev (Tensor, optional): If provided, this tensor will be used as the previous state instead of sampling a new one.
+
+        Returns:
+            StepResult: A dictionary containing the results of the step, including:
+
+        """
+        sigma: float = ((t_curr / (1 - min(t_curr, self.tmax))) ** 0.5) * self.eta
+        x_prev_mean = x_t - (v + sigma**2 / (2 * t_curr) * (x_t + (1 - t_curr) * v)) * (t_curr - t_prev)
+        x_prev_std = sigma * (t_curr - t_prev) ** 0.5
+        if x_prev is None:
+            noise = torch.randn_like(x_t)
+            x_prev = x_prev_mean + x_prev_std * noise
+
+        assert x_prev is not None  # for python type checking
+        estimated_x0 = x_t - v * t_curr
+        logprob = -(
+            (x_prev.detach() - x_prev_mean) ** 2 / (2 * sigma**2 * (t_curr - t_prev))
+            + torch.log(torch.tensor(sigma * (t_curr - t_prev) ** 0.5))
+            + 0.5 * torch.log(torch.tensor(2 * torch.pi))
+        )
+
+        return StepResult(
+            x_prev=x_prev, x_prev_mean=x_prev_mean, x_prev_std=x_prev_std, estimated_x0=estimated_x0, logprob=logprob
+        )
