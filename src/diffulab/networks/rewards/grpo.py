@@ -61,8 +61,7 @@ class PrefGRPORewardModel(RewardModel):
         use_clip: bool = False,
         lambda_base: float = 1.0,
         lambda_clip: float = 1.0,
-        clip_model_type: str = "ViT-H-14",
-        clip_model_id: str = "laion2b_s32b_b79k",
+        clip_model_id: str = "hf-hub:laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
     ):
         super().__init__(n_image_per_prompt)
         self.use_cot = version.startswith("cot")
@@ -85,12 +84,12 @@ class PrefGRPORewardModel(RewardModel):
         if self.use_clip:
             self.clip_model, _, self.clip_preprocess = cast(
                 "tuple[open_clip.CLIP, Compose, Compose]",
-                open_clip.create_model_and_transforms(clip_model_type, pretrained=clip_model_id),  # type: ignore[reportUnknownMemberType]
+                open_clip.create_model_and_transforms(clip_model_id),  # type: ignore[reportUnknownMemberType]
             )
             self.clip_model.eval()
             for param in self.clip_model.parameters():  # type: ignore
                 param.requires_grad = False
-            self.clip_tokenizer = open_clip.get_tokenizer(clip_model_type)  # type: ignore[reportUnknownMemberType]
+            self.clip_tokenizer = open_clip.get_tokenizer(clip_model_id)  # type: ignore[reportUnknownMemberType]
 
         self.advantage_clip_max = advantage_clip_max
 
@@ -459,8 +458,8 @@ class PrefGRPORewardModel(RewardModel):
             ).to(device)
             batch_context_tokenized = self.clip_tokenizer(batch_context).to(device)
 
-            batch_images_features: Tensor = self.clip_model.encode_image(batch_images)  # type: ignore[reportUnknownMemberType]
-            batch_text_features: Tensor = self.clip_model.encode_text(batch_context_tokenized)  # type: ignore[reportUnknownMemberType]
+            batch_images_features = cast(Tensor, self.clip_model.encode_image(batch_images))  # type: ignore[reportUnknownMemberType]
+            batch_text_features = cast(Tensor, self.clip_model.encode_text(batch_context_tokenized))  # type: ignore[reportUnknownMemberType]
             batch_images_features = F.normalize(batch_images_features, dim=-1)
             batch_text_features = F.normalize(batch_text_features, dim=-1)
 
