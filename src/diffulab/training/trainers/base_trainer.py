@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 from diffulab.datasets.base import BatchData
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
-from diffulab.training.trainers import Trainer
+from diffulab.training.trainers.common import Trainer
 from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:

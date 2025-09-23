@@ -3,8 +3,9 @@ from typing import Any
 
 from torch import Tensor
 
-from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
-from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelInputGRPO
+from diffulab.diffuse.samplers import StepResult
+from diffulab.diffuse.utils import SamplingOutput
+from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.losses import LossFunction
 
 
@@ -40,14 +41,13 @@ class Diffusion(ABC):
         sampling_method: str = "euler",
         schedule: str = "linear",
         latent_diffusion: bool = False,
-        **kwargs: Any,
     ):
         self.timesteps: list[float] = []
         self.steps: int = n_steps
         self.sampling_method = sampling_method
         self.schedule = schedule
         self.latent_diffusion = latent_diffusion
-        self.set_steps(n_steps, schedule=schedule, **kwargs)
+        self.set_steps(n_steps, schedule=schedule)
 
     @abstractmethod
     def set_steps(self, n_steps: int, schedule: str) -> None:
@@ -71,7 +71,7 @@ class Diffusion(ABC):
         guidance_scale: float,
         *args: Any,
         **kwargs: Any,
-    ) -> Tensor:
+    ) -> StepResult:
         """
         Perform a single step of the reverse diffusion process.
         This method implements a single step of denoising in the reverse diffusion process,
@@ -92,16 +92,6 @@ class Diffusion(ABC):
             update the state, depend on the concrete diffusion model subclass.
         """
         pass
-
-    def one_step_denoise_grpo(
-        self,
-        model: Denoiser,
-        model_inputs: ModelInputGRPO,
-        guidance_scale: float,
-        *args: Any,
-        **kwargs: Any,
-    ) -> tuple[Tensor | float, ...]:
-        raise NotImplementedError("This model does not implement GRPO.")
 
     @abstractmethod
     def compute_loss(
@@ -136,20 +126,6 @@ class Diffusion(ABC):
         """
         pass
 
-    def compute_loss_grpo(
-        self,
-        model: Denoiser,
-        model_inputs: ModelInputGRPO,
-        grpo_sampling_output: GRPOSamplingOutput,
-        advantages: Tensor,
-        kl_beta: float = 0,
-        eps: float = 1e-4,
-        timestep_fraction: float = 0.6,
-        guidance_scale: float = 4,
-        eta: float = 0.7,
-    ) -> dict[str, Tensor]:
-        raise NotImplementedError("This modelization does not implement GRPO.")
-
     @abstractmethod
     def add_noise(self, x: Tensor, timesteps: Tensor, noise: Tensor | None = None) -> tuple[Tensor, Tensor]:
         """
@@ -182,7 +158,9 @@ class Diffusion(ABC):
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
-    ) -> Tensor:
+        sampler_args: dict[str, Any] = {},
+        return_intermediates: bool = False,
+    ) -> SamplingOutput:
         """
         Generate samples by running the reverse diffusion process.
         This method implements the complete reverse diffusion process to generate new samples,
@@ -198,23 +176,24 @@ class Diffusion(ABC):
                 Defaults to False.
             guidance_scale (float, optional): Scale factor for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
+            sampler_args (dict[str, Any], optional): Additional arguments specific to the sampling method.
+                Defaults to an empty dictionary.
+            return_intermediates (bool, optional): Whether to return intermediate results at each step.
+                Defaults to False.
         Returns:
-            Tensor: The generated data tensor after completing the reverse diffusion process.
+            SamplingOutput: A dictionary that may contain (depending on sampler and return_intermediate option)
+            the following keys:
+                - 'x': The final generated samples.
+                - 'estimated_x0' (optional): Estimated x0 at each step if available.
+                - 'xt' (optional): Samples at each step if available.
+                - 'xt_mean' (optional): Mean of samples at each step for SDE-based methods.
+                - 'xt_std' (optional): Std of samples at each step for SDE-based methods.
+                - 'logprob' (optional): Log probability at each step for flow-based methods.
+        Note:
+            The specific implementation details depend on the concrete diffusion model subclass.
+            Different samplers may provide different intermediate outputs.
         """
         pass
-
-    def denoise_grpo(
-        self,
-        model: Denoiser,
-        data_shape: tuple[int, ...],
-        model_inputs: ModelInputGRPO,
-        use_tqdm: bool = True,
-        clamp_x: bool = False,
-        guidance_scale: float = 0,
-        *args: Any,
-        **kwargs: Any,
-    ) -> GRPOSamplingOutput:
-        raise NotImplementedError("This modelization does not implement GRPO.")
 
     @abstractmethod
     def draw_timesteps(self, batch_size: int) -> Tensor:

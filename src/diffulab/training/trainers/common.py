@@ -208,7 +208,7 @@ class Trainer(ABC):
         x: Tensor = batch.pop("x")  # type: ignore
         original_steps = diffuser.n_steps
         diffuser.set_steps(val_steps)
-        images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
+        images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)["x"]
         images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
 
         grid = make_grid(images, nrow=int(ceil(sqrt(images.shape[0]))), padding=2)

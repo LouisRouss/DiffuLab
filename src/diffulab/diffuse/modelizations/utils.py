@@ -1,9 +1,3 @@
-from typing import TypedDict
-
-from jaxtyping import Float
-from torch import Tensor
-
-
 def space_timesteps(num_timesteps: int, section_counts: str | int, ddim: bool = False) -> set[int]:
     """
     Schedules the timesteps to be sampled for generation, by dividing the total number
@@ -61,11 +55,3 @@ def space_timesteps(num_timesteps: int, section_counts: str | int, ddim: bool = 
         all_steps += taken_steps
         start_idx += size
     return set(all_steps)
-
-
-class GRPOSamplingOutput(TypedDict):
-    x: Float[Tensor, "B C H W"]
-    x_0_original: Float[Tensor, "B C H W"]
-    x_t: Float[Tensor, "B T+1 C H W"]  # T = number of sampled timesteps
-    log_probs: Float[Tensor, "B T"]
-    x_t_minus_one_mean: Float[Tensor, "B T C H W"]
