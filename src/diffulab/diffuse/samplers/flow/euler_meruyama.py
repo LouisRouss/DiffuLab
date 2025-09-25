@@ -8,13 +8,18 @@ from diffulab.diffuse.samplers.flow.common import Sampler
 class EulerMaruyama(Sampler):
     name = "euler_maruyama"
 
-    def __init__(self, tmax: float, eta: float = 0.7) -> None:
+    def __init__(self, eta: float = 0.7) -> None:
         super().__init__()
         self.eta = eta
-        self.tmax = tmax
+        self.tmax = None
 
-    def set_tmax(self, tmax: float) -> None:
-        self.tmax = tmax
+    def set_steps(self, timesteps: list[float]):
+        """
+        Set tmax based on the provided timesteps.
+        Args:
+            timesteps (list[float]): The list of timesteps
+        """
+        self.tmax = timesteps[1]
 
     def step(self, x_t: Tensor, v: Tensor, t_curr: float, t_prev: float, x_prev: Tensor | None = None) -> StepResult:
         """
@@ -31,6 +36,7 @@ class EulerMaruyama(Sampler):
             StepResult: A dictionary containing the results of the step, including:
 
         """
+        assert self.tmax is not None, "set_steps must be called before step"
         sigma: float = ((t_curr / (1 - min(t_curr, self.tmax))) ** 0.5) * self.eta
         x_prev_mean = x_t - (v + sigma**2 / (2 * t_curr) * (x_t + (1 - t_curr) * v)) * (t_curr - t_prev)
         x_prev_std = sigma * (t_curr - t_prev) ** 0.5

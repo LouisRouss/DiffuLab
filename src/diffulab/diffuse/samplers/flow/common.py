@@ -13,6 +13,16 @@ class Sampler(ABC):
         pass
 
     @abstractmethod
+    def set_steps(self, timesteps: list[float]) -> None:
+        """
+        Set the sampler timesteps for eventual parameters computation.
+
+        Args:
+            timesteps (list[float]): A list of timesteps
+        """
+        pass
+
+    @abstractmethod
     def step(self, x_t: Tensor, v: Tensor, t_curr: float, t_prev: float, *args: Any, **kwargs: Any) -> StepResult:
         """
         Perform one step of the reverse diffusion process.

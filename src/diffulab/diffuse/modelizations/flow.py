@@ -99,8 +99,7 @@ class Flow(Diffusion):
         else:
             raise NotImplementedError("Only linear schedule is supported for the moment")
 
-        if isinstance(self.sampler, EulerMaruyama):
-            self.sampler.set_tmax(self.timesteps[1])
+        self.sampler.set_steps(self.timesteps)
 
     def at(self, timesteps: Tensor) -> Tensor:
         """

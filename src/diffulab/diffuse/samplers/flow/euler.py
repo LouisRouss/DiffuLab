@@ -10,6 +10,15 @@ class Euler(Sampler):
     def __init__(self) -> None:
         super().__init__()
 
+    def set_steps(self, timesteps: list[float]) -> None:
+        """
+        Set the sampler timesteps for eventual parameters computation.
+
+        Args:
+            timesteps (list[float]): A list of timesteps
+        """
+        pass
+
     def step(self, x_t: Tensor, v: Tensor, t_curr: float, t_prev: float) -> StepResult:
         """
         Perform one step of the reverse diffusion process using the Euler method.
