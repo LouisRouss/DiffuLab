@@ -183,12 +183,21 @@ class Diffusion(ABC):
         Returns:
             SamplingOutput: A dictionary that may contain (depending on sampler and return_intermediate option)
             the following keys:
-                - 'x': The final generated samples.
-                - 'estimated_x0' (optional): Estimated x0 at each step if available.
-                - 'xt' (optional): Samples at each step if available.
-                - 'xt_mean' (optional): Mean of samples at each step for SDE-based methods.
-                - 'xt_std' (optional): Std of samples at each step for SDE-based methods.
-                - 'logprob' (optional): Log probability at each step for flow-based methods.
+                - x (Tensor): The final generated sample tensor.
+                - xt (Tensor, optional): If `return_intermediates` is True, a tensor of shape
+                  (batch_size, steps+1, ...) containing the sample at each timestep.
+                - estimated_x0 (Tensor, optional): If `return_intermediates` is True, a tensor
+                  of shape (batch_size, steps, ...) containing the estimated original data at
+                  each timestep.
+                - xt_mean (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides mean estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the mean at each timestep.
+                - xt_std (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides std estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the standard deviation at each timestep.
+                - logprob (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides log probabilities, a tensor of shape (batch_size, steps, ...) containing
+                  the log probabilities at each timestep.
         Note:
             The specific implementation details depend on the concrete diffusion model subclass.
             Different samplers may provide different intermediate outputs.
