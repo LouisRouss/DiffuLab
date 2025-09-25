@@ -39,7 +39,7 @@ class EulerMaruyama(Sampler):
         assert self.tmax is not None, "set_steps must be called before step"
         sigma: float = ((t_curr / (1 - min(t_curr, self.tmax))) ** 0.5) * self.eta
         x_prev_mean = x_t - (v + sigma**2 / (2 * t_curr) * (x_t + (1 - t_curr) * v)) * (t_curr - t_prev)
-        x_prev_std = sigma * (t_curr - t_prev) ** 0.5
+        x_prev_std = torch.tensor(sigma * (t_curr - t_prev) ** 0.5, device=x_t.device)
         if x_prev is None:
             noise = torch.randn_like(x_t)
             x_prev = x_prev_mean + x_prev_std * noise
@@ -48,7 +48,7 @@ class EulerMaruyama(Sampler):
         estimated_x0 = x_t - v * t_curr
         logprob = -(
             (x_prev.detach() - x_prev_mean) ** 2 / (2 * x_prev_std**2)
-            + torch.log(torch.tensor(x_prev_std, device=x_prev.device))
+            + torch.log(x_prev_std)
             + 0.5 * torch.log(torch.tensor(2 * torch.pi, device=x_prev.device))
         )
 

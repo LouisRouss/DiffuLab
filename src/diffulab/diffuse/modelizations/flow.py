@@ -402,14 +402,14 @@ class Flow(Diffusion):
         device = next(model.parameters()).device
         dtype = next(model.parameters()).dtype
 
+        if "x" not in model_inputs:
+            model_inputs["x"] = torch.randn(data_shape, device=device, dtype=dtype)
+
         all_x0: list[Tensor] = []
         all_xt: list[Tensor] = [model_inputs["x"]]
         all_xt_mean: list[Tensor] = []
         all_xt_std: list[Tensor] = []
         all_logprobs: list[Tensor] = []
-
-        if "x" not in model_inputs:
-            model_inputs["x"] = torch.randn(data_shape, device=device, dtype=dtype)
 
         for t_curr, t_prev in tqdm(
             zip(self.timesteps[:-1], self.timesteps[1:]),
