@@ -47,9 +47,9 @@ class EulerMaruyama(Sampler):
         assert x_prev is not None  # for python type checking
         estimated_x0 = x_t - v * t_curr
         logprob = -(
-            (x_prev.detach() - x_prev_mean) ** 2 / (2 * sigma**2 * (t_curr - t_prev))
-            + torch.log(torch.tensor(sigma * (t_curr - t_prev) ** 0.5))
-            + 0.5 * torch.log(torch.tensor(2 * torch.pi))
+            (x_prev.detach() - x_prev_mean) ** 2 / (2 * x_prev_std**2)
+            + torch.log(torch.tensor(x_prev_std, device=x_prev.device))
+            + 0.5 * torch.log(torch.tensor(2 * torch.pi, device=x_prev.device))
         )
 
         return StepResult(

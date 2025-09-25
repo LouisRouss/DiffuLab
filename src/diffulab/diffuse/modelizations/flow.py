@@ -61,13 +61,11 @@ class Flow(Diffusion):
         sampler_parameters: dict[str, Any] = {},
     ) -> None:
         assert sampling_method in self.sampler_registry, f"Unknown sampling method {sampling_method}"
+        self.sampler = self.sampler_registry[sampling_method](**sampler_parameters)
+        self.logits_normal = logits_normal
         super().__init__(
             n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
         )
-        self.logits_normal = logits_normal
-        if self.sampling_method == "euler_maruyama" and "tmax" not in sampler_parameters:
-            sampler_parameters["tmax"] = self.timesteps[1]
-        self.sampler = self.sampler_registry[sampling_method](**sampler_parameters)
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         """
@@ -378,7 +376,22 @@ class Flow(Diffusion):
             return_intermediates (bool, optional): Whether to return intermediate results at each step.
                 Defaults to False.
         Returns:
-            Tensor: The generated data tensor.
+            SamplingOutput: A dictionary containing:
+                - x (Tensor): The final generated sample tensor.
+                - xt (Tensor, optional): If `return_intermediates` is True, a tensor of shape
+                  (batch_size, steps+1, ...) containing the sample at each timestep.
+                - estimated_x0 (Tensor, optional): If `return_intermediates` is True, a tensor
+                  of shape (batch_size, steps, ...) containing the estimated original data at
+                  each timestep.
+                - xt_mean (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides mean estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the mean at each timestep.
+                - xt_std (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides std estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the standard deviation at each timestep.
+                - logprob (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides log probabilities, a tensor of shape (batch_size, steps, ...) containing
+                  the log probabilities at each timestep.
         Note:
             The function works by starting with random noise and iteratively updating it
             using the velocity field predicted by the model at each timestep. The process
