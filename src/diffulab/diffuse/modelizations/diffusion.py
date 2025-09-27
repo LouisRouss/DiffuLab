@@ -4,6 +4,7 @@ from typing import Any
 from torch import Tensor
 
 from diffulab.diffuse.samplers import StepResult
+from diffulab.diffuse.samplers.common import Sampler
 from diffulab.diffuse.utils import SamplingOutput
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.losses import LossFunction
@@ -35,13 +36,20 @@ class Diffusion(ABC):
         draw_timesteps: Sample random timesteps for training.
     """
 
+    sampler_registry: dict[str, type[Sampler]]
+
     def __init__(
         self,
         n_steps: int,
         sampling_method: str = "euler",
         schedule: str = "linear",
         latent_diffusion: bool = False,
+        sampler_parameters: dict[str, Any] = {},
     ):
+        assert sampling_method in self.sampler_registry, (
+            f"Unknown sampling method '{sampling_method}'. Available methods: {list(self.sampler_registry.keys())}"
+        )
+        self.sampler = self.sampler_registry[sampling_method](**sampler_parameters)
         self.timesteps: list[float] = []
         self.steps: int = n_steps
         self.sampling_method = sampling_method

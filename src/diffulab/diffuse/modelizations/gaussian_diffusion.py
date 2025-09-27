@@ -1,4 +1,3 @@
-import enum
 import math
 from typing import Any, Callable, cast
 
@@ -14,19 +13,6 @@ from diffulab.diffuse.samplers.gaussian_diffusion import DDIM, DDPM
 from diffulab.diffuse.utils import SamplingOutput, extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.losses.common import LossFunction
-
-
-class MeanType(enum.Enum):
-    EPSILON = "epsilon"
-    XSTART = "xstart"
-    XPREV = "xprev"
-
-
-class ModelVarType(enum.Enum):
-    LEARNED = "learned"
-    FIXED_SMALL = "fixed_small"
-    FIXED_LARGE = "fixed_large"
-    LEARNED_RANGE = "learned_range"
 
 
 class GaussianDiffusion(Diffusion):
@@ -88,26 +74,18 @@ class GaussianDiffusion(Diffusion):
         sampling_method: str = "ddpm",
         schedule: str = "linear",
         latent_diffusion: bool = False,
-        mean_type: str = "epsilon",
-        variance_type: str = "fixed_small",
         sampler_parameters: dict[str, Any] = {},
     ):
-        if mean_type not in MeanType._value2member_map_:
-            raise ValueError(f"mean_type must be one of {[e.value for e in MeanType]}")
-        if variance_type not in ModelVarType._value2member_map_:
-            raise ValueError(f"variance_type must be one of {[e.value for e in ModelVarType]}")
         if sampling_method not in ["ddpm", "ddim"]:
             raise ValueError("sampling method must be one of ['ddpm', 'ddim']")
 
-        self.mean_type = mean_type
-        self.var_type = variance_type
         self.training_steps = n_steps
-        self.sampler = self.sampler_registry[sampling_method](**sampler_parameters)
         super().__init__(
             n_steps=self.training_steps,
             sampling_method=sampling_method,
             schedule=schedule,
             latent_diffusion=latent_diffusion,
+            sampler_parameters=sampler_parameters,
         )
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:

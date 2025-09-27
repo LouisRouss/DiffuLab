@@ -60,12 +60,14 @@ class Flow(Diffusion):
         logits_normal: bool = False,
         sampler_parameters: dict[str, Any] = {},
     ) -> None:
-        assert sampling_method in self.sampler_registry, f"Unknown sampling method {sampling_method}"
-        self.sampler = self.sampler_registry[sampling_method](**sampler_parameters)
-        self.logits_normal = logits_normal
         super().__init__(
-            n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
+            n_steps=n_steps,
+            sampling_method=sampling_method,
+            schedule=schedule,
+            latent_diffusion=latent_diffusion,
+            sampler_parameters=sampler_parameters,
         )
+        self.logits_normal = logits_normal
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         """

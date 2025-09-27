@@ -1,12 +1,25 @@
+import enum
 from typing import cast
 
 import torch
 from torch import Tensor
 
-from diffulab.diffuse.modelizations.gaussian_diffusion import MeanType, ModelVarType
 from diffulab.diffuse.samplers.common import StepResult
 from diffulab.diffuse.samplers.gaussian_diffusion.common import GaussianSampler
 from diffulab.diffuse.utils import extract_into_tensor
+
+
+class MeanType(enum.Enum):
+    EPSILON = "epsilon"
+    XSTART = "xstart"
+    XPREV = "xprev"
+
+
+class ModelVarType(enum.Enum):
+    LEARNED = "learned"
+    FIXED_SMALL = "fixed_small"
+    FIXED_LARGE = "fixed_large"
+    LEARNED_RANGE = "learned_range"
 
 
 class DDPM(GaussianSampler):
@@ -23,6 +36,11 @@ class DDPM(GaussianSampler):
                 "learned", or "learned_range". Defaults to "fixed_small".
         """
         super().__init__()
+        if mean_type not in MeanType._value2member_map_:
+            raise ValueError(f"mean_type must be one of {[e.value for e in MeanType]}")
+        if var_type not in ModelVarType._value2member_map_:
+            raise ValueError(f"variance_type must be one of {[e.value for e in ModelVarType]}")
+
         self.mean_type = mean_type
         self.var_type = var_type
 

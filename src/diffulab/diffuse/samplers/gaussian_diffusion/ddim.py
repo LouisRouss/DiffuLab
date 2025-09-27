@@ -9,7 +9,7 @@ from diffulab.diffuse.utils import extract_into_tensor
 class DDIM(DDPM):
     name = "ddim"
 
-    def __init__(self, betas: Tensor, mean_type: str = "epsilon", var_type: str = "fixed_small") -> None:
+    def __init__(self, mean_type: str = "epsilon", var_type: str = "fixed_small") -> None:
         """
         Denoising Diffusion Implicit Models (DDIM) sampler.
         This class implements the DDIM sampling method, which allows for deterministic sampling
