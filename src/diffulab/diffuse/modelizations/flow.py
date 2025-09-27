@@ -351,8 +351,8 @@ class Flow(Diffusion):
     def denoise(
         self,
         model: Denoiser,
-        data_shape: tuple[int, ...],
         model_inputs: ModelInput,
+        data_shape: tuple[int, ...] | None = None,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
@@ -367,11 +367,12 @@ class Flow(Diffusion):
         by the velocity field predicted by the neural network.
         Args:
             model (Denoiser): The neural network model used for denoising.
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically
-                (batch_size, channels, height, width) for images.
             model_inputs (ModelInput): A dictionary containing inputs for the model, such as
                 conditional information or labels. The function will update this dictionary
                 with the current sample state during generation.
+            data_shape (tuple[int, ...] | None): Shape of the data to generate, typically
+                (batch_size, channels, height, width) for images. Needed if 'x' is not in model_inputs.
+                Defaults to None.
             use_tqdm (bool, optional): Whether to display a progress bar during generation.
                 Defaults to True.
             clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range.
@@ -411,6 +412,7 @@ class Flow(Diffusion):
         dtype = next(model.parameters()).dtype
 
         if "x" not in model_inputs:
+            assert data_shape is not None, "'data_shape' must be provided if 'x' is not in model_inputs"
             model_inputs["x"] = torch.randn(data_shape, device=device, dtype=dtype)
 
         all_x0: list[Tensor] = []

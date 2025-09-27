@@ -148,8 +148,8 @@ class Diffuser:
 
     def generate(
         self,
-        data_shape: tuple[int, ...],
         model_inputs: ModelInput,
+        data_shape: tuple[int, ...] | None = None,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
@@ -163,10 +163,11 @@ class Diffuser:
         generate a sample from the diffusion process. It can handle conditional generation
         with guidance when appropriate settings are provided.
         Args:
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
-                If a vision tower is used, this should be the shape of the latent space.
             model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
                 conditional information, or labels. If 'x' is not provided, random noise will be generated.
+            data_shape (tuple[int, ...], optional): The shape of the data to generate. If a vision tower is used,
+                this shape should correspond to the latent space shape.
+                Required if 'x' is not in model_inputs. Defaults to None.
             use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
             clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
             guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
@@ -191,8 +192,8 @@ class Diffuser:
         if self.vision_tower:
             sampling_output = self.diffusion.denoise(
                 self.denoiser,
-                data_shape,
-                model_inputs,
+                model_inputs=model_inputs,
+                data_shape=data_shape,
                 use_tqdm=use_tqdm,
                 clamp_x=clamp_x,
                 guidance_scale=guidance_scale,
@@ -205,8 +206,8 @@ class Diffuser:
 
         return self.diffusion.denoise(
             self.denoiser,
-            data_shape,
-            model_inputs,
+            model_inputs=model_inputs,
+            data_shape=data_shape,
             use_tqdm=use_tqdm,
             clamp_x=clamp_x,
             guidance_scale=guidance_scale,

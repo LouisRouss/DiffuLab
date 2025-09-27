@@ -191,7 +191,6 @@ class GRPOTrainer(Trainer):
 
             group_grpo_sampling = diffuser.generate(
                 model_inputs=model_inputs,
-                data_shape=model_inputs["x"].shape,
                 guidance_scale=guidance_scale,
                 return_intermediates=True,
                 return_latents=False,

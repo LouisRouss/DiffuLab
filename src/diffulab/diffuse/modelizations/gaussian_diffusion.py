@@ -331,8 +331,8 @@ class GaussianDiffusion(Diffusion):
     def denoise(
         self,
         model: Denoiser,
-        data_shape: tuple[int, ...],
         model_inputs: ModelInput,
+        data_shape: tuple[int, ...] | None = None,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
@@ -346,10 +346,12 @@ class GaussianDiffusion(Diffusion):
         cleaner states. It can generate samples unconditionally or with guidance.
         Args:
             model (Denoiser): The neural network model used for denoising.
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
             model_inputs (ModelInput): A dictionary containing the model inputs, potentially including:
                 - 'x': Initial noise tensor. If not provided, random noise will be generated.
                 - conditional inputs like context embeddings, class labels, etc.
+            data_shape (tuple[int, ...] | None): Shape of the data to generate, typically (batch_size, channels, height, width).
+                If 'x' is provided in model_inputs, data_shape can be set to None.
+                Defaults to None.
             use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
             clamp_x (bool, optional): Whether to clamp the generated values to a valid range (typically [-1, 1]).
                 Defaults to True.
@@ -380,6 +382,7 @@ class GaussianDiffusion(Diffusion):
             The model_inputs dictionary is modified in place with the current sample state.
         """
         if "x" not in model_inputs:
+            assert data_shape is not None, "'data_shape' must be provided if 'x' is not in model_inputs"
             model_inputs["x"] = torch.randn(
                 data_shape, device=next(model.parameters()).device, dtype=next(model.parameters()).dtype
             )
@@ -403,6 +406,7 @@ class GaussianDiffusion(Diffusion):
                 t=t,
                 clamp_x=clamp_x,
                 guidance_scale=guidance_scale,
+                sampler_args=sampler_args,
             )
 
             model_inputs["x"] = step_output["x_prev"]
