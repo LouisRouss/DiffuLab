@@ -30,30 +30,10 @@ class GaussianDiffusion(Diffusion):
             (standard diffusion) and "ddim" (deterministic diffusion). Default is "ddpm".
         schedule (str, optional): Noise schedule to use. Options include "linear" and "cosine".
             Default is "linear".
-        mean_type (str, optional): Type of parameterization used for the model's output.
-            Options include:
-            - "epsilon": Model predicts the noise added.
-            - "xstart": Model predicts the clean data directly.
-            - "xprev": Model predicts the previous timestep.
-            Default is "epsilon".
-        variance_type (str, optional): Type of variance computation to use. Options include:
-            - "fixed_small": Use the exact posterior variance.
-            - "fixed_large": Use larger variance
-            - "learned": Model learns the variance.
-            - "learned_range": Model learns interpolation between min/max variance.
-            Default is "fixed_small".
-    Attributes:
-        mean_type (str): The selected mean parameterization type.
-        var_type (str): The selected variance type.
-        training_steps (int): Number of steps used for training.
-        timestep_map (list[int]): Mapping from sampling steps to training steps when using
-            fewer sampling steps than training steps.
-        betas (Tensor): Beta schedule for noise levels.
-        alphas (Tensor): 1 - betas.
-        alphas_bar (Tensor): Cumulative product of alphas.
-        sqrt_alphas_bar (Tensor): Square root of alphas_bar.
-        posterior_variance (Tensor): Variance of the posterior distribution.
-        posterior_log_variance_clipped (Tensor): Log of the posterior variance, clipped for numerical stability.
+        latent_diffusion (bool, optional): Whether the diffusion operates in a latent space.
+            Defaults to False.
+        sampler_parameters (dict[str, Any], optional): Additional parameters for the sampler.
+            Defaults to an empty dictionary.
     Methods:
         set_steps(n_steps, schedule, section_counts): Sets the number and spacing of diffusion steps.
         draw_timesteps(batch_size): Samples random timesteps for training.

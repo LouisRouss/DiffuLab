@@ -25,9 +25,13 @@ class Flow(Diffusion):
             is supported. Defaults to "euler".
         schedule (str, optional): Schedule for time discretization. Currently only "linear"
             is supported. Defaults to "linear".
+        latent_diffusion (bool, optional): Whether the diffusion operates in a latent space.
+            Defaults to False.
         logits_normal (bool, optional): Whether to use logit-normal distribution for timestep
             sampling during training. When True, timesteps are drawn from a sigmoid-transformed
             normal distribution. Defaults to False.
+        sampler_parameters (dict[str, Any], optional): Additional parameters for the sampler.
+            Defaults to an empty dictionary.
     Methods:
         set_steps(n_steps, schedule): Sets the number of timesteps and their spacing.
         at(timesteps): Computes the "a(t)" coefficient for noise mixing.
@@ -37,6 +41,8 @@ class Flow(Diffusion):
         one_step_denoise(model, model_inputs, t_prev, t_curr, guidance_scale): Performs one step
             of the reverse diffusion process.
         compute_loss(model, model_inputs, timesteps, noise): Computes the loss for training.
+        compute_loss_grpo(model, model_inputs, sampling, advantages, kl_beta, eps, timestep_fraction, guidance_scale):
+            Computes the GRPO loss for reinforcement learning.
         add_noise(x, timesteps, noise): Adds noise to the input according to the timesteps.
         denoise(model, data_shape, model_inputs, use_tqdm, clamp_x, guidance_scale): Generates
             samples by running the reverse diffusion process.

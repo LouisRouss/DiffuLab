@@ -30,10 +30,12 @@ class DDPM(GaussianSampler):
         Denoising Diffusion Probabilistic Model (DDPM) sampler.
 
         Args:
-            mean_type (str, optional): Type of mean prediction. Options are "epsilon", "x0", or "v".
+            mean_type (str, optional): Type of mean prediction. Options are "epsilon", "xstart", or "xprev".
                 Defaults to "epsilon".
             var_type (str, optional): Type of variance prediction. Options are "fixed_small", "fixed_large",
                 "learned", or "learned_range". Defaults to "fixed_small".
+        Raises:
+            ValueError: If an unknown mean_type or var_type is provided.
         """
         super().__init__()
         if mean_type not in MeanType._value2member_map_:

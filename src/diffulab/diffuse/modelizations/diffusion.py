@@ -22,11 +22,17 @@ class Diffusion(ABC):
             Defaults to "euler".
         schedule (str, optional): Schedule for time discretization in the diffusion process.
             Defaults to "linear".
+        latent_diffusion (bool, optional): Whether the diffusion operates in a latent space.
+            Defaults to False.
+        sampler_parameters (dict[str, Any], optional): Additional parameters for the sampler.
+            Defaults to an empty dictionary.
     Attributes:
         timesteps (list[float]): List of timestep values for the diffusion process.
         steps (int): Number of steps in the diffusion process.
         sampling_method (str): Method used for sampling/reverse process.
         schedule (str): Schedule type used for timestep spacing.
+        latent_diffusion (bool): Whether the diffusion operates in a latent space.
+        sampler (Sampler): The sampler instance used for the reverse diffusion process.
     Methods:
         set_steps: Configure the timestep sequence for the diffusion process.
         one_step_denoise: Perform a single step of the reverse diffusion process.
