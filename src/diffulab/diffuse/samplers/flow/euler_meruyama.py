@@ -2,10 +2,10 @@ import torch
 from torch import Tensor
 
 from diffulab.diffuse.samplers import StepResult
-from diffulab.diffuse.samplers.flow.common import Sampler
+from diffulab.diffuse.samplers.flow.common import FlowSampler
 
 
-class EulerMaruyama(Sampler):
+class EulerMaruyama(FlowSampler):
     name = "euler_maruyama"
 
     def __init__(self, eta: float = 0.7) -> None:

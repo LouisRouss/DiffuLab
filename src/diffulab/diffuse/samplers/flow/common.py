@@ -3,14 +3,11 @@ from typing import Any
 
 from torch import Tensor
 
-from diffulab.diffuse.samplers import StepResult
+from diffulab.diffuse.samplers import Sampler, StepResult
 
 
-class Sampler(ABC):
+class FlowSampler(Sampler, ABC):
     name: str
-
-    def __init__(self) -> None:
-        pass
 
     @abstractmethod
     def set_steps(self, timesteps: list[float]) -> None:

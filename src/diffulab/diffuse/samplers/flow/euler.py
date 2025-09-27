@@ -1,10 +1,10 @@
 from torch import Tensor
 
 from diffulab.diffuse.samplers import StepResult
-from diffulab.diffuse.samplers.flow.common import Sampler
+from diffulab.diffuse.samplers.flow.common import FlowSampler
 
 
-class Euler(Sampler):
+class Euler(FlowSampler):
     name = "euler"
 
     def __init__(self) -> None:

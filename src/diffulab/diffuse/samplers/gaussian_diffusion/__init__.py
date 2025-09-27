@@ -1,5 +1,5 @@
-from .common import Sampler
+from .common import GaussianSampler
 from .ddim import DDIM
 from .ddpm import DDPM
 
-__all__ = ["Sampler", "DDPM", "DDIM"]
+__all__ = ["GaussianSampler", "DDPM", "DDIM"]

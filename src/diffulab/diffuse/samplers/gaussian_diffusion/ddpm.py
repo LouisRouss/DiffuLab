@@ -5,11 +5,11 @@ from torch import Tensor
 
 from diffulab.diffuse.modelizations.gaussian_diffusion import MeanType, ModelVarType
 from diffulab.diffuse.samplers.common import StepResult
-from diffulab.diffuse.samplers.gaussian_diffusion.common import Sampler
+from diffulab.diffuse.samplers.gaussian_diffusion.common import GaussianSampler
 from diffulab.diffuse.utils import extract_into_tensor
 
 
-class DDPM(Sampler):
+class DDPM(GaussianSampler):
     name = "ddpm"
 
     def __init__(self, mean_type: str = "epsilon", var_type: str = "fixed_small") -> None:

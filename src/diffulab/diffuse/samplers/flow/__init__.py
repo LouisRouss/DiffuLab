@@ -1,5 +1,5 @@
-from .common import Sampler
+from .common import FlowSampler
 from .euler import Euler
 from .euler_meruyama import EulerMaruyama
 
-__all__ = ["Sampler", "Euler", "EulerMaruyama"]
+__all__ = ["FlowSampler", "Euler", "EulerMaruyama"]
