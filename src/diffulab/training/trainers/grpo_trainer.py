@@ -10,11 +10,11 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from tqdm import tqdm
 
-from diffulab.datasets.base import BatchDataGRPO
-from diffulab.diffuse.modelizations.utils import GRPOSamplingOutput
-from diffulab.networks.denoisers.common import ExtraInputGRPO, ModelInputGRPO
+from diffulab.datasets.base import BatchData, BatchDataGRPO
+from diffulab.diffuse.utils import SamplingOutput
+from diffulab.networks.denoisers.common import ModelInput
 from diffulab.networks.rewards import RewardModel
-from diffulab.training.trainers import Trainer
+from diffulab.training.trainers.common import Trainer
 from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:
@@ -94,7 +94,6 @@ class GRPOTrainer(Trainer):
             "fullgraph": False,
             "dynamic": True,
         },
-        eta: float = 0.7,
         timestep_fraction: float = 0.6,
         kl_beta: float = 0.0,
         eps: float = 1e-4,
@@ -114,13 +113,13 @@ class GRPOTrainer(Trainer):
             compile=compile,
             dynamo_plugin_kwargs=dynamo_plugin_kwargs,
         )
-        self.eta = eta
         self.timestep_fraction = timestep_fraction
         self.kl_beta = kl_beta
         self.eps = eps
 
-    def repeat_batch(self, batch: BatchDataGRPO, n_repeat: int) -> BatchDataGRPO:
+    def repeat_batch(self, batch: BatchDataGRPO, n_repeat: int) -> BatchData:
         assert n_repeat > 0, "n_repeat must be a positive integer."
+        assert "extra" in batch, "extra field must be present in the batch for GRPO (captions for the)."
 
         repeated_inputs = {}
         for k, v in batch["model_inputs"].items():
@@ -144,7 +143,7 @@ class GRPOTrainer(Trainer):
             else:
                 raise ValueError(f"Unsupported type {type(v)} for key {k} in extra.")
 
-        return {"model_inputs": cast(ModelInputGRPO, repeated_inputs), "extra": cast(ExtraInputGRPO, repeated_extra)}
+        return {"model_inputs": cast(ModelInput, repeated_inputs), "extra": repeated_extra}
 
     def sample_model(
         self,
@@ -153,14 +152,35 @@ class GRPOTrainer(Trainer):
         n_image_per_prompt: int,
         image_resolution: tuple[int, int],
         guidance_scale: float = 0,
-    ) -> tuple[BatchDataGRPO, GRPOSamplingOutput]:
+    ) -> tuple[BatchData, SamplingOutput]:
         original_batch_size = batch["model_inputs"]["context"].shape[0]
+
+        if diffuser.vision_tower:
+            data_shape = (
+                original_batch_size,
+                diffuser.vision_tower.latent_channels,
+                image_resolution[0] // diffuser.vision_tower.compression_factor,
+                image_resolution[1] // diffuser.vision_tower.compression_factor,
+            )
+        else:
+            data_shape = (
+                original_batch_size,
+                3,
+                image_resolution[0],
+                image_resolution[1],
+            )  # only RGB images supported for now
+
+        # We sample noise for each element of the batch if not provided
+        # same noises will be used for the sampling of same prompts
+        if "x" not in batch["model_inputs"]:
+            batch["model_inputs"]["x"] = torch.randn(data_shape, device=self.accelerator.device)
+
         repeated_batch = self.repeat_batch(batch, n_image_per_prompt)
 
-        grpo_sampling: GRPOSamplingOutput | None = None
+        grpo_sampling: SamplingOutput | None = None
         for mini_batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
             model_inputs = cast(
-                ModelInputGRPO,
+                ModelInput,
                 {
                     k: v[mini_batch_idx : mini_batch_idx + original_batch_size]
                     if isinstance(v, Tensor) or isinstance(v, list)
@@ -169,11 +189,11 @@ class GRPOTrainer(Trainer):
                 },
             )
 
-            group_grpo_sampling = diffuser.generate_GRPO(
+            group_grpo_sampling = diffuser.generate(
                 model_inputs=model_inputs,
-                data_shape=(n_image_per_prompt, 3, image_resolution[0], image_resolution[1]),
+                data_shape=model_inputs["x"].shape,
                 guidance_scale=guidance_scale,
-                eta=self.eta,
+                return_intermediates=True,
                 return_latents=False,
             )
 
@@ -209,27 +229,37 @@ class GRPOTrainer(Trainer):
             image_resolution=image_resolution,
             guidance_scale=guidance_scale,
         )
+
+        assert "extra" in repeated_batch and "captions" in repeated_batch["extra"], (
+            "Captions are required in the extra field of the batch."
+        )
         advantages: Tensor = reward_model(images=samples["x"], context=repeated_batch["extra"]["captions"])
         for batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
-            batch_inputs: ModelInputGRPO = {
-                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
-                for k, v in repeated_batch["model_inputs"].items()
-            }  # type: ignore
-            batch_samples: GRPOSamplingOutput = {
-                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
-                for k, v in samples.items()  # type: ignore
-            }
+            batch_inputs = ModelInput(
+                **{
+                    k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore
+                    for k, v in repeated_batch["model_inputs"].items()
+                }
+            )
+            batch_samples = SamplingOutput(
+                **{
+                    k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore
+                    for k, v in samples.items()
+                }
+            )
             batch_advantages = advantages[batch_idx : batch_idx + original_batch_size]
 
-            losses = diffuser.compute_grpo_loss(
+            losses = diffuser.compute_loss(
                 model_inputs=batch_inputs,
-                grpo_sampling_output=batch_samples,
-                advantages=batch_advantages,
-                kl_beta=self.kl_beta,
-                eps=self.eps,
-                timestep_fraction=self.timestep_fraction,
-                guidance_scale=guidance_scale,
-                eta=self.eta,
+                grpo=True,
+                grpo_args={
+                    "sampling": batch_samples,
+                    "advantages": batch_advantages,
+                    "kl_beta": self.kl_beta,
+                    "eps": self.eps,
+                    "timestep_fraction": self.timestep_fraction,
+                    "guidance_scale": guidance_scale,
+                },
             )
             for key, loss in losses.items():
                 tracker.update(loss.item(), key=f"train/{key}")
@@ -262,25 +292,33 @@ class GRPOTrainer(Trainer):
         )
         advantages: Tensor = reward_model(images=samples["x"], context=batch["extra"]["captions"])
         for batch_idx in range(0, original_batch_size * n_image_per_prompt, original_batch_size):
-            batch_inputs: ModelInputGRPO = {
-                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
-                for k, v in repeated_batch["model_inputs"].items()
-            }  # type: ignore
-            batch_samples: GRPOSamplingOutput = {
-                k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore[reportIndexIssue]
-                for k, v in samples.items()  # type: ignore
-            }
+            batch_inputs = ModelInput(
+                **{
+                    k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore
+                    for k, v in repeated_batch["model_inputs"].items()
+                }
+            )
+            batch_samples = SamplingOutput(
+                **{
+                    k: cast(Tensor, v[batch_idx : batch_idx + original_batch_size])  # type: ignore
+                    for k, v in samples.items()
+                }
+            )
             batch_advantages = advantages[batch_idx : batch_idx + original_batch_size]
 
-            losses = diffuser.compute_grpo_loss(
+            losses = diffuser.compute_loss(
                 model_inputs=batch_inputs,
-                grpo_sampling_output=batch_samples,
-                advantages=batch_advantages,
-                kl_beta=self.kl_beta,
-                eps=self.eps,
-                timestep_fraction=1,
-                guidance_scale=guidance_scale,
+                grpo=True,
+                grpo_args={
+                    "sampling": batch_samples,
+                    "advantages": batch_advantages,
+                    "kl_beta": self.kl_beta,
+                    "eps": self.eps,
+                    "timestep_fraction": self.timestep_fraction,
+                    "guidance_scale": guidance_scale,
+                },
             )
+
             for key, loss in losses.items():
                 tracker.update(loss.item(), key=f"val/{key}")
 

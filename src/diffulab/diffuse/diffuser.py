@@ -6,7 +6,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
 from diffulab.diffuse.utils import SamplingOutput
-from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelInputGRPO
+from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.networks.vision_towers.common import VisionTower
 from diffulab.training.losses import LossFunction
 
@@ -96,8 +96,8 @@ class Diffuser:
 
     def compute_loss(
         self,
-        model_inputs: ModelInput | ModelInputGRPO,
-        timesteps: Tensor,
+        model_inputs: ModelInput,
+        timesteps: Tensor | None = None,
         noise: Tensor | None = None,
         extra_args: dict[str, Any] = {},
         grpo: bool = False,
@@ -108,9 +108,9 @@ class Diffuser:
         This method serves as a bridge between the Diffuser class and the underlying
         diffusion implementation by forwarding the loss computation to the diffusion model.
         Args:
-            model_inputs (ModelInput | ModelInputGRPO): A dictionary containing the model inputs,
+            model_inputs (ModelInput): A dictionary containing the model inputs,
               including the data tensor keyed as 'x' and any conditional information. For GRPO,
-              x is not needed in the model inputs (see ModelInputGRPO TypedDict).
+              x is not needed in the model inputs.
             timesteps (Tensor): A tensor of timesteps for the batch.
             noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
@@ -125,6 +125,7 @@ class Diffuser:
                 model_inputs,  # type: ignore[reportArgumentType]
                 **grpo_args,
             )
+        assert timesteps is not None, "timesteps must be provided for loss computation"
         return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)  # type: ignore[reportArgumentType]
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:

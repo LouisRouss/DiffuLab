@@ -9,7 +9,7 @@ from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.samplers import StepResult
 from diffulab.diffuse.samplers.flow import Euler, EulerMaruyama
 from diffulab.diffuse.utils import SamplingOutput
-from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelInputGRPO, ModelOutput
+from diffulab.networks.denoisers.common import Denoiser, ModelInput, ModelOutput
 from diffulab.training.losses.common import LossFunction
 
 
@@ -266,7 +266,7 @@ class Flow(Diffusion):
     def compute_loss_grpo(
         self,
         model: Denoiser,
-        model_inputs: ModelInputGRPO,
+        model_inputs: ModelInput,
         sampling: SamplingOutput,
         advantages: Tensor,
         kl_beta: float = 0,
@@ -274,7 +274,7 @@ class Flow(Diffusion):
         timestep_fraction: float = 0.6,
         guidance_scale: float = 4,
     ) -> dict[str, Tensor]:
-        assert isinstance(self.sampler, EulerMaruyama), "GRPO works with the Euler-Maruyama sampler"
+        assert isinstance(self.sampler, EulerMaruyama), "GRPO only works with the Euler-Maruyama sampler"
         assert "xt" in sampling, "sampling output should contain all intermediate samples"
         assert "logprob" in sampling, "sampling output should contain all logprobs"
         assert "xt_mean" in sampling, "sampling output should contain all intermediate means"

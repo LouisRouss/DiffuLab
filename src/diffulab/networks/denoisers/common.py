@@ -22,8 +22,7 @@ class ModelOutput(TypedDict, total=False):
 class ModelInputGRPO(TypedDict, total=False):
     x: NotRequired[Tensor]  # noisy input tensor
     p: NotRequired[float]  # probabilily of label dropping
-    context: Required[Tensor]  # context information, can be text image etc
-    x_context: NotRequired[Tensor]  # additional image context, will be concatenated to x
+    context: Required[Tensor]  # context information, for GRPO it's text embedding
 
 
 class ExtraInputGRPO(TypedDict, total=False):
