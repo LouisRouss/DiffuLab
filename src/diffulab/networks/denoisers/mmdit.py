@@ -502,16 +502,23 @@ class MMDiT(Denoiser):
 
         if not self.simple_dit:
             assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
-            assert self.context_embedder.n_output == 2, "for MMDiT context embedder should provide 2 embeddings"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
                 isinstance(i, int) for i in self.context_embedder.output_size
             ), "context_embedder.output_size must be a tuple of integers"
-            self.mlp_pooled_context = nn.Sequential(
-                nn.Linear(self.context_embedder.output_size[0], embedding_dim),
-                nn.SiLU(),
-                nn.Linear(embedding_dim, embedding_dim),
-            )
-            self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+
+            self.pooled_embedding = False
+            self.mlp_pooled_context = None
+            if self.context_embedder.n_output == 2:
+                self.pooled_embedding = True
+                self.mlp_pooled_context = nn.Sequential(
+                    nn.Linear(self.context_embedder.output_size[0], embedding_dim),
+                    nn.SiLU(),
+                    nn.Linear(embedding_dim, embedding_dim),
+                )
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+            else:
+                assert self.context_embedder.n_output == 1
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
         else:
             self.label_embed = (
                 LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
@@ -615,18 +622,30 @@ class MMDiT(Denoiser):
     ) -> ModelOutput:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))
-        context_pooled, context = self.context_embedder(initial_context, p)
-        context_pooled = self.mlp_pooled_context(context_pooled) + emb
+        if self.pooled_embedding:
+            assert self.mlp_pooled_context is not None, (
+                "for MMDiT with pooled context, mlp_pooled_context must be defined"
+            )
+            assert self.context_embedder.n_output == 2, (
+                "for MMDiT with pooled context, context_embedder should provide 2 embeddings"
+            )
+            context_pooled, context = self.context_embedder(initial_context, p)
+            emb = self.mlp_pooled_context(context_pooled) + emb
+        else:
+            assert self.context_embedder.n_output == 1, (
+                "for MMDiT without pooled context, context_embedder should provide 1 embedding"
+            )
+            (context,) = self.context_embedder(initial_context, p)
         context = self.context_embed(context)
 
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, context_pooled, context)
+            x, context = layer(x, emb, context)
             if features:
                 features.append(x)
 
-        x = self.last_layer(x, context_pooled)
+        x = self.last_layer(x, emb)
         if features:
             features.append(x)
         model_output: ModelOutput = {"x": x}
