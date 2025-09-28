@@ -5,7 +5,7 @@ from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 
 from diffulab.diffuse import Diffuser
-from diffulab.training import Trainer
+from diffulab.training import BaseTrainer
 
 
 @hydra.main(version_base=None, config_path="../configs", config_name="train_mnist_flow_matching")
@@ -53,7 +53,7 @@ def train(cfg: DictConfig):
     )
 
     # TODO: add a run name for wandb
-    trainer = Trainer(
+    trainer = BaseTrainer(
         n_epoch=cfg.trainer.n_epoch,
         gradient_accumulation_step=cfg.trainer.gradient_accumulation_step,
         precision_type=cfg.trainer.precision_type,

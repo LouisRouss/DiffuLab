@@ -6,24 +6,25 @@ from torch import Tensor
 
 
 class ContextEmbedder(nn.Module, ABC):
+    _n_output: int
+    _output_size: tuple[int, ...]
+
     def __init__(self):
         super().__init__()  # type: ignore
 
     @property
-    @abstractmethod
     def n_output(self) -> int:
         """
         Represents the number of output embedding the embedder is returning.
         """
-        pass
+        return self._n_output
 
     @property
-    @abstractmethod
     def output_size(self) -> tuple[int, ...]:
         """
         Represents the dimension of each output embedding.
         """
-        pass
+        return self._output_size
 
     @abstractmethod
     def drop_conditions(

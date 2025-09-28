@@ -205,5 +205,5 @@ class RepaLoss(LossFunction):
             projected_src_features = self.resampler(projected_src_features)
 
         cos_sim = torch.nn.functional.cosine_similarity(projected_src_features, dst_features, dim=-1)  # type: ignore
-        loss = 1 - cos_sim.mean()
-        return self.coeff * loss
+        loss = 1 - cos_sim.mean()  # type: ignore
+        return self.coeff * loss  # type: ignore
