@@ -51,13 +51,13 @@ class PreComputedEmbedder(ContextEmbedder):
             assert isinstance(self.zero_embedding, tuple)
             batch_size = context[0].shape[0]
             mask = (torch.rand(batch_size, device=context[0].device) > p).float().unsqueeze(-1)
-            return cast(
-                tuple[Tensor],
-                tuple(c * mask + ze.to(c.device) * (1 - mask) for c, ze in zip(context, self.zero_embedding)),
-            )  # type: ignore[reportUnknownArgumentType]
+            return tuple(
+                c * mask + ze.to(c.device) * (torch.ones_like(mask) - mask)
+                for c, ze in zip(context, self.zero_embedding)
+            )
 
     @torch.inference_mode()
-    def forward(self, context: tuple[Tensor] | Tensor, p: float) -> tuple[Tensor, ...]:
+    def forward(self, context: tuple[Tensor] | Tensor, p: float = 0) -> tuple[Tensor, ...]:
         """
         Apply the model to an input batch.
 

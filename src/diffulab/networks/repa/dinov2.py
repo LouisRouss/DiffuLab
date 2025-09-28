@@ -37,8 +37,8 @@ class DinoV2(REPA):
             grid_size = int(sqrt_val)
             self.inference_resolution = grid_size * self.base_patch_pixel_size
 
-        self._encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
-            self._encoder.pos_embed.data,  # type: ignore
+        self._encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(  # type: ignore
+            self._encoder.pos_embed.data,
             [grid_size, grid_size],
         )
 

@@ -48,6 +48,8 @@ class SD3TextEmbedder(ContextEmbedder):
         # load l_14
         self.clip_l14 = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", device_map=device)  # type: ignore
         self.tokenizer_l14 = AutoTokenizer.from_pretrained("openai/clip-vit-large-patch14", device_map=device)  # type: ignore
+        self.clip_l14.eval()  # pyright: ignore[reportUnknownMemberType]
+        self.clip_l14.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
 
         # load g_14
         self.clip_g14 = create_model_from_pretrained(  # type: ignore
@@ -59,12 +61,16 @@ class SD3TextEmbedder(ContextEmbedder):
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+        self.clip_g14.eval()  # pyright: ignore[reportUnknownMemberType]
+        self.clip_g14.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
 
         # load t5
         self.t5 = T5EncoderModel.from_pretrained("google/t5-v1_1-xl", from_tf=True)  # type: ignore
         self.tokenizer_t5 = AutoTokenizer.from_pretrained(  # type: ignore
             "google/t5-v1_1-xl", clean_up_tokenization_spaces=True, legacy=False
         )
+        self.t5.eval()  # pyright: ignore[reportUnknownMemberType]
+        self.t5.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
 
     def dict_to_device(self, d: dict[str, Tensor]) -> dict[str, Tensor]:
         """Move all tensors in a dictionary to the configured device.
@@ -217,7 +223,7 @@ class SD3TextEmbedder(ContextEmbedder):
         return ["" if random.random() < p else c for c in context]
 
     def forward(
-        self, context: list[str], p: float
+        self, context: list[str], p: float = 0
     ) -> tuple[Float[Tensor, "batch_size 2048"], Float[Tensor, "batch_size seq_len 4096"]]:
         """Forward pass producing pooled and composite sequence embeddings.
 
@@ -252,13 +258,24 @@ class QwenEmbedding(ContextEmbedder):
         "Qwen/Qwen3-Embedding-8B": 4096,
     }
 
-    def __init__(self, device: str | torch.device = "cuda", model_id: str = "Qwen/Qwen3-Embedding-4B") -> None:
+    def __init__(
+        self,
+        device: str | torch.device = "cuda",
+        dtype: torch.dtype = torch.bfloat16,
+        model_id: str = "Qwen/Qwen3-Embedding-4B",
+    ) -> None:
         super().__init__()
         assert model_id in self.model_registry, f"Model {model_id} not in registry {list(self.model_registry.keys())}"
+
         self.tokenizer: "Qwen2TokenizerFast" = AutoTokenizer.from_pretrained(model_id, padding_side="left")  # type: ignore[reportUnknownMemberType]
-        self.model: "Qwen3Model" = AutoModel.from_pretrained(model_id)  # type: ignore[reportUnknownMemberType]
+        self.model: "Qwen3Model" = AutoModel.from_pretrained(model_id, device_map=device, dtype=dtype)  # type: ignore[reportUnknownMemberType]
+        self.model.eval()  # pyright: ignore[reportUnknownMemberType]
+        self.model.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
+
         self._n_output = 1
         self._output_size = (self.model_registry[model_id],)
+        self.device = device
+        self.dtype = dtype
 
     @staticmethod
     def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
@@ -295,7 +312,7 @@ class QwenEmbedding(ContextEmbedder):
         """
         return ["" if random.random() < p else c for c in context]
 
-    def forward(self, context: list[str], p: float) -> tuple[Float[Tensor, "batch_size dim"]]:
+    def forward(self, context: list[str], p: float = 0) -> tuple[Float[Tensor, "batch_size dim"]]:
         """Forward pass producing pooled and composite sequence embeddings.
 
         Args:

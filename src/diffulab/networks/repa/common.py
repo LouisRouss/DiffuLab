@@ -61,6 +61,7 @@ class REPA(nn.Module, ABC):
             Tensor: Encoded representation of the input tensor.
         """
 
+    @torch.inference_mode()
     def compute_on_dataset(
         self,
         dataset_path: str,
