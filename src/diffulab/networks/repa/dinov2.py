@@ -68,25 +68,27 @@ class DinoV2(REPA):
     def preprocess(
         self, x: Float[Tensor, "batch_size channels height width"]
     ) -> Float[Tensor, "batch_size channels height width"]:
-        # Normalize the input tensor to be between 0 and 1
-        if x.min() > 1 and x.max() <= 255:  # Case: 0-255
-            x = x.float() / 255.0
-        elif (x.min() >= -1.0 and x.min() < 0) and x.max() <= 1.0:  # Case: -1 to 1
-            x = (x + 1.0) / 2.0
-        elif x.min() >= 0.0 and x.max() <= 1.0:  # Case: 0-1
-            pass
-        else:
-            raise ValueError("Input tensor range is not supported. Expected 0-255, 0-1 or -1 to 1.")
+        x = x.float()
 
-        x = x * 0.5 + 0.5
-        x = Normalize(
-            mean=IMAGENET_DEFAULT_MEAN,
-            std=IMAGENET_DEFAULT_STD,
-        )(x)
-        x = cast(
-            Tensor,
-            torch.nn.functional.interpolate(x, self.inference_resolution, mode="bicubic"),  # type: ignore[reportUnknownMemberType]
-        )
+        x_min = x.min().item()
+        x_max = x.max().item()
+
+        # Normalize to [0,1]
+        if x_min >= -1.0 and x_max <= 1.0 and x_min < 0.0:
+            x = (x + 1.0) / 2.0
+        elif x_min >= 0.0 and x_max <= 1.0:
+            pass
+        elif x_min >= 0.0 and x_max <= 255.0:
+            x = x / 255.0
+        else:
+            raise ValueError("Input tensor range is not supported. Expected 0–255, 0–1, or -1–1.")
+
+        x = x.clamp(0.0, 1.0)
+
+        x = torch.nn.functional.interpolate(x, self.inference_resolution, mode="bicubic", align_corners=False)  # type: ignore
+
+        x = Normalize(mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD)(x)
+
         return x
 
     def forward(self, x: Float[Tensor, "batch_size channels height width"]) -> Float[Tensor, "batch_size seq_len dim"]:
