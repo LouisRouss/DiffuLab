@@ -121,7 +121,7 @@ class RepaLoss(LossFunction):
         self._handles: "WeakKeyDictionary[nn.Module, RemovableHandle]" = WeakKeyDictionary()
         self._features: "WeakKeyDictionary[nn.Module, torch.Tensor]" = WeakKeyDictionary()
         self._active_model: nn.Module | None = None
-        self._hook_layer_idx = self.alignment_layer - 1  # as before
+        self._hook_layer_idx = self.alignment_layer - 1
         self.coeff = coeff
 
     @_dynamo_disable

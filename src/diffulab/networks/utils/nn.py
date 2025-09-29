@@ -376,8 +376,11 @@ class Modulation(nn.Module):
         super().__init__()  # type: ignore
         self.lin = nn.Linear(embedding_dim, 6 * input_dim, bias=True)
 
-    def forward(self, vec: Float[Tensor, "... dim"]) -> ModulationOut:
-        out = self.lin(nn.functional.silu(vec))[:, None, :].chunk(6, dim=-1)
+    def forward(self, vec: Float[Tensor, "B dim"] | Float[Tensor, "B seq_len dim"]) -> ModulationOut:
+        out = self.lin(nn.functional.silu(vec))
+        if out.dim() == 2:
+            out = out[:, None, :]
+        out = out.chunk(6, dim=-1)
 
         return ModulationOut(*out)
 

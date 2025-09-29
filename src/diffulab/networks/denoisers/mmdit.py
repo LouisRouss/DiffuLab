@@ -270,7 +270,7 @@ class DiTBlock(nn.Module):
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
-    ) -> Float[Tensor, "batch_size seq_len embedding_dim"]:
+    ) -> Float[Tensor, "batch_size seq_len input_dim"]:
         """
         Forward pass of the DiTBlock applying modulation and attention mechanisms.
         Args:
@@ -286,7 +286,9 @@ class DiTBlock(nn.Module):
         )  # type: ignore
 
     def _forward(
-        self, input: Float[Tensor, "batch_size seq_len embedding_dim"], y: Float[Tensor, "batch_size embedding_dim"]
+        self,
+        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        y: Float[Tensor, "batch_size embedding_dim"] | Float[Tensor, "batch_size seq_len embedding_dim"],
     ) -> Tensor:
         modulation: ModulationOut = self.modulation(y)
 
@@ -693,6 +695,7 @@ class MMDiT(Denoiser):
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
         x_context: Tensor | None = None,
+        intermediate_features: bool = False,
     ) -> ModelOutput:
         assert not (initial_context is not None and y is not None), "initial_context and y cannot both be specified"
         if p > 0:
@@ -704,9 +707,9 @@ class MMDiT(Denoiser):
 
         x = self.patchify(x)
         if self.simple_dit:
-            model_output = self.simple_dit_forward(x, timesteps, p, y)
+            model_output = self.simple_dit_forward(x, timesteps, p, y, intermediate_features)
         else:
-            model_output = self.mmdit_forward(x, timesteps, initial_context, p)
+            model_output = self.mmdit_forward(x, timesteps, initial_context, p, intermediate_features)
         model_output["x"] = self.unpatchify(model_output["x"])
 
         return model_output
