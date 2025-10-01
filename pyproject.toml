@@ -1,7 +1,7 @@
 [project]
 name = "diffulab"
 version = "0.1.0"
-description = "Add your description here"
+description = "DiffuLab is designed to provide a simple and flexible way to train diffusion models while allowing full customization of its core components"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -62,7 +62,7 @@ ignore = [
 combine-as-imports = true
 
 [tool.pyright]
-include = ["src/diffulab", "tests/", "examples/"]
+include = ["src/diffulab", "tests/", "examples/", "local/"]
 strict = ["*"]
 exclude = ["**/__pycache__"]
 reportMissingTypeStubs = "warning"
