@@ -1,7 +1,7 @@
 import gc
 import random
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import torch
 from jaxtyping import Float
@@ -12,7 +12,9 @@ from transformers import AutoModel, AutoTokenizer, CLIPTextModel, T5EncoderModel
 from diffulab.networks.embedders.common import ContextEmbedder
 
 if TYPE_CHECKING:
+    from open_clip import CLIP, SimpleTokenizer  # type: ignore
     from transformers import Qwen2TokenizerFast, Qwen3Model
+    from transformers.models.clip.tokenization_clip_fast import CLIPTokenizerFast
 
 
 class SD3TextEmbedder(ContextEmbedder):
@@ -47,22 +49,24 @@ class SD3TextEmbedder(ContextEmbedder):
 
         # load l_14
         self.clip_l14 = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14", device_map=device)  # type: ignore
-        self.tokenizer_l14 = AutoTokenizer.from_pretrained("openai/clip-vit-large-patch14", device_map=device)  # type: ignore
-        self.clip_l14.eval()  # pyright: ignore[reportUnknownMemberType]
-        self.clip_l14.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
+        self.tokenizer_l14: CLIPTokenizerFast = AutoTokenizer.from_pretrained(  # type: ignore
+            "openai/clip-vit-large-patch14", device_map=device
+        )
+        self.clip_l14.eval()
+        self.clip_l14.requires_grad_(False)
 
         # load g_14
-        self.clip_g14 = create_model_from_pretrained(  # type: ignore
-            "hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k", device=device
-        )[0]  # type: ignore
-        self.tokenizer_g14 = get_tokenizer("hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k")
-        if hasattr(self.clip_g14, "visual"):  # type: ignore
-            del self.clip_g14.visual  # type: ignore
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        self.clip_g14.eval()  # pyright: ignore[reportUnknownMemberType]
-        self.clip_g14.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
+        self.clip_g14 = cast(
+            CLIP,
+            create_model_from_pretrained("hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k", device=device)[0],  # type: ignore
+        )
+        self.tokenizer_g14 = cast(SimpleTokenizer, get_tokenizer("hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"))
+        del self.clip_g14.visual
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        self.clip_g14.eval()
+        self.clip_g14.requires_grad_(False)
 
         # load t5
         self.t5 = T5EncoderModel.from_pretrained("google/t5-v1_1-xl", from_tf=True)  # type: ignore
@@ -72,21 +76,12 @@ class SD3TextEmbedder(ContextEmbedder):
         self.t5.eval()  # pyright: ignore[reportUnknownMemberType]
         self.t5.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
 
-    def dict_to_device(self, d: dict[str, Tensor]) -> dict[str, Tensor]:
-        """Move all tensors in a dictionary to the configured device.
-
-        Args:
-            d (dict[str, Tensor]): Mapping of string keys to tensors.
-
-        Returns:
-            dict[str, Tensor]: Same mapping with tensors moved to ``self.device``.
-        """
-        return {k: v.to(self.device) for k, v in d.items()}
-
     def get_l14_embeddings(
         self, context: list[str]
-    ) -> tuple[Float[Tensor, "batch_size seq_len 768"], Float[Tensor, "batch_size 768"]]:
-        """Compute CLIP ViT-L/14 token and pooled embeddings.
+    ) -> tuple[
+        Float[Tensor, "batch_size seq_len 768"], Float[Tensor, "batch_size 768"], Float[Tensor, "batch_size seq_len"]
+    ]:
+        """Compute CLIP ViT-L/14 token and pooled embeddings. Return attention mask too.
 
         Args:
             context (list[str]): List of input prompt strings.
@@ -95,16 +90,23 @@ class SD3TextEmbedder(ContextEmbedder):
             tuple[Tensor, Tensor]:
                 * last_hidden_state: Shape ``[B, N_ctx, 768]``
                 * pooled_output: Shape ``[B, 768]`` (CLIP text projection output)
+                * attention_mask: Shape ``[B, N_ctx]``
         """
-        inputs_l14 = self.dict_to_device(self.tokenizer_l14(context, return_tensors="pt", padding=True))  # type: ignore
-        outputs_l14 = self.clip_l14(**inputs_l14)  # type: ignore
+        inputs_l14 = self.tokenizer_l14(context, return_tensors="pt", padding=True).to(self.device)
+        outputs_l14 = self.clip_l14(**inputs_l14)
         last_hidden_state = outputs_l14["last_hidden_state"]  # [batch_size, n_ctx, 768]
         pooled_output = outputs_l14["pooler_output"]  # [batch_size, 768]
-        return last_hidden_state, pooled_output
+        attention_mask = cast(
+            Tensor,
+            inputs_l14.attention_mask.bool(),  # type: ignore
+        )  # [batch_size, n_ctx]
+        return last_hidden_state, pooled_output, attention_mask
 
     def get_g14_embeddings(
         self, context: list[str]
-    ) -> tuple[Float[Tensor, "batch_size seq_len 1280"], Float[Tensor, "batch_size 1280"]]:
+    ) -> tuple[
+        Float[Tensor, "batch_size seq_len 1280"], Float[Tensor, "batch_size 1280"], Float[Tensor, "batch_size seq_len"]
+    ]:
         """Compute CLIP ViT-bigG/14 token and pooled embeddings.
 
         Args:
@@ -113,21 +115,26 @@ class SD3TextEmbedder(ContextEmbedder):
         Returns:
             tuple[Tensor, Tensor]:
                 * last_hidden_state: Shape ``[B, N_ctx, 1280]``
-                * pooled_output: Shape ``[B, 1280]`` (selection at EOS token)
+                * pooled_output: Shape ``[B, 1280]``
+                * attention_mask: Shape ``[B, N_ctx]``
         """
         inputs_g14 = self.tokenizer_g14(context).to(self.device)
-        cast_dtype = self.clip_g14.get_cast_dtype()  # type: ignore
+        x = self.clip_g14.token_embedding(inputs_g14)  # type: ignore # [batch_size, n_ctx, d_model]
+        x = x + self.clip_g14.positional_embedding  # type: ignore
+        x = self.clip_g14.transformer(x, attn_mask=self.clip_g14.attn_mask)  # type: ignore
+        last_hidden_state = cast(Tensor, self.clip_g14.ln_final(x))  # type: ignore # [batch_size, n_ctx, 1280]
 
-        x = self.clip_g14.token_embedding(inputs_g14).to(cast_dtype)  # [batch_size, n_ctx, d_model] # type: ignore
-        x = x + self.clip_g14.positional_embedding.to(cast_dtype)  # type: ignore
-        x = self.clip_g14.transformer(x, attn_mask=self.attn_mask)  # type: ignore
-        last_hidden_state: Tensor = self.clip_g14.ln_final(x)  # [batch_size, n_ctx, 1280] # type: ignore
-        pooled_output: Tensor = last_hidden_state[  # type: ignore
-            torch.arange(last_hidden_state.shape[0]),  # type: ignore
-            inputs_g14.to(dtype=torch.int, device=self.device).argmax(dim=-1),
-        ]
+        eot_positions = (inputs_g14 == self.tokenizer_g14.eot_token_id).float().argmax(dim=1)  # [batch_size]
+        _, seq_len = inputs_g14.shape
+        arange = torch.arange(seq_len, device=inputs_g14.device).unsqueeze(0)  # [1, seq_len]
+        attention_mask = (arange <= eot_positions.unsqueeze(1)).bool()
 
-        return last_hidden_state, pooled_output  # type: ignore
+        lengths = attention_mask.sum(dim=1, keepdim=True).clamp(min=1).to(last_hidden_state.dtype)  # [B, 1]
+        pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)).sum(
+            dim=1
+        ) / lengths
+
+        return last_hidden_state, pooled_output, attention_mask
 
     def get_t5_embeddings(self, context: list[str]) -> Float[Tensor, "batch_size seq_len 4096"]:
         """Compute T5 XXL token-level embeddings.
@@ -161,10 +168,12 @@ class SD3TextEmbedder(ContextEmbedder):
         outputs_l14 = self.get_l14_embeddings(context)  # [batch_size, n_ctx, 768]
         outputs["l14"] = outputs_l14[0]
         outputs["l14_pooled"] = outputs_l14[1]
+        attention_mask_l14 = outputs_l14[2]  # [batch_size, n_ctx] # type: ignore
 
         outputs_g14 = self.get_g14_embeddings(context)  # [batch_size, n_ctx, 1280]
         outputs["g14"] = outputs_g14[0]
         outputs["g14_pooled"] = outputs_g14[1]
+        attention_mask_g14 = outputs_g14[2]  # [batch_size, n_ctx] # type: ignore
 
         outputs_t5 = self.get_t5_embeddings(context)  # [batch_size, n_ctx, 4096]
         outputs["t5"] = outputs_t5
