@@ -1,19 +1,17 @@
 import gc
 import random
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import torch
-from jaxtyping import Float
+from jaxtyping import Bool, Float
 from open_clip import create_model_from_pretrained, get_tokenizer  # type: ignore
 from torch import Tensor
-from transformers import AutoModel, AutoTokenizer, CLIPTextModel, T5EncoderModel
+from transformers import AutoTokenizer, CLIPTextModel, T5EncoderModel, T5Tokenizer
 
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 
 if TYPE_CHECKING:
     from open_clip import CLIP, SimpleTokenizer  # type: ignore
-    from transformers import Qwen2TokenizerFast, Qwen3Model
     from transformers.models.clip.tokenization_clip_fast import CLIPTokenizerFast
 
 
@@ -70,8 +68,11 @@ class SD3TextEmbedder(ContextEmbedder):
 
         # load t5
         self.t5 = T5EncoderModel.from_pretrained("google/t5-v1_1-xl", from_tf=True)  # type: ignore
-        self.tokenizer_t5 = AutoTokenizer.from_pretrained(  # type: ignore
-            "google/t5-v1_1-xl", clean_up_tokenization_spaces=True, legacy=False
+        self.tokenizer_t5 = cast(
+            T5Tokenizer,
+            T5Tokenizer.from_pretrained(  # type: ignore
+                "google/t5-v1_1-xl", clean_up_tokenization_spaces=True, legacy=False
+            ),
         )
         self.t5.eval()  # pyright: ignore[reportUnknownMemberType]
         self.t5.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
@@ -79,7 +80,7 @@ class SD3TextEmbedder(ContextEmbedder):
     def get_l14_embeddings(
         self, context: list[str]
     ) -> tuple[
-        Float[Tensor, "batch_size seq_len 768"], Float[Tensor, "batch_size 768"], Float[Tensor, "batch_size seq_len"]
+        Float[Tensor, "batch_size seq_len 768"], Float[Tensor, "batch_size 768"], Bool[Tensor, "batch_size seq_len"]
     ]:
         """Compute CLIP ViT-L/14 token and pooled embeddings. Return attention mask too.
 
@@ -105,7 +106,7 @@ class SD3TextEmbedder(ContextEmbedder):
     def get_g14_embeddings(
         self, context: list[str]
     ) -> tuple[
-        Float[Tensor, "batch_size seq_len 1280"], Float[Tensor, "batch_size 1280"], Float[Tensor, "batch_size seq_len"]
+        Float[Tensor, "batch_size seq_len 1280"], Float[Tensor, "batch_size 1280"], Bool[Tensor, "batch_size seq_len"]
     ]:
         """Compute CLIP ViT-bigG/14 token and pooled embeddings.
 
@@ -129,29 +130,36 @@ class SD3TextEmbedder(ContextEmbedder):
         arange = torch.arange(seq_len, device=inputs_g14.device).unsqueeze(0)  # [1, seq_len]
         attention_mask = (arange <= eot_positions.unsqueeze(1)).bool()
 
-        lengths = attention_mask.sum(dim=1, keepdim=True).clamp(min=1).to(last_hidden_state.dtype)  # [B, 1]
-        pooled_output = (last_hidden_state * attention_mask.unsqueeze(-1).to(last_hidden_state.dtype)).sum(
-            dim=1
-        ) / lengths
+        # Max pooling
+        mask = attention_mask.unsqueeze(-1)  # [B, N, 1]
+        neg_inf = torch.finfo(last_hidden_state.dtype).min
+        masked_hidden = last_hidden_state.masked_fill(~mask, neg_inf)
+        pooled_output = masked_hidden.max(dim=1).values
 
         return last_hidden_state, pooled_output, attention_mask
 
-    def get_t5_embeddings(self, context: list[str]) -> Float[Tensor, "batch_size seq_len 4096"]:
+    def get_t5_embeddings(
+        self, context: list[str]
+    ) -> tuple[Float[Tensor, "batch_size seq_len 4096"], Bool[Tensor, "batch_size seq_len"]]:
         """Compute T5 XXL token-level embeddings.
 
         Args:
             context (list[str]): List of input prompt strings.
 
         Returns:
-            Tensor: Last hidden state of shape ``[B, N_ctx, 4096]``.
+            tuple[Tensor, Tensor]:
+                * last_hidden_state: Shape ``[B, N_ctx, 4096]``
+                * attention_mask: Shape ``[B, N_ctx]``
+
         """
-        inputs_t5_list: dict[str, list[int]] = self.tokenizer_t5(context)  # type: ignore
+        inputs_t5_list: dict[str, list[int]] = self.tokenizer_t5(context, padding=True)  # type: ignore
         inputs_t5: dict[str, Tensor] = {
             key: torch.tensor(value, dtype=torch.long, device=self.device)
             for key, value in inputs_t5_list.items()  # type: ignore
         }
         last_hidden_state: Tensor = self.t5(**inputs_t5)["last_hidden_state"]  # [batch_size, n_ctx, 4096]
-        return last_hidden_state
+        attention_mask = inputs_t5["attention_mask"].bool()  # [batch_size, n_ctx]
+        return last_hidden_state, attention_mask
 
     def get_embeddings(self, context: list[str]) -> dict[str, Tensor]:
         """Obtain embeddings
@@ -165,59 +173,20 @@ class SD3TextEmbedder(ContextEmbedder):
         assert self.loaded_weights, "Cannot get embeddings when model weights are not loaded."
         outputs: dict[str, Tensor] = {}
 
-        outputs_l14 = self.get_l14_embeddings(context)  # [batch_size, n_ctx, 768]
+        outputs_l14 = self.get_l14_embeddings(context)
         outputs["l14"] = outputs_l14[0]
         outputs["l14_pooled"] = outputs_l14[1]
-        attention_mask_l14 = outputs_l14[2]  # [batch_size, n_ctx] # type: ignore
+        outputs["l14_attn_mask"] = outputs_l14[2]
 
-        outputs_g14 = self.get_g14_embeddings(context)  # [batch_size, n_ctx, 1280]
+        outputs_g14 = self.get_g14_embeddings(context)
         outputs["g14"] = outputs_g14[0]
         outputs["g14_pooled"] = outputs_g14[1]
-        attention_mask_g14 = outputs_g14[2]  # [batch_size, n_ctx] # type: ignore
+        outputs["g14_attn_mask"] = outputs_g14[2]
 
-        outputs_t5 = self.get_t5_embeddings(context)  # [batch_size, n_ctx, 4096]
-        outputs["t5"] = outputs_t5
+        outputs_t5 = self.get_t5_embeddings(context)
+        outputs["t5"] = outputs_t5[0]
+        outputs["t5_attn_mask"] = outputs_t5[1]
         return outputs
-
-    def precompute_embeddings_from_list(
-        self, context: list[str], batch_size: int = 8, path_to_save: str | Path = Path.home() / "saved_embeddings"
-    ) -> None:
-        """Compute embeddings for a list of prompts.
-
-        Each prompt's pooled CLIP embedding and composite full encoding are
-        stored separately as ``<index>.pt`` along with a ``<index>.txt`` file
-        containing the raw prompt string to allow later reconstruction.
-
-        Existing cached indices are detected so new prompts append seamlessly.
-
-        Args:
-            context: List of prompt strings to encode.
-            batch_size: Number of prompts per forward pass. ``-1`` processes all at once.
-            path_to_save: Directory where embeddings will be written / appended.
-        """
-        path_to_save = Path(path_to_save)
-        path_to_save.mkdir(parents=True, exist_ok=True)
-
-        # Check for existing embeddings and set the starting index
-        existing_files = list(path_to_save.glob("*.pt"))
-        if existing_files:
-            existing_indices = [int(f.stem) for f in existing_files if f.stem.isdigit()]
-            begins = max(existing_indices) + 1
-        else:
-            begins = 0
-
-        if batch_size == -1:
-            batch_size = len(context)
-
-        for i in range(0, len(context), batch_size):
-            embeddings = self.forward(context[i : i + batch_size], 0.0)
-            for b in range(batch_size):
-                torch.save(  # type: ignore
-                    {"pooled": embeddings[0][b], "full_encoding": embeddings[1][b]},
-                    path_to_save / f"{begins + i + b}.pt",
-                )
-                with (path_to_save / f"{begins + i + b}.txt").open("r") as f:
-                    f.write(context[i + b])
 
     def drop_conditions(self, context: list[str], p: float) -> list[str]:
         """Randomly drop prompts for classifier-free guidance style training.
@@ -231,9 +200,7 @@ class SD3TextEmbedder(ContextEmbedder):
         """
         return ["" if random.random() < p else c for c in context]
 
-    def forward(
-        self, context: list[str], p: float = 0
-    ) -> tuple[Float[Tensor, "batch_size 2048"], Float[Tensor, "batch_size seq_len 4096"]]:
+    def forward(self, context: list[str], p: float = 0) -> ContextEmbedderOutput:
         """Forward pass producing pooled and composite sequence embeddings.
 
         Args:
@@ -244,6 +211,7 @@ class SD3TextEmbedder(ContextEmbedder):
             tuple[Tensor, Tensor]:
                 * pooled: Shape ``[B, 2048]`` concatenated pooled CLIP features.
                 * full_encoding: Shape ``[B, seq_len, 4096]`` composite sequence embedding.
+                * attention_mask: Shape ``[B, seq_len]`` composite attention mask.
         """
         context = self.drop_conditions(context, p)
         embeddings = self.get_embeddings(context)
@@ -256,83 +224,13 @@ class SD3TextEmbedder(ContextEmbedder):
             ],
             dim=-1,
         )
+        assert embeddings["l14_attn_mask"] == embeddings["g14_attn_mask"], (
+            "Mismatched CLIP attention masks."
+        )  # should be same tokenizer
         full_encoding = torch.cat([full_encoding_clip, embeddings["t5"]], dim=-2)
-        return pooled, full_encoding
-
-
-class QwenEmbedding(ContextEmbedder):
-    model_registry: dict[str, int] = {
-        "Qwen/Qwen3-Embedding-0.6B": 1024,
-        "Qwen/Qwen3-Embedding-4B": 2560,
-        "Qwen/Qwen3-Embedding-8B": 4096,
-    }
-
-    def __init__(
-        self,
-        device: str | torch.device = "cuda",
-        dtype: torch.dtype = torch.bfloat16,
-        model_id: str = "Qwen/Qwen3-Embedding-4B",
-    ) -> None:
-        super().__init__()
-        assert model_id in self.model_registry, f"Model {model_id} not in registry {list(self.model_registry.keys())}"
-
-        self.tokenizer: "Qwen2TokenizerFast" = AutoTokenizer.from_pretrained(model_id, padding_side="left")  # type: ignore[reportUnknownMemberType]
-        self.model: "Qwen3Model" = AutoModel.from_pretrained(model_id, device_map=device, dtype=dtype)  # type: ignore[reportUnknownMemberType]
-        self.model.eval()  # pyright: ignore[reportUnknownMemberType]
-        self.model.requires_grad_(False)  # pyright: ignore[reportUnknownMemberType]
-
-        self._n_output = 1
-        self._output_size = (self.model_registry[model_id],)
-        self.device = device
-        self.dtype = dtype
-
-    @staticmethod
-    def last_token_pool(last_hidden_states: Tensor, attention_mask: Tensor) -> Tensor:
-        left_padding = attention_mask[:, -1].sum() == attention_mask.shape[0]
-        if left_padding:
-            return last_hidden_states[:, -1]
-        else:
-            sequence_lengths = attention_mask.sum(dim=1) - 1
-            batch_size = last_hidden_states.shape[0]
-            return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
-
-    def get_embeddings(self, context: list[str]) -> Tensor:
-        tokenized_context = self.tokenizer(
-            context,
-            padding=True,
-            truncation=True,
-            max_length=8192,
-            return_tensors="pt",
+        attention_mask = torch.cat([embeddings["l14_attn_mask"], embeddings["t5_attn_mask"]], dim=-1)
+        return ContextEmbedderOutput(
+            embeddings=full_encoding,
+            pooled_embeddings=pooled,
+            mask=attention_mask,
         )
-        tokenized_context.to(self.model.device)
-        outputs = self.model(**tokenized_context)
-        embeddings = self.last_token_pool(outputs.last_hidden_state, tokenized_context["attention_mask"])  # type: ignore[reportArgumentType]
-        return embeddings
-
-    def drop_conditions(self, context: list[str], p: float) -> list[str]:
-        """Randomly drop prompts for classifier-free guidance style training.
-
-        Args:
-            context (list[str]): Original list of prompt strings.
-            p (float): Drop probability.
-
-        Returns:
-            list[str]: context with some entries replaced by empty strings.
-        """
-        return ["" if random.random() < p else c for c in context]
-
-    def forward(self, context: list[str], p: float = 0) -> tuple[Float[Tensor, "batch_size dim"]]:
-        """Forward pass producing pooled and composite sequence embeddings.
-
-        Args:
-            context: List of input prompt strings.
-            p: Probability to drop each prompt (per encoder) for classifier-free guidance.
-
-        Returns:
-            tuple[Tensor, Tensor]:
-                * pooled: Shape ``[B, 2048]`` concatenated pooled CLIP features.
-                * full_encoding: Shape ``[B, seq_len, 4096]`` composite sequence embedding.
-        """
-        context = self.drop_conditions(context, p)
-        embeddings = self.get_embeddings(context)
-        return (embeddings,)

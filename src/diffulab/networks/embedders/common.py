@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, cast
+from typing import Any, NotRequired, Required, TypedDict, cast
 
 import numpy as np
 import torch
@@ -11,6 +11,12 @@ from streaming.base import MDSWriter
 from torch import Tensor
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+
+
+class ContextEmbedderOutput(TypedDict):
+    embeddings: Required[Tensor]
+    pooled_embeddings: NotRequired[Tensor]
+    mask: NotRequired[Tensor]
 
 
 class ContextEmbedder(nn.Module, ABC):
@@ -52,7 +58,7 @@ class ContextEmbedder(nn.Module, ABC):
         pass
 
     @abstractmethod
-    def forward(self, context: Any, p: float = 0) -> tuple[Tensor, ...]:
+    def forward(self, context: Any, p: float = 0) -> ContextEmbedderOutput:
         """
         Apply the model to an input batch.
 
@@ -60,7 +66,8 @@ class ContextEmbedder(nn.Module, ABC):
             context (Any): the input batch, can be a tensor or a list of str for example.
             p (float): the probability of dropping the context.
         Returns:
-            tuple[Tensor, ...]: a tuple of tensors representing the embeddings.
+            ContextEmbedderOutput: a dictionary containing the output embeddings and
+            optionally pooled embeddings and mask.
         """
         pass
 
@@ -138,8 +145,9 @@ class ContextEmbedder(nn.Module, ABC):
                 outputs = self.forward(to_process_data)
 
                 # Move to CPU, cast dtype, convert to numpy
-                np_outputs: list[NDArray[np.float16 | np.float32]] = []
-                for out in outputs:
+                np_outputs: dict[str, NDArray[np.floating[Any]]] = {}
+                for key, out in outputs.items():
+                    assert isinstance(out, Tensor), "Only Tensor outputs are supported."
                     out = out.detach().to("cpu").float()
                     arr = out.numpy()  # type: ignore[reportUnknownMemberType]
                     if target_type == "float32":
@@ -148,12 +156,12 @@ class ContextEmbedder(nn.Module, ABC):
                         arr = arr.astype(np.float16)
                     else:
                         raise ValueError("target_type must be 'float32' or 'float16'")
-                    np_outputs.append(arr)
+                    np_outputs[key] = arr
 
                 B = len(to_process_data)
                 # Write per-sample rows, preserving original columns
                 for i in range(B):
                     sample = {k: v[i] for k, v in batch.items()}
-                    for j, arr in enumerate(np_outputs):
-                        sample[f"{column_prefix}_{j}"] = arr[i]
+                    for key, arr in np_outputs.items():
+                        sample[f"{column_prefix}_{key}"] = arr[i]
                     writer.write(sample)
