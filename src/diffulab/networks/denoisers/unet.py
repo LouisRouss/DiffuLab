@@ -311,6 +311,146 @@ class AttentionBlock(ContextBlock):
         return (x + out).reshape(b, c, *spatial)
 
 
+class GEGLU(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.proj = nn.Conv1d(in_channels, out_channels * 2, kernel_size=1)
+
+    def forward(
+        self, x: Float[Tensor, "batch_size in_channels seq_len"]
+    ) -> Float[Tensor, "batch_size out_channels seq_len"]:
+        x_proj = self.proj(x)
+        x, gate = x_proj.chunk(2, dim=-1)
+        return x * torch.nn.functional.gelu(gate)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, in_channels: int, inner_channels: int, dropout: float = 0.0):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.net = nn.Sequential(
+            GEGLU(in_channels, inner_channels),
+            nn.Dropout(dropout),
+            nn.Conv1d(inner_channels, in_channels, kernel_size=1),
+        )
+        self.norm = normalization(in_channels)
+
+    def forward(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size channels height width"]:
+        b, c, *spatial = x.shape
+        x = x.reshape(b, c, -1)
+        h = self.norm(x)
+        h = self.net(h)
+        return (x + h).reshape(b, c, *spatial)
+
+
+class TransformerAttentionBlock(ContextBlock):
+    def __init__(
+        self,
+        channels: int,
+        context_channels: int | None = None,
+        num_heads: int = 8,
+        inner_channels: int = -1,
+        dropout: float = 0.0,
+        norm: Callable[..., nn.Module] = normalization,
+        use_checkpoint: bool = False,
+        q_bias: bool = True,
+        kv_bias: bool = True,
+        mlp_ratio: int = 4,
+    ):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.self_attn = AttentionBlock(
+            channels,
+            context_channels=None,
+            num_heads=num_heads,
+            inner_channels=inner_channels,
+            dropout=dropout,
+            norm=norm,
+            use_checkpoint=use_checkpoint,
+            q_bias=q_bias,
+            kv_bias=kv_bias,
+        )
+        self.cross_attn = AttentionBlock(
+            channels,
+            context_channels=context_channels,
+            num_heads=num_heads,
+            inner_channels=inner_channels,
+            dropout=dropout,
+            norm=norm,
+            use_checkpoint=use_checkpoint,
+            q_bias=q_bias,
+            kv_bias=kv_bias,
+        )
+        self.ff = FeedForward(channels, channels * mlp_ratio, dropout)
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch_size channels height width"],
+        context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+    ) -> Float[Tensor, "batch_size channels height width"]:
+        # residuals are handled in the submodules
+        h = self.self_attn(x)
+        h = self.cross_attn(h, context=context)
+        return self.ff(h)
+
+
+class TransformerBlock(ContextBlock):
+    def __init__(
+        self,
+        channels: int,
+        context_channels: int | None = None,
+        num_heads: int = 8,
+        inner_channels: int = -1,
+        dropout: float = 0.0,
+        norm: Callable[..., nn.Module] = normalization,
+        use_checkpoint: bool = False,
+        q_bias: bool = True,
+        kv_bias: bool = True,
+        mlp_ratio: int = 4,
+        depth: int = 1,
+    ):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.channels = channels
+        self.context_channels = context_channels or channels
+        self.inner_channels = channels if inner_channels == -1 else inner_channels
+        self.num_heads = num_heads
+        assert self.inner_channels % self.num_heads == 0, "inner_channels must be divisible by num_heads"
+        self.dim_head = self.inner_channels // num_heads
+
+        self.norm_x = norm(self.channels)
+        self.proj_in = nn.Conv2d(self.channels, self.inner_channels, kernel_size=1, stride=1, padding=0)
+        self.attn_blocks = nn.ModuleList(
+            [
+                TransformerAttentionBlock(
+                    channels=self.inner_channels,
+                    context_channels=self.context_channels,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                    norm=norm,
+                    use_checkpoint=use_checkpoint,
+                    q_bias=q_bias,
+                    kv_bias=kv_bias,
+                    mlp_ratio=mlp_ratio,
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.proj_out = nn.Conv2d(self.inner_channels, self.channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch_size channels height width"],
+        context: Float[Tensor, "batch_size context_channels context_length"],
+    ) -> Float[Tensor, "batch_size channels height width"]:
+        assert context is not None, "TransformerBlock requires context input"
+        h = self.norm_x(x)
+        h = self.proj_in(h)
+        for attn_block in self.attn_blocks:
+            h = attn_block(h, context=context)
+        h = self.proj_out(h)
+        return x + h
+
+
 class UNetModel(Denoiser):
     """
     A UNet-based denoising network with residual, attention, and optional class/context conditioning,
@@ -457,6 +597,7 @@ class UNetModel(Denoiser):
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
+        transformer_depth: int = 1,
     ):
         super().__init__()  # type: ignore
         assert not (n_classes is not None and context_embedder is not None), (
@@ -464,8 +605,13 @@ class UNetModel(Denoiser):
         )
 
         if context_embedder:
-            assert context_embedder.n_output == 1
+            assert context_embedder.n_output == 1, (
+                "For UNet please provide a context embedder with n_output=1 (context and attention mask)"
+            )  # context and attention mask
+
         self.context_channels = None if context_embedder is None else context_embedder.output_size[0]
+        self.transformer_depth = transformer_depth
+        self.use_context = self.context_channels is not None
 
         self.image_size = image_size
         self.in_channels = in_channels
@@ -518,10 +664,18 @@ class UNetModel(Denoiser):
                     layers.append(
                         AttentionBlock(
                             ch,
+                            num_heads=num_heads,
+                            dropout=dropout,
+                            use_checkpoint=use_checkpoint,
+                        )
+                        if self.use_context
+                        else TransformerBlock(
+                            ch,
                             context_channels=self.context_channels,
                             num_heads=num_heads,
                             dropout=dropout,
                             use_checkpoint=use_checkpoint,
+                            depth=self.transformer_depth,
                         )
                     )
                 self.input_blocks.append(EmbedSequential(*layers))
