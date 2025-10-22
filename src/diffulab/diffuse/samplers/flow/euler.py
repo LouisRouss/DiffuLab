@@ -21,7 +21,7 @@ class Euler(FlowSampler):
 
     def step(self, x_t: Tensor, v: Tensor, t_curr: float, t_prev: float) -> StepResult:
         """
-        Perform one step of the reverse diffusion process using the Euler method.
+        Perform one step of the reverse flow matching process using the Euler method.
 
         Args:
             x_t (Tensor): The current state tensor at time t_curr.

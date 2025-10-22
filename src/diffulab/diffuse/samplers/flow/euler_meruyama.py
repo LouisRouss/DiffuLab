@@ -23,7 +23,7 @@ class EulerMaruyama(FlowSampler):
 
     def step(self, x_t: Tensor, v: Tensor, t_curr: float, t_prev: float, x_prev: Tensor | None = None) -> StepResult:
         """
-        Perform one step of the reverse diffusion process using the Euler-Maruyama method.
+        Perform one step of the reverse flow matching process using the Euler-Maruyama method.
 
         Args:
             x_t (Tensor): The current state tensor at time t_curr.
