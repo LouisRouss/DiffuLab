@@ -5,12 +5,12 @@ from typing import Any
 import torch
 import torch.nn as nn
 from einops import rearrange
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint  # type: ignore
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
     Modulation,
@@ -183,8 +183,9 @@ class MMDiTAttention(nn.Module):
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len input_dim"],
-        context: Float[Tensor, "batch_size seq_len context_dim"],
+        input: Float[Tensor, "batch_size seq_len_input input_dim"],
+        context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> tuple[Float[Tensor, "batch_size seq_len input_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
         input_q, input_k, input_v = self.qkv_input(input).chunk(3, dim=-1)
         context_q, context_k, context_v = self.qkv_context(context).chunk(3, dim=-1)
@@ -200,11 +201,19 @@ class MMDiTAttention(nn.Module):
         q, k, v = self.rope(q=q, k=k, v=v)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
+        if attn_mask is not None:
+            attn_mask = torch.cat(
+                [
+                    attn_mask.bool(),
+                    torch.ones(attn_mask.size(0), input.size(1), device=attn_mask.device).bool(),
+                ],
+                dim=1,
+            )
+            b, n = attn_mask.shape
+            attn_mask = attn_mask[:, None, None, :].expand(b, 1, n, n)
+
         attn_output = nn.functional.scaled_dot_product_attention(
-            query=q,
-            key=k,
-            value=v,
-            scale=self.scale,
+            query=q, key=k, value=v, scale=self.scale, attn_mask=attn_mask
         )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
@@ -378,16 +387,20 @@ class MMDiTBlock(nn.Module):
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        input: Float[Tensor, "batch_size seq_len_input embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
-        context: Float[Tensor, "batch_size seq_len context_dim"],
-    ) -> tuple[Float[Tensor, "batch_size seq_len embedding_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
+        context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+    ) -> tuple[
+        Float[Tensor, "batch_size seq_len_input embedding_dim"], Float[Tensor, "batch_size seq_len_context context_dim"]
+    ]:
         """
         Forward pass of the MMDiT module applying modulation and attention mechanisms.
         Args:
             - input (Tensor): The input tensor to be processed
             - y (Tensor): The conditioning tensor used for modulation
             - context (Tensor): The context tensor to be processed alongside input
+            - attn_mask (Tensor | None): Optional attention mask for context
         Returns:
             tuple: A tuple containing:
                 - Tensor: The modulated and processed input tensor with residual connection
@@ -400,9 +413,9 @@ class MMDiTBlock(nn.Module):
         5. Residual connections for both input and context paths
         """
         return (
-            checkpoint(self._forward, *(input, y, context), use_reentrant=False)
+            checkpoint(self._forward, *(input, y, context, attn_mask), use_reentrant=False)
             if self.use_checkpoint
-            else self._forward(input, y, context)
+            else self._forward(input, y, context, attn_mask)
         )  # type: ignore
 
     def _forward(
@@ -410,6 +423,7 @@ class MMDiTBlock(nn.Module):
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
         context: Float[Tensor, "batch_size seq_len context_dim"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ):
         modulation_input: ModulationOut = self.modulation_input(y)
         modulation_context: ModulationOut = self.modulation_context(y)
@@ -419,7 +433,7 @@ class MMDiTBlock(nn.Module):
             self.context_norm_1(context), scale=modulation_context.alpha, shift=modulation_context.beta
         )
 
-        modulated_input, modulated_context = self.attention(modulated_input, modulated_context)
+        modulated_input, modulated_context = self.attention(modulated_input, modulated_context, attn_mask=attn_mask)
         modulated_input = input + modulated_input * modulation_input.gamma
         modulated_context = context + modulated_context * modulation_context.gamma
 
@@ -624,26 +638,23 @@ class MMDiT(Denoiser):
     ) -> ModelOutput:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))
+        context_output: ContextEmbedderOutput = self.context_embedder(initial_context, p)
         if self.pooled_embedding:
             assert self.mlp_pooled_context is not None, (
                 "for MMDiT with pooled context, mlp_pooled_context must be defined"
             )
-            assert self.context_embedder.n_output == 2, (
-                "for MMDiT with pooled context, context_embedder should provide 2 embeddings"
-            )
-            context_pooled, context = self.context_embedder(initial_context, p)
+            assert "pooled_embeddings" in context_output, "pooled embeddings must be in context_output"
+            context_pooled = context_output["pooled_embeddings"]
             emb = self.mlp_pooled_context(context_pooled) + emb
-        else:
-            assert self.context_embedder.n_output == 1, (
-                "for MMDiT without pooled context, context_embedder should provide 1 embedding"
-            )
-            (context,) = self.context_embedder(initial_context, p)
+
+        context = context_output["embeddings"]
         context = self.context_embed(context)
+        attn_mask = context_output.get("attn_mask", None)
 
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, emb, context)
+            x, context = layer(x, emb, context, attn_mask=attn_mask)
             if features:
                 features.append(x)
 
