@@ -1,10 +1,8 @@
 import re
-from typing import TYPE_CHECKING, Any, Literal, TypedDict, Union, cast  # added TypedDict related imports
+from typing import TYPE_CHECKING, Literal, TypedDict, Union, cast  # added TypedDict related imports
 
 import numpy as np
-import open_clip  # type: ignore[reportMissingTypeStubs]
 import torch
-import torch.nn.functional as F
 from einops import rearrange
 from jaxtyping import Float
 from PIL import Image
@@ -12,6 +10,8 @@ from qwen_vl_utils import process_vision_info  # type: ignore[reportUnknownVaria
 from torch import Tensor
 from transformers import (  # type: ignore[reportMissingTypeStubs]
     AutoProcessor,
+    CLIPModel,
+    CLIPProcessor,
     Qwen2_5_VLForConditionalGeneration,
 )
 
@@ -19,8 +19,7 @@ from diffulab.networks.rewards.common import RewardModel
 
 if TYPE_CHECKING:
     from numpy.typing import NDArray
-    from torchvision.transforms import Compose  # type: ignore[reportMissingTypeStubs]
-    from transformers import Qwen2_5_VLProcessor  # type: ignore[reportMissingTypeStubs]
+    from transformers import BatchEncoding, CLIPOutput, Qwen2_5_VLProcessor  # type: ignore
 
 
 class ImageContent(TypedDict):
@@ -59,9 +58,9 @@ class PrefGRPORewardModel(RewardModel):
         n_image_per_prompt: int = 16,
         advantage_clip_max: float = 5.0,
         use_clip: bool = False,
-        lambda_base: float = 1.0,
-        lambda_clip: float = 1.0,
-        clip_model_id: str = "hf-hub:laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
+        lambda_base: float = 0.7,
+        lambda_clip: float = 1.4,
+        clip_model_id: str = "laion/CLIP-ViT-H-14-laion2B-s32B-b79K",
     ):
         super().__init__(n_image_per_prompt)
         self.use_cot = version.startswith("cot")
@@ -77,21 +76,19 @@ class PrefGRPORewardModel(RewardModel):
         for param in self.model.parameters():  # type: ignore
             param.requires_grad = False
 
-        self.clip_model: None | open_clip.CLIP = None
-        self.clip_preprocess: "None | Compose" = None
-        self.clip_tokenizer: None | Any = None
+        self.clip_model: None | CLIPModel = None
+        self.clip_processor: None | CLIPProcessor = None
         self.use_clip = use_clip
         if self.use_clip:
-            self.clip_model, _, self.clip_preprocess = cast(
-                "tuple[open_clip.CLIP, Compose, Compose]",
-                open_clip.create_model_and_transforms(clip_model_id),  # type: ignore[reportUnknownMemberType]
-            )
+            self.clip_model = CLIPModel.from_pretrained(clip_model_id)  # type: ignore
+            self.clip_processor = CLIPProcessor.from_pretrained(clip_model_id)  # type: ignore
             self.clip_model.eval()
             for param in self.clip_model.parameters():  # type: ignore
                 param.requires_grad = False
-            self.clip_tokenizer = open_clip.get_tokenizer(clip_model_id)  # type: ignore[reportUnknownMemberType]
 
         self.advantage_clip_max = advantage_clip_max
+        self.lambda_base = lambda_base
+        self.lambda_clip = lambda_clip
 
     @staticmethod
     def _extract_cot_answer(text: str) -> str | None:
@@ -316,15 +313,13 @@ class PrefGRPORewardModel(RewardModel):
 
     def compute_advantages(
         self,
-        win_count: Float[Tensor, "P n_image_per_prompt"],
-        compare_count: Float[Tensor, "P n_image_per_prompt"],
+        advantages: Float[Tensor, "P n_image_per_prompt"],
         advantage_per_prompt: bool = True,
     ) -> Float[Tensor, "P n_image_per_prompt"]:
         """
         Compute per-image standardized advantages from win and compare counts.
         Args:
-            win_count (Float[Tensor, "P n_image_per_prompt"]): Float tensor with per-image win counts.
-            compare_count (Float[Tensor, "P n_image_per_prompt"]): Float tensor with per-image comparison counts.
+            advantages (Float[Tensor, "P n_image_per_prompt"]): Float tensor with per-image advantage.
             advantage_per_prompt (bool, optional): If True, compute a per-prompt z-score (mean/std computed
                 across the images within each prompt). If False, compute a global z-score across all images
                 in the batch. Defaults to True.
@@ -333,28 +328,17 @@ class PrefGRPORewardModel(RewardModel):
         Raises:
             ValueError: If shapes of win_count and compare_count do not match.
         Notes:
-            - Win rates are computed as wins / comparisons per image; images with zero comparisons
-              receive a zero win rate before standardization.
             - Standard deviation uses unbiased=False and is clamped with a minimum of 1e-6 to avoid
               division by zero.
-            - Advantages are clipped to the range [-self.advantage_clip_max, self.advantage_clip_max].
         """
-        compare_count = compare_count.to(torch.float32)
-        win_rates = torch.where(compare_count > 0, win_count / compare_count, torch.zeros_like(win_count))
-
         if advantage_per_prompt:
-            mean = win_rates.mean(dim=1, keepdim=True)
-            std = win_rates.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-6)
-            advantages = (win_rates - mean) / std
+            mean = advantages.mean(dim=1, keepdim=True)
+            std = advantages.std(dim=1, keepdim=True).clamp_min(1e-6)
+            advantages = (advantages - mean) / std
         else:
-            mean = win_rates.mean()
-            std = win_rates.std(unbiased=False).clamp_min(1e-6)
-            advantages = (win_rates - mean) / std
-
-        advantages = torch.tensor(advantages, dtype=torch.float32).clamp(
-            -self.advantage_clip_max, self.advantage_clip_max
-        )
-
+            mean = advantages.mean()
+            std = advantages.std().clamp_min(1e-6)
+            advantages = (advantages - mean) / std
         return advantages
 
     @torch.inference_mode()
@@ -430,7 +414,9 @@ class PrefGRPORewardModel(RewardModel):
 
         # Aggregate pairwise preferences into per-image counts per prompt
         win_count, compare_count = self.parse_and_aggregate(outputs, pairs, P=P)
-        advantages = self.compute_advantages(win_count, compare_count, advantage_per_prompt)
+        compare_count = compare_count.to(torch.float32)
+        advantages = torch.where(compare_count > 0, win_count / compare_count, torch.zeros_like(win_count))
+        advantages = self.compute_advantages(advantages, advantage_per_prompt)
         return advantages.to(images.device)
 
     @torch.inference_mode()
@@ -439,10 +425,9 @@ class PrefGRPORewardModel(RewardModel):
         images: Float[Tensor, "n_group images_per_prompt n_channels height width"],
         context: list[str],
         advantage_per_prompt: bool = True,
-    ) -> Tensor:
+    ) -> Float[Tensor, "n_group images_per_prompt"]:
         assert self.clip_model is not None, "Clip model is not initialized"
-        assert self.clip_preprocess is not None, "Clip preprocess is not initialized"
-        assert self.clip_tokenizer is not None, "Clip tokenizer is not initialized"
+        assert self.clip_processor is not None, "Clip processor is not initialized"
         device = next(self.clip_model.parameters()).device
 
         P, n_images, C, H, W = images.shape
@@ -450,46 +435,56 @@ class PrefGRPORewardModel(RewardModel):
 
         advantages = torch.zeros((images.shape[0],), dtype=torch.float32, device=device)
         for batch in range(0, len(images), P):
-            batch_images = images[batch : batch + P]
+            batch_images = [self.convert_to_image(img) for img in images[batch : batch + P]]
             batch_context = context[batch : batch + P]
 
-            batch_images = torch.stack(
-                [cast(Tensor, self.clip_preprocess(self.convert_to_image(img))) for img in batch_images], dim=0
-            ).to(device)
-            batch_context_tokenized = self.clip_tokenizer(batch_context).to(device)
-
-            batch_images_features = cast(Tensor, self.clip_model.encode_image(batch_images))  # type: ignore[reportUnknownMemberType]
-            batch_text_features = cast(Tensor, self.clip_model.encode_text(batch_context_tokenized))  # type: ignore[reportUnknownMemberType]
-            batch_images_features = F.normalize(batch_images_features, dim=-1)
-            batch_text_features = F.normalize(batch_text_features, dim=-1)
-
-            clip_score = batch_images_features @ batch_text_features.T
-            advantages[batch : batch + P] = clip_score.diagonal()
+            inputs = cast(
+                "BatchEncoding",
+                self.clip_processor(text=batch_context, images=batch_images, return_tensors="pt", padding=True).to(  # type: ignore
+                    self.clip_model.device
+                ),
+            )
+            outputs: "CLIPOutput" = self.clip_model(**inputs)
+            logits_per_image = cast(Tensor, outputs.logits_per_image)  # type: ignore
+            cosine_sims = logits_per_image / self.clip_model.logit_scale.exp()
+            advantages[batch : batch + P] = cosine_sims
 
         advantages = advantages.reshape(P, n_images)
+        advantages = self.compute_advantages(advantages, advantage_per_prompt)
         return advantages
 
-    # def forward(
-    #     self,
-    #     images: Float[Tensor, "batch n_channels height width"],
-    #     context: list[str],
-    #     advantage_per_prompt: bool = True,
-    # ) -> Float[Tensor, "batch"]:
-    #     B, C, H, W = images.shape
-    #     assert self.n_image_per_prompt is not None, "n_image_per_prompt must be set before calling forward()"
-    #     assert B % self.n_image_per_prompt == 0, (
-    #         f"Batch size {images.shape[0]} is not divisible by n_image_per_prompt {self.n_image_per_prompt}"
-    #     )
-    #     assert len(context) == B // self.n_image_per_prompt, (
-    #         f"Length of context {len(context)} does not match number of prompts {B // self.n_image_per_prompt}"
-    #     )
+    def forward(
+        self,
+        images: Float[Tensor, "batch n_channels height width"],
+        context: list[str],
+        advantage_per_prompt: bool = True,
+    ) -> Float[Tensor, "batch"]:
+        B, C, H, W = images.shape
+        assert self.n_image_per_prompt is not None, "n_image_per_prompt must be set before calling forward()"
+        assert B % self.n_image_per_prompt == 0, (
+            f"Batch size {images.shape[0]} is not divisible by n_image_per_prompt {self.n_image_per_prompt}"
+        )
+        assert len(context) == B // self.n_image_per_prompt, (
+            f"Length of context {len(context)} does not match number of prompts {B // self.n_image_per_prompt}"
+        )
 
-    #     # P also corresponds to the original batch size
-    #     P = B // self.n_image_per_prompt
-    #     images = images.view(P, self.n_image_per_prompt, C, H, W)
+        # P also corresponds to the original batch size
+        P = B // self.n_image_per_prompt
+        images = images.reshape(P, self.n_image_per_prompt, C, H, W)
 
-    #     pairwise_advantages = self.compute_pairwise_advantages(
-    #         images=images,
-    #         context=context,
-    #         advantage_per_prompt=advantage_per_prompt,
-    #     )
+        advantages = self.compute_pairwise_advantages(
+            images=images,
+            context=context,
+            advantage_per_prompt=advantage_per_prompt,
+        )
+
+        if self.use_clip:
+            clip_advantages = self.compute_clip_advantages(
+                images=images,
+                context=context,
+                advantage_per_prompt=advantage_per_prompt,
+            )
+            advantages = self.lambda_base * advantages + self.lambda_clip * clip_advantages
+
+        advantages = advantages.clamp(-self.advantage_clip_max, self.advantage_clip_max)
+        return advantages.reshape(B)
