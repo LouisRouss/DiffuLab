@@ -3,12 +3,13 @@ from typing import Any, Callable
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
+from einops import rearrange
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint  # type: ignore
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     Downsample,
     LabelEmbed,
@@ -35,7 +36,8 @@ class TimestepBlock(nn.Module):
 
 class ContextBlock(nn.Module):
     """
-    Any module where forward() takes context embeddings as a second argument.
+    Any module where forward() takes context embeddings as a second argument and
+    attnention mask as an optional third argument.
     """
 
     @abstractmethod
@@ -43,6 +45,7 @@ class ContextBlock(nn.Module):
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         """
         Apply the module to `x` given `context` embeddings.
@@ -271,21 +274,23 @@ class AttentionBlock(ContextBlock):
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         return (
             checkpoint(
                 self._forward,
-                *(x, context),
+                *(x, context, attn_mask),
                 use_reentrant=False,
             )
             if self.use_checkpoint
-            else self._forward(x, context)
+            else self._forward(x, context, attn_mask)
         )  # type: ignore
 
     def _forward(
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)
@@ -294,18 +299,25 @@ class AttentionBlock(ContextBlock):
         q = self.to_q(self.norm_x(x))  # (b, inner_channels, x_len)
         k, v = self.to_kv(self.norm_context(context)).chunk(2, dim=1)  # (b, inner_channels, context_len) each
         x_len = x.shape[-1]
-        context_len = k.shape[-1]
 
-        # reshape for multi-head attention
-        q = q.view(b * self.num_heads, self.dim_head, x_len)
-        k = k.view(b * self.num_heads, self.dim_head, context_len)
-        v = v.view(b * self.num_heads, self.dim_head, context_len)
+        q, k, v = (
+            rearrange(q, "b (h d) n -> b h n d", h=self.num_heads),
+            rearrange(k, "b (h d) n  -> b h n d", h=self.num_heads),
+            rearrange(v, "b (h d) n  -> b h n d", h=self.num_heads),
+        )
 
-        dots = torch.einsum("bct,bcs->bts", q * self.scale, k * self.scale)  # (b*h, x_len, context_len)
-        attn = self.attend(dots.float()).type(dots.dtype)
-        attn = self.dropout(attn)
+        if attn_mask is not None:
+            b, n = attn_mask.shape
+            attn_mask = attn_mask[:, None, None, :].expand(b, 1, x.shape[2], n)
 
-        out = torch.einsum("bts,bcs->bct", attn, v)
+        out = nn.functional.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            scale=self.scale,
+            attn_mask=attn_mask,
+        )
+
         out = out.reshape(b, -1, x_len)  # (b, inner_channels, x_len)
         out = self.to_out(out)
         return (x + out).reshape(b, c, *spatial)
@@ -387,10 +399,11 @@ class TransformerAttentionBlock(ContextBlock):
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         # residuals are handled in the submodules
         h = self.self_attn(x)
-        h = self.cross_attn(h, context=context)
+        h = self.cross_attn(h, context=context, attn_mask=attn_mask)
         return self.ff(h)
 
 
@@ -441,12 +454,13 @@ class TransformerBlock(ContextBlock):
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         assert context is not None, "TransformerBlock requires context input"
         h = self.norm_x(x)
         h = self.proj_in(h)
         for attn_block in self.attn_blocks:
-            h = attn_block(h, context=context)
+            h = attn_block(h, context=context, attn_mask=attn_mask)
         h = self.proj_out(h)
         return x + h
 
@@ -717,6 +731,15 @@ class UNetModel(Denoiser):
                 num_heads=num_heads,
                 dropout=dropout,
                 use_checkpoint=use_checkpoint,
+            )
+            if self.use_context
+            else TransformerBlock(
+                ch,
+                context_channels=self.context_channels,
+                num_heads=num_heads,
+                dropout=dropout,
+                use_checkpoint=use_checkpoint,
+                depth=self.transformer_depth,
             ),
             ResBlock(
                 ch,
@@ -751,6 +774,15 @@ class UNetModel(Denoiser):
                             num_heads=num_heads,
                             dropout=dropout,
                             use_checkpoint=use_checkpoint,
+                        )
+                        if self.use_context
+                        else TransformerBlock(
+                            ch,
+                            context_channels=self.context_channels,
+                            num_heads=num_heads,
+                            dropout=dropout,
+                            use_checkpoint=use_checkpoint,
+                            depth=self.transformer_depth,
                         ),
                     )
                 if level and i == num_res_blocks:
@@ -867,16 +899,21 @@ class UNetModel(Denoiser):
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
+
+        attn_mask = None
         if self.context_embedder is not None:
-            context = self.context_embedder(context, p)
+            context_output: ContextEmbedderOutput = self.context_embedder(context, p)
+            context = context_output["embeddings"]
+            attn_mask = context_output.get("attn_mask")
+
         if x_context is not None:
             x = torch.cat([x, x_context], dim=1)
         h = x.type(self.dtype)
         for module in self.input_blocks:
-            h: Tensor = module(h, emb=emb, context=context)
+            h: Tensor = module(h, emb=emb, context=context, attn_mask=attn_mask)
             hs.append(h)
-        h = self.middle_block(h, emb=emb, context=context)
+        h = self.middle_block(h, emb=emb, context=context, attn_mask=attn_mask)
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
-            h = module(h, emb=emb, context=context)
+            h = module(h, emb=emb, context=context, attn_mask=attn_mask)
         return {"x": self.out(h)}
