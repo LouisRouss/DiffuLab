@@ -1,17 +1,14 @@
-import gc
 import random
 from typing import TYPE_CHECKING, cast
 
 import torch
 from jaxtyping import Bool, Float
-from open_clip import create_model_from_pretrained, get_tokenizer  # type: ignore
 from torch import Tensor
-from transformers import AutoTokenizer, CLIPTextModel, T5EncoderModel, T5Tokenizer
+from transformers import AutoTokenizer, CLIPTextModel, CLIPTokenizer, T5EncoderModel, T5Tokenizer
 
 from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 
 if TYPE_CHECKING:
-    from open_clip import CLIP, SimpleTokenizer  # type: ignore
     from transformers.models.clip.tokenization_clip_fast import CLIPTokenizerFast
 
 
@@ -54,15 +51,11 @@ class SD3TextEmbedder(ContextEmbedder):
         self.clip_l14.requires_grad_(False)
 
         # load g_14
-        self.clip_g14 = cast(
-            CLIP,
-            create_model_from_pretrained("hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k", device=device)[0],  # type: ignore
+        self.clip_g14 = CLIPTextModel.from_pretrained("laion/CLIP-ViT-bigG-14-laion2B-39B-b160", device_map=device)  # type: ignore
+
+        self.tokenizer_g14: CLIPTokenizer = CLIPTokenizer.from_pretrained(  # type: ignore
+            "laion/CLIP-ViT-bigG-14-laion2B-39B-b160", device_map=device
         )
-        self.tokenizer_g14 = cast(SimpleTokenizer, get_tokenizer("hf-hub:laion/CLIP-ViT-bigG-14-laion2B-39B-b160k"))
-        del self.clip_g14.visual
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
         self.clip_g14.eval()
         self.clip_g14.requires_grad_(False)
 
@@ -119,23 +112,14 @@ class SD3TextEmbedder(ContextEmbedder):
                 * pooled_output: Shape ``[B, 1280]``
                 * attention_mask: Shape ``[B, N_ctx]``
         """
-        inputs_g14 = self.tokenizer_g14(context).to(self.device)
-        x = self.clip_g14.token_embedding(inputs_g14)  # type: ignore # [batch_size, n_ctx, d_model]
-        x = x + self.clip_g14.positional_embedding  # type: ignore
-        x = self.clip_g14.transformer(x, attn_mask=self.clip_g14.attn_mask)  # type: ignore
-        last_hidden_state = cast(Tensor, self.clip_g14.ln_final(x))  # type: ignore # [batch_size, n_ctx, 1280]
-
-        eot_positions = (inputs_g14 == self.tokenizer_g14.eot_token_id).float().argmax(dim=1)  # [batch_size]
-        _, seq_len = inputs_g14.shape
-        arange = torch.arange(seq_len, device=inputs_g14.device).unsqueeze(0)  # [1, seq_len]
-        attention_mask = (arange <= eot_positions.unsqueeze(1)).bool()
-
-        # Max pooling
-        mask = attention_mask.unsqueeze(-1)  # [B, N, 1]
-        neg_inf = torch.finfo(last_hidden_state.dtype).min
-        masked_hidden = last_hidden_state.masked_fill(~mask, neg_inf)
-        pooled_output = masked_hidden.max(dim=1).values
-
+        inputs_g14 = self.tokenizer_g14(context, return_tensors="pt", padding=True).to(self.device)
+        outputs_g14 = self.clip_g14(**inputs_g14)
+        last_hidden_state = outputs_g14["last_hidden_state"]  # [batch_size, n_ctx, 768]
+        pooled_output = outputs_g14["pooler_output"]  # [batch_size, 768]
+        attention_mask = cast(
+            Tensor,
+            inputs_g14.attention_mask.bool(),  # type: ignore
+        )  # [batch_size, n_ctx]
         return last_hidden_state, pooled_output, attention_mask
 
     def get_t5_embeddings(

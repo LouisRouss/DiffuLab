@@ -15,7 +15,6 @@ dependencies = [
     "loguru>=0.7.3",
     "mosaicml-streaming>=0.12.0",
     "omegaconf>=2.3.0",
-    "open-clip-torch>=2.30.0",
     "pyopenssl==23.2.0",
     "sentencepiece>=0.2.1",
     "tiktoken>=0.11.0",
