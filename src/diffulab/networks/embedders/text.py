@@ -208,10 +208,10 @@ class SD3TextEmbedder(ContextEmbedder):
             p: Probability to drop each prompt (per encoder) for classifier-free guidance.
 
         Returns:
-            tuple[Tensor, Tensor]:
-                * pooled: Shape ``[B, 2048]`` concatenated pooled CLIP features.
-                * full_encoding: Shape ``[B, seq_len, 4096]`` composite sequence embedding.
-                * attention_mask: Shape ``[B, seq_len]`` composite attention mask.
+            ContextEmbedderOutput: Dictionary with keys:
+                * embeddings: Composite sequence embeddings, shape ``[B, N_clip + N_t5, 4096]``
+                * pooled_embeddings: Concatenated CLIP pooled embeddings, shape ``[B, 2048]``
+                * attn_mask: Attention mask for the composite embeddings, shape ``[B, N_clip + N_t5]``
         """
         context = self.drop_conditions(context, p)
         embeddings = self.get_embeddings(context)
@@ -228,9 +228,5 @@ class SD3TextEmbedder(ContextEmbedder):
             "Mismatched CLIP attention masks."
         )  # should be same tokenizer
         full_encoding = torch.cat([full_encoding_clip, embeddings["t5"]], dim=-2)
-        attention_mask = torch.cat([embeddings["l14_attn_mask"], embeddings["t5_attn_mask"]], dim=-1)
-        return ContextEmbedderOutput(
-            embeddings=full_encoding,
-            pooled_embeddings=pooled,
-            mask=attention_mask,
-        )
+        attention_mask = torch.cat([embeddings["l14_attn_mask"], embeddings["t5_attn_mask"]], dim=-1).bool()
+        return ContextEmbedderOutput(embeddings=full_encoding, pooled_embeddings=pooled, attn_mask=attention_mask)

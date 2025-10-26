@@ -1,9 +1,8 @@
-from typing import cast
-
 import torch
+from jaxtyping import Float
 from torch import Tensor
 
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 
 
 class PreComputedEmbedder(ContextEmbedder):
@@ -15,49 +14,60 @@ class PreComputedEmbedder(ContextEmbedder):
     Args:
         n_output (int): The number of output embeddings.
         output_size (tuple[int, ...]): The dimension of each output embedding.
+        zero_embedding (Float[Tensor, "seq_len dim"]): A tensor representing the zero embedding to use when dropping context.
+
     """
 
-    def __init__(self, n_output: int, output_size: tuple[int, ...], zero_embedding: tuple[Tensor] | Tensor) -> None:
+    def __init__(
+        self, n_output: int, output_size: tuple[int, ...], zero_embedding: Float[Tensor, "seq_len dim"]
+    ) -> None:
         super().__init__()
         self._n_output = n_output
         self._output_size = output_size
         self.zero_embedding = zero_embedding
-        if isinstance(self.zero_embedding, Tensor):
-            self.zero_embedding = self.zero_embedding.detach().requires_grad_(False)
-        else:
-            self.zero_embedding = tuple(z.detach().requires_grad_(False) for z in self.zero_embedding)
 
     def drop_conditions(
         self,
-        context: tuple[Tensor] | Tensor,
+        context: ContextEmbedderOutput,
         p: float,
-    ) -> tuple[Tensor, ...]:
+    ) -> ContextEmbedderOutput:
         """
         Randomly drop context from a batch.
 
         Args:
-            drop_context (Any): a sequence of context.
+            context (ContextEmbedderOutput): Context embeddings.
             p (float): the probability of dropping a context.
         Returns
-            Tensor | tuple[Tensor]: the same sequence of context with some elements randomly dropped.
-             and replaced by zero embeddings.
+            ContextEmbedderOutput: the same context embeddings with some elements randomly dropped.
         """
-        if isinstance(context, Tensor):
-            assert isinstance(self.zero_embedding, Tensor)
-            mask = (torch.rand(context.shape[0], device=context.device) > p).float().unsqueeze(-1)
-            return cast(tuple[Tensor], (context * mask + self.zero_embedding.to(context.device) * (1 - mask),))
-        else:
-            assert len(context) == self._n_output
-            assert isinstance(self.zero_embedding, tuple)
-            batch_size = context[0].shape[0]
-            mask = (torch.rand(batch_size, device=context[0].device) > p).float().unsqueeze(-1)
-            return tuple(
-                c * mask + ze.to(c.device) * (torch.ones_like(mask) - mask)
-                for c, ze in zip(context, self.zero_embedding)
-            )
+        embedding = context["embeddings"]
+        batch_size, seq_len = embedding.shape[:2]
+        mask = (torch.rand(batch_size, device=embedding.device) > p).float()[:, None, None]
+
+        # first handle sequence embeddings
+        zero_emb = torch.cat(
+            [
+                self.zero_embedding,
+                torch.zeros(
+                    seq_len - self.zero_embedding.shape[0],
+                    self.zero_embedding.shape[1],
+                    device=self.zero_embedding.device,
+                ),
+            ],
+            dim=0,
+        )
+        embedding = embedding * mask + zero_emb.unsqueeze(0) * (torch.ones_like(mask) - mask)
+        attn_mask = context.get("attn_mask") or torch.ones(batch_size, embedding.shape[1], device=embedding.device)
+        attn_mask[mask.squeeze() == 0, self.zero_embedding.shape[0] :] = (
+            0.0  # disable attention to padding tokens for dropped contexts
+        )
+        return {
+            "embeddings": embedding,
+            "attn_mask": attn_mask,
+        }
 
     @torch.inference_mode()
-    def forward(self, context: tuple[Tensor] | Tensor, p: float = 0) -> tuple[Tensor, ...]:
+    def forward(self, context: ContextEmbedderOutput, p: float = 0) -> ContextEmbedderOutput:
         """
         Apply the model to an input batch.
 
@@ -69,4 +79,4 @@ class PreComputedEmbedder(ContextEmbedder):
         """
         if p > 0:
             return self.drop_conditions(context, p)
-        return context if isinstance(context, tuple) else (context,)
+        return context

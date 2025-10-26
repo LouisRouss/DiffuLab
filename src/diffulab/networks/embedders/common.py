@@ -16,7 +16,7 @@ from tqdm import tqdm
 class ContextEmbedderOutput(TypedDict):
     embeddings: Required[Tensor]
     pooled_embeddings: NotRequired[Tensor]
-    mask: NotRequired[Tensor]
+    attn_mask: NotRequired[Tensor]
 
 
 class ContextEmbedder(nn.Module, ABC):
