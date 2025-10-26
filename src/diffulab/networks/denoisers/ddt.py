@@ -12,7 +12,7 @@ from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
 from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
     modulate,
@@ -225,26 +225,23 @@ class DDT(Denoiser):
     ) -> ModelOutput:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))
+        context_output: ContextEmbedderOutput = self.context_embedder(initial_context, p)
         if self.pooled_embedding:
             assert self.mlp_pooled_context is not None, (
                 "for MMDiT with pooled context, mlp_pooled_context must be defined"
             )
-            assert self.context_embedder.n_output == 2, (
-                "for MMDiT with pooled context, context_embedder should provide 2 embeddings"
-            )
-            context_pooled, context = self.context_embedder(initial_context, p)
+            assert "pooled_embeddings" in context_output, "pooled embeddings must be in context_output"
+            context_pooled = context_output["pooled_embeddings"]
             emb = self.mlp_pooled_context(context_pooled) + emb
-        else:
-            assert self.context_embedder.n_output == 1, (
-                "for MMDiT without pooled context, context_embedder should provide 1 embedding"
-            )
-            (context,) = self.context_embedder(initial_context, p)
+
+        context = context_output["embeddings"]
         context = self.context_embed(context)
+        attn_mask = context_output.get("attn_mask", None)
 
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, emb, context)
+            x, context = layer(x, emb, context, attn_mask=attn_mask)
             if features:
                 features.append(x)
 
