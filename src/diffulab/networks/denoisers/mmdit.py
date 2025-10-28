@@ -240,8 +240,7 @@ class DiTBlock(nn.Module):
             Performs the forward pass of the MMDiTBlock.
             Args:
                 input (Tensor): The input tensor.
-                y (Tensor): An additional tensor, not used in the current implementation.
-                context (Tensor): The context tensor.
+                y (Tensor): The conditioning tensor used for modulation
             Returns:
                 Tuple[Tensor, Tensor]: The processed input tensor.
 
