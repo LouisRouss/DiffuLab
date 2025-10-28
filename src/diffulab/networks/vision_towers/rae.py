@@ -1,11 +1,26 @@
+from typing import TYPE_CHECKING, Any, cast
+
+import numpy as np
 import torch
 import torch.nn as nn
 from einops import rearrange
 from jaxtyping import Float
+from numpy.typing import NDArray
+from PIL import Image
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint  # type: ignore
+from transformers import AutoImageProcessor, AutoModel
 
 from diffulab.networks.utils.nn import QKNorm, RotaryPositionalEmbedding
+from diffulab.networks.vision_towers.common import VisionTower
+
+if TYPE_CHECKING:
+    from transformers.feature_extraction_utils import BatchFeature
+    from transformers.modeling_outputs import BaseModelOutputWithPooling
+    from transformers.models.dinov3_vit import (
+        DINOv3ViTImageProcessorFast,
+        DINOv3ViTModel,
+    )
 
 
 class Attention(nn.Module):
@@ -249,5 +264,134 @@ class RAEDecoder(nn.Module):
             x = layer(x)
 
         x = self.last_layer(x)
-        x = self.unpatchify(x)
+        x = self.unpatchify(x[:, 1:])  # remove cls token
         return x
+
+
+class RAE(VisionTower):
+    def __init__(
+        self,
+        decoder: RAEDecoder | None = None,
+        decoder_config: dict[str, Any] | None = None,
+        dinov3_id: str = "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+    ) -> None:
+        super().__init__()  # type: ignore
+        self.processor = cast("DINOv3ViTImageProcessorFast", AutoImageProcessor.from_pretrained(dinov3_id))  # type: ignore[reportUnknownMemberType]
+        self.encoder = cast(
+            "DINOv3ViTModel",
+            AutoModel.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                dinov3_id,
+                device_map="auto",
+            ),
+        )
+        self.encoder.eval()
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+
+        self._latent_channels = self.encoder.config.hidden_size
+        self._patch_size = self.encoder.config.patch_size
+
+        if decoder:
+            self.decoder = decoder
+        else:
+            assert decoder_config is not None
+            self.decoder = RAEDecoder(**decoder_config)
+
+    @property
+    def latent_channels(self) -> int:
+        """
+        Number of channels in the latent space.
+        This should be implemented in subclasses to return the specific number of latent channels.
+        """
+        return self._latent_channels
+
+    @property
+    def patch_size(self) -> int:
+        """
+        Patch size of the encoder.
+        """
+        return self._patch_size
+
+    def preprocess(self, x: Float[Tensor, "batch_size channels height width"]) -> "BatchFeature":
+        """
+        Preprocess the input tensor before encoding.
+
+        Args:
+            x (Tensor): Input tensor to be preprocessed.
+            Assumed to be an image tensor with shape [N, C, H, W].
+
+        Returns:
+            BatchFeature: Preprocessed input tensor.
+        """
+        # ensure float
+        x = x.float()
+
+        # detect range once (cheaper than calling .min()/.max() repeatedly)
+        x_min = x.min().item()
+        x_max = x.max().item()
+
+        # convert to [0, 255]
+        if x_min >= 0.0 and x_max <= 1.0:
+            x = x * 255.0
+        elif x_min >= 0.0 and x_max <= 255.0 and x_max > 1.0:
+            pass
+        else:
+            raise ValueError("Input tensor range is not supported. Expected 0–255 or 0–1")
+
+        x = x.clamp(0.0, 255.0)
+
+        # convert to PIL Images
+        x_cpu = x.detach().to("cpu").round().byte()
+        imgs: list[Image.Image] = []
+        for xi in x_cpu:
+            arr = cast(NDArray[np.uint8], xi.permute(1, 2, 0).contiguous().numpy())  # type: ignore[reportUnknownMemberType]
+            imgs.append(Image.fromarray(arr))
+
+        processed_imgs = self.processor(images=imgs, return_tensors="pt", do_resize=False).to(self.encoder.device)  # type: ignore[reportUnknownMemberType]
+        return processed_imgs
+
+    @torch.inference_mode()
+    def encode(self, x: Float[Tensor, "batch_size channels height width"]) -> Float[Tensor, "batch_size seq_len dim"]:
+        """
+        Forward pass of the encoder.
+        Args:
+            x (Tensor): Input tensor to be encoded.
+        Returns:
+            Tensor: Encoded representation of the input tensor.
+        """
+        x_processed = self.preprocess(x)
+        with torch.no_grad():
+            outputs: "BaseModelOutputWithPooling" = self.encoder(**x_processed)
+            last_hidden_states = cast(Tensor, outputs.last_hidden_state)
+            z = last_hidden_states[:, 1 + self.encoder.config.num_register_tokens :, :]
+        return z
+
+    def decode(
+        self, z: Float[Tensor, "batch_size seq_len dim"]
+    ) -> Float[Tensor, "batch_size channels height_d width_d"]:
+        """
+        Forward pass of the decoder.
+        Args:
+            z (Tensor): Latent tensor to be decoded.
+        Returns:
+            Tensor: Decoded representation of the latent tensor.
+        """
+        x_recon = self.decoder(z)
+        return x_recon
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch_size channels height width"],
+    ) -> Float[Tensor, "batch_size channels height_d width_d"]:
+        """
+        Forward pass of the RAE.
+
+        Args:
+            x (Tensor): Input tensor to be encoded and decoded.
+
+        Returns:
+            Tensor: Output tensor after encoding and decoding.
+        """
+        z = self.encode(x)
+        x_recon = self.decode(z)
+        return x_recon

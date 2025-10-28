@@ -27,21 +27,29 @@ class VisionTower(nn.Module, ABC):
 
     @property
     @abstractmethod
-    def compression_factor(self) -> int:
-        """
-        Compression factor of the AE.
-        This should be implemented in subclasses to return the specific compression factor.
-        """
-        ...
-
-    @property
-    @abstractmethod
     def latent_channels(self) -> int:
         """
         Number of channels in the latent space.
         This should be implemented in subclasses to return the specific number of latent channels.
         """
         ...
+
+    @property
+    def compression_factor(self) -> int | None:
+        """
+        Compression factor of the AE.
+        This should be implemented in relevant subclasses to return the specific compression factor.
+        """
+        return None
+
+    @property
+    def patch_size(self) -> int | None:
+        """
+        Patch size of the encoder.
+        This should be implemented in relevant subclasses to return the specific patch size.
+        Valid for transformer-based encoders like DinoV3.
+        """
+        return None
 
     @abstractmethod
     def encode(self, x: Tensor) -> Tensor:
