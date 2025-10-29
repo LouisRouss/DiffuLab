@@ -64,7 +64,7 @@ ignore = [
 combine-as-imports = true
 
 [tool.pyright]
-include = ["src/diffulab", "tests/", "examples/", "local/"]
+include = ["src/diffulab", "tests/", "examples/"]
 strict = ["*"]
 exclude = ["**/__pycache__"]
 reportMissingTypeStubs = "warning"
