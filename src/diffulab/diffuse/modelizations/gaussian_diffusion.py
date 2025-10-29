@@ -69,6 +69,15 @@ class GaussianDiffusion(Diffusion):
         )
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:
+        """
+        Sets the diffusion parameters based on the provided beta schedule.
+        This method initializes the diffusion process parameters, including alphas and their
+        cumulative products, based on the given beta values. It also configures the sampler
+        to use this betas schedule.
+        Args:
+            betas (Tensor): A 1D tensor containing beta values for each timestep,
+                with shape (n_steps,).
+        """
         self.betas = betas
         self.alphas = torch.ones_like(self.betas) - self.betas
         self.alphas_bar = self.alphas.cumprod(dim=0)
@@ -278,6 +287,10 @@ class GaussianDiffusion(Diffusion):
             timesteps (Tensor): A tensor of shape (batch_size,) containing timestep indices.
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
+            extra_losses (list[LossFunction], optional): Additional loss functions to compute.
+                Defaults to an empty list.
+            extra_args (dict[str, Any], optional): Additional arguments to pass to extra loss functions.
+                Defaults to an empty dictionary.
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:

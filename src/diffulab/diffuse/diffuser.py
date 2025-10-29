@@ -115,6 +115,8 @@ class Diffuser:
             noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
             extra_args (dict[str, Any], optional): Additional arguments for the additional losses computation.
+            grpo (bool, optional): Whether to compute the GRPO loss. Defaults to False.
+            grpo_args (dict[str, Any], optional): Additional arguments for GRPO loss computation
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
@@ -141,7 +143,7 @@ class Diffuser:
             ```
             diffuser = Diffuser(denoiser, sampling_method="ddpm", n_steps=1000)
             # Later, change to use fewer steps for faster sampling
-            diffuser.set_steps(100, schedule="ddim")
+            diffuser.set_steps(100, schedule="linear")
             ```
         """
         self.diffusion.set_steps(n_steps, schedule=schedule)
@@ -169,9 +171,13 @@ class Diffuser:
                 this shape should correspond to the latent space shape.
                 Required if 'x' is not in model_inputs. Defaults to None.
             use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
+            clamp_x (bool, optional): Whether to clamp the tensor generated to [-1, 1] range (before eventual decoding).
+                Defaults to False.
             guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
+            sampler_args (dict[str, Any], optional): Additional arguments to pass to the sampler. Defaults to {}.
+            return_intermediates (bool, optional): Whether to return intermediate samples and extra sampler output
+                during the denoising process (mean, std etc...). Defaults to False.
             return_latents (bool, optional): Whether to return the latent representation when using a
                 vision tower instead of decoded data. Defaults to False.
         Returns:

@@ -181,11 +181,11 @@ class Diffusion(ABC):
         starting from random noise and iteratively denoising until reaching the final output.
         Args:
             model (Denoiser): The neural network model used for denoising.
+            model_inputs (ModelInput): A dictionary containing model inputs, such as initial noise
+                or conditional information. If 'x' is not provided, random noise will be generated.
             data_shape (tuple[int, ...] | None): Shape of data to generate (batch_size, channels, height, width).
                 if x is provided in model_inputs, data_shape can be set to None.
                 Defaults to None.
-            model_inputs (ModelInput): A dictionary containing model inputs, such as initial noise
-                or conditional information. If 'x' is not provided, random noise will be generated.
             use_tqdm (bool, optional): Whether to show a progress bar during generation.
                 Defaults to True.
             clamp_x (bool, optional): Whether to clamp output values to [-1, 1] range.

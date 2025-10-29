@@ -282,6 +282,23 @@ class Flow(Diffusion):
         timestep_fraction: float = 0.6,
         guidance_scale: float = 4,
     ) -> dict[str, Tensor]:
+        """
+        Computes the Preference Reward-based GRPO loss for preference alignment with flow-based diffusion models.
+        reference : https://arxiv.org/abs/2508.20751. The sampler needs to be set to Euler-Maruyama for GRPO.
+        Args:
+            model (Denoiser): The neural network model used for denoising.
+            model_inputs (ModelInput): A dictionary containing the model inputs, including the current state tensor
+                keyed as 'x' and any conditional information.
+            sampling (SamplingOutput): The output from the sampling process, containing intermediate samples
+                transitions distribution related parameters
+            advantages (Tensor): A tensor of shape (batch_size,) containing the advantage values for each sample in the batch.
+            kl_beta (float, optional): Coefficient for the KL divergence term in the loss. Defaults to 0.
+            eps (float, optional): Clipping parameter for the policy loss. Defaults to 1e-4.
+            timestep_fraction (float, optional): Fraction of timesteps to consider for loss computation. Defaults to 0.6.
+            guidance_scale (float, optional): Scale for classifier-free guidance during denoising. Defaults to 4.
+        Returns:
+            dict[str, Tensor]: A dictionary containing the computed GRPO loss.
+        """
         assert isinstance(self.sampler, EulerMaruyama), "GRPO only works with the Euler-Maruyama sampler"
         assert "xt" in sampling, "sampling output should contain all intermediate samples"
         assert "logprob" in sampling, "sampling output should contain all logprobs"

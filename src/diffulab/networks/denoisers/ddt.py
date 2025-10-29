@@ -223,6 +223,17 @@ class DDT(Denoiser):
         p: float = 0.0,
         intermediate_features: bool = False,
     ) -> ModelOutput:
+        """
+        Forward pass through the encoder of the mmDDT model.
+        Args:
+            x (Tensor): Input tensor of shape (B, seq_len, patch_dim)
+            timesteps (Tensor): Timestep tensor of shape (B,)
+            initial_context (Any, optional): Initial context for the context embedder. Defaults to None.
+            p (float, optional): Probability for classifier-free guidance. Defaults to 0.0.
+            intermediate_features (bool, optional): Whether to return intermediate features. Defaults to False.
+        Returns:
+            ModelOutput: Output dictionary containing the final output and optional intermediate features.
+        """
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))
         context_output: ContextEmbedderOutput = self.context_embedder(initial_context, p)
@@ -258,6 +269,17 @@ class DDT(Denoiser):
         y: Int[Tensor, "batch_size"] | None = None,
         intermediate_features: bool = False,
     ) -> ModelOutput:
+        """
+        Forward pass through the encoder of the DDT model.
+        Args:
+            x (Tensor): Input tensor of shape (B, seq_len, patch_dim)
+            timestep (Tensor): Timestep tensor of shape (B,)
+            p (float, optional): Probability for classifier-free guidance. Defaults to 0.0
+            y (Tensor, optional): Class labels. Defaults to None.
+            intermediate_features (bool, optional): Whether to return intermediate features. Defaults to False.
+        Returns:
+            ModelOutput: Output dictionary containing the final output and optional intermediate features.
+        """
         if p > 0:
             assert self.n_classes, (
                 "probability of dropping for classifier free guidance is only available if a number of classes is set"
@@ -286,6 +308,16 @@ class DDT(Denoiser):
         timesteps: Float[Tensor, "batch_size"],
         intermediate_features: bool = False,
     ) -> ModelOutput:
+        """
+        Forward pass through the decoder of the DDT model.
+        Args:
+            x (Tensor): Input tensor of shape (B, seq_len, patch_dim)
+            encoder_output (Tensor): Encoder output tensor of shape (B, seq_len, patch_dim)
+            timesteps (Tensor): Timestep tensor of shape (B,)
+            intermediate_features (bool, optional): Whether to return intermediate features. Defaults to False.
+        Returns:
+            ModelOutput: Output dictionary containing the final output and optional intermediate features.
+        """
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))[:, None, :]
         encoder_output = nn.functional.silu(encoder_output + emb)
 
@@ -312,6 +344,19 @@ class DDT(Denoiser):
         x_context: Tensor | None = None,
         intermediate_features: bool = False,
     ) -> ModelOutput:
+        """
+        Forward pass through the DDT model.
+        Args:
+            x (Tensor): Input tensor of shape (B, C, H, W)
+            timesteps (Tensor): Timestep tensor of shape (B,)
+            initial_context (Any, optional): Initial context for the context embedder. Defaults to None.
+            p (float, optional): Probability for classifier-free guidance. Defaults to 0.0
+            y (Tensor, optional): Class labels. Defaults to None.
+            x_context (Tensor, optional): Additional context tensor to concatenate with input. Defaults to None.
+            intermediate_features (bool, optional): Whether to return intermediate features. Defaults to False.
+        Returns:
+            ModelOutput: Output dictionary containing the final output and optional intermediate features.
+        """
         assert not (initial_context is not None and y is not None), "initial_context and y cannot both be specified"
         if p > 0:
             assert self.classifier_free, (
