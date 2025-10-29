@@ -457,7 +457,7 @@ class Flow(Diffusion):
             if len(all_xt_mean) > 0:
                 out["xt_mean"] = torch.stack(all_xt_mean, dim=1)
             if len(all_xt_std) > 0:
-                out["xt_std"] = torch.stack(all_xt_std, dim=1)
+                out["xt_std"] = torch.stack(all_xt_std, dim=0)
             if len(all_logprobs) > 0:
                 out["logprob"] = torch.stack(all_logprobs, dim=1)
 
