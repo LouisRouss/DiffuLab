@@ -63,14 +63,15 @@ class EmbedSequential(nn.Sequential, TimestepBlock, ContextBlock):  # type: igno
         x: Float[Tensor, "batch_size channels height width"],
         emb: Float[Tensor, "batch_size emb_channels"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         for layer in self:
             if isinstance(layer, TimestepBlock) and isinstance(layer, ContextBlock):
-                x = layer(x, emb, context)
+                x = layer(x, emb, context, attn_mask=attn_mask)
             elif isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
             elif isinstance(layer, ContextBlock):
-                x = layer(x, context)
+                x = layer(x, context, attn_mask=attn_mask)
             else:
                 x = layer(x)
         return x
@@ -332,7 +333,7 @@ class GEGLU(nn.Module):
         self, x: Float[Tensor, "batch_size in_channels seq_len"]
     ) -> Float[Tensor, "batch_size out_channels seq_len"]:
         x_proj = self.proj(x)
-        x, gate = x_proj.chunk(2, dim=-1)
+        x, gate = x_proj.chunk(2, dim=1)
         return x * torch.nn.functional.gelu(gate)
 
 
@@ -503,8 +504,6 @@ class UNetModel(Denoiser):
                 otherwise use nearest + conv or similar lightweight ops. Defaults to True.
         use_checkpoint (bool, optional): Enables gradient checkpointing for memory efficiency
                 (slower compute). Defaults to False.
-        use_fp16 (bool, optional): If True, internal activations use torch.bfloat16; otherwise float32.
-                (Name reflects legacy; bfloat16 is used if True.) Defaults to False.
         num_heads (int, optional): Number of attention heads in each AttentionBlock. Defaults to 1.
         use_scale_shift_norm (bool, optional): Enables scale–shift (FiLM-like) conditioning inside
                 residual blocks. Defaults to False.
@@ -604,7 +603,6 @@ class UNetModel(Denoiser):
         channel_mult: str = "1, 2, 4, 8",
         conv_resample: bool = True,
         use_checkpoint: bool = False,
-        use_fp16: bool = False,
         num_heads: int = 1,
         use_scale_shift_norm: bool = False,
         resblock_updown: bool = False,
@@ -637,7 +635,6 @@ class UNetModel(Denoiser):
         self.channel_mult: list[int] = eval(f"[{channel_mult}]")
         self.conv_resample = conv_resample
         self.use_checkpoint = use_checkpoint
-        self.dtype = torch.bfloat16 if use_fp16 else torch.float32
         self.num_heads = num_heads
         self.context_embedder = context_embedder
         self.classifier_free = classifier_free
@@ -682,7 +679,7 @@ class UNetModel(Denoiser):
                             dropout=dropout,
                             use_checkpoint=use_checkpoint,
                         )
-                        if self.use_context
+                        if not self.use_context
                         else TransformerBlock(
                             ch,
                             context_channels=self.context_channels,
@@ -732,7 +729,7 @@ class UNetModel(Denoiser):
                 dropout=dropout,
                 use_checkpoint=use_checkpoint,
             )
-            if self.use_context
+            if not self.use_context
             else TransformerBlock(
                 ch,
                 context_channels=self.context_channels,
@@ -775,7 +772,7 @@ class UNetModel(Denoiser):
                             dropout=dropout,
                             use_checkpoint=use_checkpoint,
                         )
-                        if self.use_context
+                        if not self.use_context
                         else TransformerBlock(
                             ch,
                             context_channels=self.context_channels,
@@ -908,7 +905,7 @@ class UNetModel(Denoiser):
 
         if x_context is not None:
             x = torch.cat([x, x_context], dim=1)
-        h = x.type(self.dtype)
+        h = x
         for module in self.input_blocks:
             h: Tensor = module(h, emb=emb, context=context, attn_mask=attn_mask)
             hs.append(h)
