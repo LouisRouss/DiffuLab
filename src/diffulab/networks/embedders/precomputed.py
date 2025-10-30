@@ -57,7 +57,7 @@ class PreComputedEmbedder(ContextEmbedder):
             dim=0,
         )
         embedding = embedding * mask + zero_emb.unsqueeze(0) * (torch.ones_like(mask) - mask)
-        attn_mask = context.get("attn_mask") or torch.ones(batch_size, embedding.shape[1], device=embedding.device)
+        attn_mask = context.get("attn_mask", torch.ones(batch_size, embedding.shape[1], device=embedding.device))
         attn_mask[mask.squeeze() == 0, self.zero_embedding.shape[0] :] = (
             0.0  # disable attention to padding tokens for dropped contexts
         )
