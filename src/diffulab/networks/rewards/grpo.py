@@ -271,9 +271,9 @@ class PrefGRPORewardModel(RewardModel):
             P: Number of prompts in the batch.
 
         Returns:
-            win_count: (P, n_images_per_prompt) float tensor where each entry is the accumulated wins
+            win_count: (P, n_image_per_prompt) float tensor where each entry is the accumulated wins
                        (ties contribute 0.5).
-            compare_count: (P, n_images_per_prompt) int tensor with number of comparisons per image.
+            compare_count: (P, n_image_per_prompt) int tensor with number of comparisons per image.
         """
         assert self.n_image_per_prompt is not None, (
             "n_image_per_prompt must be set before calling parse_and_aggregate()"
@@ -408,7 +408,7 @@ class PrefGRPORewardModel(RewardModel):
                 self.model.device
             )
 
-            generated_ids = self.model.generate(**inputs, max_new_tokens=4096)  # type: ignore[reportUnknownMemberType]
+            generated_ids = self.model.generate(**inputs)  # type: ignore[reportUnknownMemberType]
             generated_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)]
             outputs.extend(cast(list[str], self.processor.batch_decode(generated_trimmed, skip_special_tokens=True)))  # type: ignore[reportUnknownMemberType]
 

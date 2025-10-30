@@ -30,7 +30,6 @@ class RewardModel(nn.Module, ABC):
         self._n_image_per_prompt = n
 
     @property
-    @abstractmethod
     def n_image_per_prompt(self) -> int:
         """
         Returns the number of images per prompt that the model has generated.
