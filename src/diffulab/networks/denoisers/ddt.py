@@ -253,7 +253,7 @@ class DDT(Denoiser):
         # Pass through each layer sequentially
         for layer in self.layers:
             x, context = layer(x, emb, context, attn_mask=attn_mask)
-            if features:
+            if features is not None:
                 features.append(x)
 
         encoder_output: ModelOutput = {"x": x}
@@ -293,7 +293,7 @@ class DDT(Denoiser):
         # Pass through each layer sequentially
         for layer in self.layers:
             x = layer(x, emb)
-            if features:
+            if features is not None:
                 features.append(x)
 
         encoder_output: ModelOutput = {"x": x}
@@ -324,7 +324,7 @@ class DDT(Denoiser):
         features: list[Tensor] | None = [] if intermediate_features else None
         for layer in self.decoder_layers:
             x = layer(x, encoder_output)
-            if features:
+            if features is not None:
                 features.append(x)
 
         x = self.last_layer(x, encoder_output)
