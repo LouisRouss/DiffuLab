@@ -40,9 +40,6 @@ class ChatMessage(TypedDict):
     content: list[ContentItem]
 
 
-# TODO: vectorize everything and optimize inference
-
-
 class PrefGRPORewardModel(RewardModel):
     model_registry = {
         "cot_7b": "CodeGoat24/UnifiedReward-Think-qwen-7b",
@@ -271,9 +268,9 @@ class PrefGRPORewardModel(RewardModel):
             P: Number of prompts in the batch.
 
         Returns:
-            win_count: (P, n_images_per_prompt) float tensor where each entry is the accumulated wins
+            win_count: (P, n_image_per_prompt) float tensor where each entry is the accumulated wins
                        (ties contribute 0.5).
-            compare_count: (P, n_images_per_prompt) int tensor with number of comparisons per image.
+            compare_count: (P, n_image_per_prompt) int tensor with number of comparisons per image.
         """
         assert self.n_image_per_prompt is not None, (
             "n_image_per_prompt must be set before calling parse_and_aggregate()"
@@ -408,7 +405,7 @@ class PrefGRPORewardModel(RewardModel):
                 self.model.device
             )
 
-            generated_ids = self.model.generate(**inputs, max_new_tokens=4096)  # type: ignore[reportUnknownMemberType]
+            generated_ids = self.model.generate(**inputs)  # type: ignore[reportUnknownMemberType]
             generated_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)]
             outputs.extend(cast(list[str], self.processor.batch_decode(generated_trimmed, skip_special_tokens=True)))  # type: ignore[reportUnknownMemberType]
 
@@ -426,6 +423,26 @@ class PrefGRPORewardModel(RewardModel):
         context: list[str],
         advantage_per_prompt: bool = True,
     ) -> Float[Tensor, "n_group images_per_prompt"]:
+        """
+        Compute per-image standardized rewards using CLIP cosine similarity between images and text context.
+        Args:
+            images (torch.Tensor): Float tensor of shape (P, N, C, H, W) containing a batch of images.
+            context (list[str]): A list of length P*N with the textual context (e.g., prompt) for each
+                image.
+            advantage_per_prompt (bool, optional): If True, compute a per-prompt z-score (mean/std computed
+                across the images within each prompt). If False, compute a global z-score across all images
+                in the batch. Defaults to True.
+        Returns:
+            torch.Tensor: Float tensor of shape (P, N) on the same device as `images`, containing the
+                standardized reward for each image.
+        Raises:
+            AssertionError: If B % `self.n_image_per_prompt` != 0 or if CLIP model/processor are not initialized.
+            RuntimeError: Propagated from underlying model/processor during tokenization or forward pass.
+        Notes:
+            - Inference is batched with an upper bound of B images per forward call.
+            - Standard deviation uses unbiased=False and is clamped with a minimum of 1e-6 to avoid
+              division by zero.
+        """
         assert self.clip_model is not None, "Clip model is not initialized"
         assert self.clip_processor is not None, "Clip processor is not initialized"
         device = next(self.clip_model.parameters()).device
@@ -459,6 +476,28 @@ class PrefGRPORewardModel(RewardModel):
         context: list[str],
         advantage_per_prompt: bool = True,
     ) -> Float[Tensor, "batch"]:
+        """
+        Compute per-image standardized rewards from pairwise preference judgments within each prompt group.
+        Args:
+            images (torch.Tensor): Float tensor of shape (B, C, H, W) containing a batch of images.
+            context (list[str]): A list of length B with the textual context (e.g., prompt) for each
+                image.
+            advantage_per_prompt (bool, optional): If True, compute a per-prompt z-score (mean/std computed
+                across the images within each prompt). If False, compute a global z-score across all images
+                in the batch. Defaults to True.
+        Returns:
+            torch.Tensor: Float tensor of shape (B,) on the same device as `images`, containing the
+                standardized reward for each image.
+        Raises:
+            AssertionError: If B % `self.n_image_per_prompt` != 0.
+            RuntimeError: Propagated from underlying model/processor during tokenization or generation.
+            ValueError: Propagated from parsing/aggregation if model outputs cannot be interpreted.
+        Notes:
+            - This method reshapes the input batch into P prompts of N images each, where
+              N=`self.n_image_per_prompt` and P=B/N.
+            - Rewards are computed by combining pairwise preference judgments and optional CLIP
+              cosine similarities, followed by z-scoring either per prompt or globally.
+        """
         B, C, H, W = images.shape
         assert self.n_image_per_prompt is not None, "n_image_per_prompt must be set before calling forward()"
         assert B % self.n_image_per_prompt == 0, (

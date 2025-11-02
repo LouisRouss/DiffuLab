@@ -118,6 +118,27 @@ class GRPOTrainer(Trainer):
         self.eps = eps
 
     def repeat_batch(self, batch: BatchDataGRPO, n_repeat: int) -> BatchData:
+        """
+        Repeat a GRPO batch n_repeat times along the batch dimension.
+
+        This is used to expand each prompt into multiple samples (e.g., n_image_per_prompt)
+        while keeping per-prompt metadata aligned. Supports Tensor and list fields in
+        model_inputs and extra. Floats in model_inputs are kept unchanged, and None in extra
+        are preserved.
+
+        Args:
+            batch (BatchDataGRPO): Input batch with keys:
+                - model_inputs: dict of tensors/lists used by the denoiser.
+                - extra: dict containing auxiliary fields (e.g., 'captions' for rewards).
+            n_repeat (int): Number of repetitions per original item. Must be > 0.
+
+        Returns:
+            BatchData: A batch where each original item is repeated n_repeat times.
+
+        Raises:
+            AssertionError: If n_repeat <= 0 or 'extra' is missing from the batch.
+            ValueError: If an unsupported type is encountered in model_inputs or extra.
+        """
         assert n_repeat > 0, "n_repeat must be a positive integer."
         assert "extra" in batch, "extra field must be present in the batch for GRPO (captions for the)."
 
@@ -153,6 +174,30 @@ class GRPOTrainer(Trainer):
         image_resolution: tuple[int, int],
         guidance_scale: float = 0,
     ) -> tuple[BatchData, SamplingOutput]:
+        """
+        Generate samples for GRPO by repeating the batch and calling the diffuser.
+
+        The method:
+        - Ensures an input noise tensor is present (or samples one deterministically per prompt).
+        - Repeats the batch n_image_per_prompt times.
+        - Calls diffuser.generate in mini-batches of the original batch size.
+        - Concatenates SamplingOutput fields across repeats.
+
+        Args:
+            diffuser (Diffuser): Diffusion/flow wrapper providing generate().
+            batch (BatchDataGRPO): Original batch with model_inputs and extra (e.g., captions).
+            n_image_per_prompt (int): Number of samples to produce per prompt.
+            image_resolution (tuple[int, int]): Target (H, W) for sampling.
+            guidance_scale (float, optional): Guidance scale for generation. Defaults to 0.
+
+        Returns:
+            tuple[BatchData, SamplingOutput]:
+                - repeated_batch: The batch repeated n_image_per_prompt times.
+                - samples: SamplingOutput with concatenated results for all repeats.
+
+        Raises:
+            AssertionError: If no samples are produced.
+        """
         original_batch_size = batch["model_inputs"]["context"].shape[0]
 
         if diffuser.vision_tower:
@@ -219,6 +264,32 @@ class GRPOTrainer(Trainer):
         ema_denoiser: EMA | None = None,
         guidance_scale: float = 0,
     ):
+        """
+        Perform a single GRPO training step.
+
+        The method:
+        - Samples n_image_per_prompt images per prompt with diffuser.generate.
+        - Computes per-sample advantages via the reward_model.
+        - Computes GRPO loss via diffuser.compute_loss(grpo=True, grpo_args=...).
+        - Backpropagates and steps the optimizer (and scheduler if per-batch).
+        - Optionally updates EMA.
+
+        Args:
+            diffuser (Diffuser): Diffusion/flow wrapper used for sampling and loss computation.
+            optimizer (Optimizer): Optimizer for model updates.
+            batch (BatchDataGRPO): Training batch with model_inputs and extra['captions'].
+            tracker (AverageMeter): Metric tracker updated with train/* losses.
+            reward_model (RewardModel): Callable that maps images and context to advantages.
+            n_image_per_prompt (int): Number of generated images per prompt.
+            image_resolution (tuple[int, int]): Sampling resolution (H, W).
+            scheduler (LRScheduler | None, optional): Learning rate scheduler. Defaults to None.
+            per_batch_scheduler (bool, optional): Step scheduler after each batch. Defaults to False.
+            ema_denoiser (EMA | None, optional): EMA wrapper for the denoiser. Defaults to None.
+            guidance_scale (float, optional): Guidance scale used during sampling. Defaults to 0.
+
+        Returns:
+            None
+        """
         optimizer.zero_grad()
         original_batch_size = batch["model_inputs"]["context"].shape[0]
         repeated_batch, samples = self.sample_model(
@@ -281,6 +352,26 @@ class GRPOTrainer(Trainer):
         image_resolution: tuple[int, int],
         guidance_scale: float = 4.0,
     ):
+        """
+        Perform a validation step for GRPO.
+
+        The method:
+        - Generates n_image_per_prompt samples per prompt.
+        - Computes advantages with the reward model.
+        - Computes GRPO losses for logging (no grads).
+
+        Args:
+            diffuser (Diffuser): Diffusion/flow wrapper used for sampling and loss computation.
+            batch (BatchDataGRPO): Validation batch with model_inputs and extra['captions'].
+            tracker (AverageMeter): Metric tracker updated with val/* losses.
+            reward_model (RewardModel): Callable that maps images and context to advantages.
+            n_image_per_prompt (int): Number of generated images per prompt.
+            image_resolution (tuple[int, int]): Sampling resolution (H, W).
+            guidance_scale (float, optional): Guidance scale used during sampling. Defaults to 4.0.
+
+        Returns:
+            None
+        """
         original_batch_size = batch["model_inputs"]["context"].shape[0]
         repeated_batch, samples = self.sample_model(
             diffuser,
@@ -340,6 +431,40 @@ class GRPOTrainer(Trainer):
         guidance_scale: float = 4.0,
         image_resolution: tuple[int, int] = (512, 512),
     ):
+        """
+        Main training loop for GRPO alignment training.
+
+        This orchestrates GRPO training with distributed/mixed precision support, gradient
+        accumulation, optional EMA, periodic validation, image logging, and checkpointing.
+
+        Args:
+            diffuser (Diffuser): Diffusion/flow wrapper. Must have a context embedder in the denoiser.
+            reward_model (RewardModel): Callable producing per-sample advantages from images and context.
+            optimizer (Optimizer): Optimizer for parameter updates.
+            train_dataloader (Iterable[BatchDataGRPO]): Training data iterator yielding GRPO batches.
+            val_dataloader (Iterable[BatchDataGRPO] | None, optional): Validation iterator. Defaults to None.
+            scheduler (LRScheduler | None, optional): LR scheduler. Prepared with accelerator if provided.
+            per_batch_scheduler (bool, optional): Step scheduler after each batch instead of each epoch.
+                Defaults to False.
+            log_validation_images (bool, optional): Generate and log images during validation. Defaults to True.
+            val_steps (int, optional): Number of sampler steps for validation image generation. Defaults to 25.
+            optimizer_ckpt (str | None, optional): Path to optimizer state to resume. Defaults to None.
+            denoiser_ckpt (str | None, optional): Path to denoiser weights to load. Defaults to None.
+            ema_ckpt (str | None, optional): Path to EMA model weights to load. Defaults to None.
+            epoch_start (int, optional): Starting epoch index for resuming. Defaults to 0.
+            n_image_per_prompt (int, optional): Number of generated images per prompt for GRPO. Defaults to 16.
+            guidance_scale (float, optional): Guidance scale during sampling (train/val). Defaults to 4.0.
+            image_resolution (tuple[int, int], optional): Sampling resolution (H, W). Defaults to (512, 512).
+
+        Returns:
+            None
+
+        Notes:
+            - Freezes the denoiser's context_embedder parameters during GRPO (required for alignment).
+            - If EMA is enabled, validation can run on the EMA model and best checkpoints are saved
+              when validation loss improves.
+            - Uses Hugging Face Accelerate for preparation, device placement, mixed precision, and logging.
+        """
         assert diffuser.denoiser.context_embedder is not None, (
             "Alignment training requires a context embedder in the denoiser model."
         )

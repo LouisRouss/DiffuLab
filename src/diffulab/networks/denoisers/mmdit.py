@@ -476,7 +476,51 @@ class ModulatedLastLayer(nn.Module):
 
 class MMDiT(Denoiser):
     """
-    architecture following https://arxiv.org/pdf/2403.03206
+    Multimodal DiT architecture following https://arxiv.org/pdf/2403.03206
+
+    This module implements a DiT-style transformer that can run in two modes:
+    - simple_dit=True: a single-stream DiT with label conditioning only (no multimodal context).
+    - simple_dit=False: an MMDiT with self attention with contextual tokens from a `context_embedder`.
+
+    In both modes the input image is patchified with a convolutional projection, processed by a stack
+    of DiT/MMDiT blocks, then projected back to per-patch predictions and finally unpatchified to
+    the image space via a modulation-aware last layer.
+
+    Args:
+        simple_dit (bool): If True, use DiT blocks with class-label conditioning only (no context
+            or cross-attention). If False, use MMDiT blocks with cross-attention to contextual tokens
+            produced by `context_embedder`. Default: False.
+        input_channels (int): Number of channels of the main input x. Default: 3.
+        output_channels (int | None): Number of channels to predict. If None, equals `input_channels`.
+            Default: None.
+        input_dim (int): Token/patch embedding width for the image stream. Also the hidden size used
+            before the final per-patch projection. Default: 4096.
+        hidden_dim (int): Inner attention dimension for attention projections. Default: 4096.
+        embedding_dim (int): Conditioning embedding width (for timestep/labels/pooled context) used
+            by modulation layers and the last prediction layer. Default: 4096.
+        num_heads (int): Number of attention heads in each block. Default: 16.
+        mlp_ratio (int): Expansion ratio for the MLP in each block. Default: 4.
+        patch_size (int): Side length P of square patches. Images are projected with stride P. Default: 16.
+        depth (int): Number of DiT/MMDiT blocks. Default: 38.
+        context_dim (int): Model width for contextual tokens after `context_embed` when
+            `simple_dit=False`. Ignored when `simple_dit=True`. Default: 4096.
+        partial_rotary_factor (float): Fraction of each head dimension using RoPE.
+            1.0 means full rotary. Default: 1.0.
+        frequency_embedding (int): Size of the Fourier timestep embedding before the time MLP.
+            Default: 256.
+        n_classes (int | None): Number of classes for label conditioning in `simple_dit` mode.
+            Required to use classifier-free guidance with labels. Must be None when using
+            a `context_embedder`. Default: None.
+        classifier_free (bool): Enables classifier-free guidance. In `simple_dit`, it applies to
+            dropped labels; in MMDiT mode, it is forwarded to the context embedder which may drop
+            context. Default: False.
+        context_embedder (ContextEmbedder | None): When `simple_dit=False`, a module returning
+            `ContextEmbedderOutput`. Must be provided for text/image conditioning and must be None
+            when `simple_dit=True`. If the embedder returns pooled and token embeddings
+            (`n_output == 2`), pooled features are fused into the timestep embedding via an MLP.
+            Default: None.
+        use_checkpoint (bool): Enable torch.utils.checkpoint in blocks to trade compute for memory.
+            Default: False.
     """
 
     def __init__(

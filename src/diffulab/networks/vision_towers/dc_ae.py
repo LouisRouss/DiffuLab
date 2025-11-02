@@ -43,6 +43,7 @@ class DCAE(VisionTower):
         Returns:
             Tensor: Encoded representation of the input tensor.
         """
+        x = x.float()
         x_min = x.min().item()
         x_max = x.max().item()
 

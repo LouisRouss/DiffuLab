@@ -24,12 +24,20 @@ class Diffuser:
                 - "rectified_flow": Flow-based diffusion model.
                 - "gaussian_diffusion": Gaussian diffusion model.
         n_steps (int, optional): Number of diffusion steps. Defaults to 1000.
+        vision_tower (VisionTower | None, optional): Vision tower for latent diffusion.
+            If provided, the diffuser will operate in the latent space defined by the vision tower.
+            Defaults to None.
         extra_args (dict[str, Any], optional): Additional arguments to pass to the diffusion model. Defaults to {}.
+        extra_losses (list[LossFunction], optional): Additional loss functions to compute during training.
+            Defaults to [].
 
     Attributes:
         model_type (str): Type of diffusion model used.
         denoiser (Denoiser): The neural network model used for denoising.
         n_steps (int): Number of diffusion steps.
+        vision_tower (VisionTower | None): Vision tower for latent diffusion.
+        extra_losses (list[LossFunction]): Additional loss functions for training.
+        latent_scale (float): Scale factor for the latent space when using a vision tower.
         diffusion (Diffusion): The diffusion model implementation.
 
     Methods:
@@ -115,6 +123,8 @@ class Diffuser:
             noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
             extra_args (dict[str, Any], optional): Additional arguments for the additional losses computation.
+            grpo (bool, optional): Whether to compute the GRPO loss. Defaults to False.
+            grpo_args (dict[str, Any], optional): Additional arguments for GRPO loss computation
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
@@ -122,11 +132,11 @@ class Diffuser:
             assert isinstance(self.diffusion, Flow), "GRPO loss computation is only available for Flow-based models"
             return self.diffusion.compute_loss_grpo(
                 self.denoiser,
-                model_inputs,  # type: ignore[reportArgumentType]
+                model_inputs,
                 **grpo_args,
             )
         assert timesteps is not None, "timesteps must be provided for loss computation"
-        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)  # type: ignore[reportArgumentType]
+        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         """
@@ -141,7 +151,7 @@ class Diffuser:
             ```
             diffuser = Diffuser(denoiser, sampling_method="ddpm", n_steps=1000)
             # Later, change to use fewer steps for faster sampling
-            diffuser.set_steps(100, schedule="ddim")
+            diffuser.set_steps(100, schedule="linear")
             ```
         """
         self.diffusion.set_steps(n_steps, schedule=schedule)
@@ -169,9 +179,13 @@ class Diffuser:
                 this shape should correspond to the latent space shape.
                 Required if 'x' is not in model_inputs. Defaults to None.
             use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
+            clamp_x (bool, optional): Whether to clamp the tensor generated to [-1, 1] range (before eventual decoding).
+                Defaults to False.
             guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
+            sampler_args (dict[str, Any], optional): Additional arguments to pass to the sampler. Defaults to {}.
+            return_intermediates (bool, optional): Whether to return intermediate samples and extra sampler output
+                during the denoising process (mean, std etc...). Defaults to False.
             return_latents (bool, optional): Whether to return the latent representation when using a
                 vision tower instead of decoded data. Defaults to False.
         Returns:
