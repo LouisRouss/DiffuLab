@@ -500,6 +500,7 @@ class MMDiT(Denoiser):
         self.n_classes = n_classes
         self.classifier_free = classifier_free
 
+        self.label_embed: LabelEmbed | None = None
         if not self.simple_dit:
             assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
             assert self.context_embedder.n_output == 2, "for MMDiT context embedder should provide 2 embeddings"
@@ -513,9 +514,8 @@ class MMDiT(Denoiser):
             )
             self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
         else:
-            self.label_embed = (
-                LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
-            )
+            if self.n_classes is not None:
+                self.label_embed = LabelEmbed(self.n_classes, embedding_dim, self.classifier_free)
 
         self.last_layer = ModulatedLastLayer(
             embedding_dim=embedding_dim,
@@ -623,14 +623,14 @@ class MMDiT(Denoiser):
         # Pass through each layer sequentially
         for layer in self.layers:
             x, context = layer(x, context_pooled, context)
-            if features:
+            if features is not None:
                 features.append(x)
 
         x = self.last_layer(x, context_pooled)
-        if features:
+        if features is not None:
             features.append(x)
         model_output: ModelOutput = {"x": x}
-        if features:
+        if features is not None:
             model_output["features"] = features
         return model_output
 
@@ -655,14 +655,14 @@ class MMDiT(Denoiser):
         # Pass through each layer sequentially
         for layer in self.layers:
             x = layer(x, emb)
-            if features:
+            if features is not None:
                 features.append(x)
 
         x = self.last_layer(x, emb)
-        if features:
+        if features is not None:
             features.append(x)
         model_output: ModelOutput = {"x": x}
-        if features:
+        if features is not None:
             model_output["features"] = features
         return model_output
 

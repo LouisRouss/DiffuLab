@@ -297,9 +297,9 @@ class AttentionBlock(ContextBlock):
         context_len = k.shape[-1]
 
         # reshape for multi-head attention
-        q = q.view(b * self.num_heads, self.dim_head, x_len)
-        k = k.view(b * self.num_heads, self.dim_head, context_len)
-        v = v.view(b * self.num_heads, self.dim_head, context_len)
+        q = q.reshape(b * self.num_heads, self.dim_head, x_len)
+        k = k.reshape(b * self.num_heads, self.dim_head, context_len)
+        v = v.reshape(b * self.num_heads, self.dim_head, context_len)
 
         dots = torch.einsum("bct,bcs->bts", q * self.scale, k * self.scale)  # (b*h, x_len, context_len)
         attn = self.attend(dots.float()).type(dots.dtype)
@@ -374,7 +374,6 @@ class UNetModel(Denoiser):
         label_embed (LabelEmbed | None): Label embedding module (if class-conditional).
         context_embedder (ContextEmbedder | None): External context conditioning module.
         classifier_free (bool): Whether classifier-free guidance is enabled for labels.
-        dtype (torch.dtype): Chosen compute dtype (bfloat16 or float32).
         input_blocks (nn.ModuleList): Encoder path (with optional attention + downsampling).
         middle_block (EmbedSequential): Bottleneck block (res-attn-res).
         output_blocks (nn.ModuleList): Decoder path (skip connections + optional attention + upsampling).
@@ -450,7 +449,6 @@ class UNetModel(Denoiser):
         channel_mult: str = "1, 2, 4, 8",
         conv_resample: bool = True,
         use_checkpoint: bool = False,
-        use_fp16: bool = False,
         num_heads: int = 1,
         use_scale_shift_norm: bool = False,
         resblock_updown: bool = False,
@@ -477,7 +475,6 @@ class UNetModel(Denoiser):
         self.channel_mult: list[int] = eval(f"[{channel_mult}]")
         self.conv_resample = conv_resample
         self.use_checkpoint = use_checkpoint
-        self.dtype = torch.bfloat16 if use_fp16 else torch.float32
         self.num_heads = num_heads
         self.context_embedder = context_embedder
         self.classifier_free = classifier_free
@@ -714,10 +711,10 @@ class UNetModel(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
         if self.context_embedder is not None:
-            context = self.context_embedder(context, p)
+            context = self.context_embedder(context, p)[0]
         if x_context is not None:
             x = torch.cat([x, x_context], dim=1)
-        h = x.type(self.dtype)
+        h = x
         for module in self.input_blocks:
             h: Tensor = module(h, emb=emb, context=context)
             hs.append(h)
