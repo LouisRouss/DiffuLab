@@ -178,7 +178,44 @@ class TransformerBlock(nn.Module):
 
 class RAEDecoder(nn.Module):
     """
-    ViT decoder for SSL based encoders. Uses MAE logic during training.
+    Transformer-based image decoder for ViT-style self-supervised encoders.
+
+    This module reconstructs an image from a sequence of patch tokens produced by a
+    frozen vision encoder (e.g., DINOv3 ViT). It first linearly projects encoder
+    embeddings to the decoder width, prepends a learned [CLS] token, applies a stack
+    of Transformer blocks with rotary positional embeddings, and finally maps each
+    token to a patch vector that is unpatchified into the output image.
+
+    Notes:
+        The spatial size of the reconstructed image must be divisible by `patch_size`.
+
+    Args:
+        out_size (tuple[int, int]): Spatial size (H, W) of the reconstructed image.
+        out_channels (int): Number of output channels (e.g., 3 for RGB).
+        encoder_dim (int): Channel dimension of encoder tokens (input to the decoder).
+        input_dim (int): Internal decoder width (embedding size after projection).
+        hidden_dim (int): Attention inner dimension for multi-head attention.
+        num_heads (int): Number of attention heads.
+        mlp_ratio (int): Expansion ratio for the MLP inside each Transformer block.
+        patch_size (int): Patch size used by the encoder; also drives unpatchify.
+        depth (int): Number of Transformer blocks in the decoder.
+        partial_rotary_factor (float): Fraction of head dimension using rotary embeddings.
+        use_checkpoint (bool): Enable gradient checkpointing inside blocks.
+        dropout_attn (float): Dropout applied in attention.
+        dropout_mlp (float): Dropout applied in MLP.
+
+    Attributes:
+        input_proj (nn.Linear): Projects encoder_dim -> input_dim.
+        layers (nn.ModuleList[TransformerBlock]): Transformer stack.
+        last_layer (nn.Sequential): LayerNorm + Linear to patch vectors (p*p*C).
+        cls_token (nn.Parameter): Learned [CLS] token prepended to the sequence.
+        patch_size (int): Patch size used for unpatchify.
+        out_size (tuple[int, int]): Target reconstruction size (H, W).
+        out_channels (int): Number of output channels.
+
+    Typical usage:
+        z = encoder_tokens  # (B, N, encoder_dim)
+        x_recon = decoder(z)  # (B, C, H, W)
     """
 
     def __init__(
@@ -269,6 +306,49 @@ class RAEDecoder(nn.Module):
 
 
 class RAE(VisionTower):
+    """
+    Reconstruction Auto-Encoder built from a frozen DINOv3 ViT encoder and a
+    Transformer decoder.
+
+    The encoder is loaded from Hugging Face Transformers and kept frozen in eval
+    mode. Inputs are preprocessed with the corresponding `AutoImageProcessor` and
+    encoded into a sequence of patch embeddings. The decoder then reconstructs the
+    image from those tokens.
+
+    Pipeline:
+        1) preprocess(x): Accepts a tensor in [0,1] or [0,255], converts to PIL,
+           runs the DINOv3 image processor (no resize), and moves data to the
+           encoder device.
+        2) encode(x): Runs the ViT encoder and returns patch tokens, excluding the
+           CLS token and any register tokens.
+        3) decode(z): Uses `RAEDecoder` to reconstruct the image from tokens.
+        4) forward(x): Convenience wrapper calling encode -> decode.
+
+    Args:
+        decoder (RAEDecoder | None): Optional decoder instance. If None,
+            `decoder_config` must be provided to construct one.
+        decoder_config (dict[str, Any] | None): Keyword args for `RAEDecoder`
+            when `decoder` is not provided.
+        dinov3_id (str): Model identifier for the DINOv3 ViT on Hugging Face
+            (e.g., "facebook/dinov3-vith16plus-pretrain-lvd1689m").
+
+    Properties:
+        latent_channels (int): Encoder hidden size (channel dimension of tokens).
+        patch_size (int): Patch size used by the encoder.
+
+    Methods:
+        preprocess(x): Prepares inputs for the encoder. Raises ValueError if the
+            value range is not [0,1] or [0,255].
+        encode(x): Returns token embeddings with CLS and register tokens removed.
+        decode(z): Reconstructs an image from token embeddings.
+        forward(x): End-to-end reconstruction.
+
+    Notes:
+        - The encoder parameters are frozen and set to eval mode.
+        - Device placement uses `device_map="auto"` when loading the encoder.
+        - The decoder output spatial size is controlled by `decoder.out_size`.
+    """
+
     def __init__(
         self,
         decoder: RAEDecoder | None = None,
