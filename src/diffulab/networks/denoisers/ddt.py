@@ -31,14 +31,53 @@ class ModulatedLastLayerDDT(nn.Module):
         self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size seq_len dim"]
     ) -> Tensor:
         alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=-1)
-        x = modulate(self.norm_final(x), scale=alpha[:, :], shift=beta[:, :])
+        x = modulate(self.norm_final(x), scale=alpha, shift=beta)
         x = self.linear(x)
         return x
 
 
 class DDT(Denoiser):
     """
-    architecture following https://arxiv.org/pdf/2504.05741
+    Decoder-Encoder architecture following https://arxiv.org/pdf/2504.05741
+
+    This module implements a dual-stream DDT: an encoder stream that consumes the noisy input
+    (and optional context) and a lightweight decoder stream conditioned on the encoder output
+    and timestep. It reuses DiT/MMDiT blocks and supports both label-only and multimodal conditioning.
+
+    Args:
+        simple_ddt (bool): If True, uses a DiT-style encoder with class-label conditioning only
+            (no multimodal context). If False, uses an MMDiT-style encoder. Default: False.
+        input_channels (int): Number of channels of the main input x. Default: 3.
+        output_channels (int | None): Number of channels to predict. If None, equals
+            `input_channels`. Default: None.
+        input_dim (int): Token/patch embedding width for both encoder and decoder streams.
+            Also used as the hidden size of the last prediction layer. Default: 768.
+        hidden_dim (int): Inner attention dimension used by DiT/MMDiT attention blocks.
+            Default: 768.
+        num_heads (int): Number of attention heads in each block. Default: 12.
+        mlp_ratio (int): Expansion ratio for the MLP in each block. Default: 4.
+        patch_size (int): Side length P of square patches. Images are projected with stride P
+            in both encoder and decoder streams. Default: 16.
+        context_dim (int): Model width of contextual tokens after `context_embed` when
+            `simple_ddt=False`. Ignored when `simple_ddt=True`. Default: 1024.
+        encoder_depth (int): Number of DiT/MMDiT blocks in the encoder. Default: 8.
+        decoder_depth (int): Number of DiT blocks in the decoder. Default: 4.
+        partial_rotary_factor (float): Fraction of each head dimension using RoPE.
+            1.0 means full rotary. Default: 1.0.
+        frequency_embedding (int): Size of the Fourier timestep embedding before the time MLP.
+            Default: 256.
+        n_classes (int | None): Number of classes for label conditioning in `simple_ddt` mode.
+            Required to use classifier-free guidance with labels. Default: None.
+        classifier_free (bool): Enables classifier-free guidance. In `simple_ddt`, it applies to
+            dropped labels; in MMDiT mode, it is forwarded to the context embedder which may drop
+            context. Default: False.
+        context_embedder (ContextEmbedder | None): When `simple_ddt=False`, a module returning
+            `ContextEmbedderOutput`. Must be provided for text/image conditioning. Must be None
+            when `simple_ddt=True`. If the embedder returns pooled and token embeddings
+            (`n_output == 2`), pooled features are fused into the timestep embedding via an MLP.
+            Default: None.
+        use_checkpoint (bool): Enable torch.utils.checkpoint in blocks to trade compute for memory.
+            Default: False.
     """
 
     def __init__(

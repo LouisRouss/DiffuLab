@@ -52,7 +52,6 @@ def train(cfg: DictConfig):
         params=denoiser.parameters(),
     )
 
-    # TODO: add a run name for wandb
     trainer = BaseTrainer(
         n_epoch=cfg.trainer.n_epoch,
         gradient_accumulation_step=cfg.trainer.gradient_accumulation_step,
@@ -62,6 +61,10 @@ def train(cfg: DictConfig):
         ema_update_after_step=cfg.trainer.get("ema_update_after_step", 0),
         ema_update_every=cfg.trainer.get("ema_update_every", 10),
         run_config=OmegaConf.to_container(cfg, resolve=True),  # type: ignore[reportArgumentType]
+        compile=cfg.trainer.get("compile", False),
+        init_kwargs={
+            "wandb": cfg.trainer.get("wandb", {}),
+        },
     )
 
     trainer.train(

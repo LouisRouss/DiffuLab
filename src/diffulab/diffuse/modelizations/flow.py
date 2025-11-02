@@ -21,8 +21,7 @@ class Flow(Diffusion):
     transformation defined by a neural network.
     Args:
         n_steps (int, optional): Number of steps for the diffusion process. Defaults to 50.
-        sampling_method (str, optional): Method used for sampling. Currently only "euler"
-            is supported. Defaults to "euler".
+        sampling_method (str, optional): Method used for sampling. Defaults to "euler".
         schedule (str, optional): Schedule for time discretization. Currently only "linear"
             is supported. Defaults to "linear".
         latent_diffusion (bool, optional): Whether the diffusion operates in a latent space.
@@ -38,14 +37,14 @@ class Flow(Diffusion):
         bt(timesteps): Computes the "b(t)" coefficient for noise mixing.
         draw_timesteps(batch_size): Samples random timesteps for training.
         get_v(model, model_inputs, t_curr): Computes the velocity field at current time.
-        one_step_denoise(model, model_inputs, t_prev, t_curr, guidance_scale): Performs one step
+        one_step_denoise(model, model_inputs, t_prev, t_curr, guidance_scale, sampler_args): Performs one step
             of the reverse diffusion process.
-        compute_loss(model, model_inputs, timesteps, noise): Computes the loss for training.
+        compute_loss(model, model_inputs, timesteps, noise, extra_losses, extra_args): Computes the loss for training.
         compute_loss_grpo(model, model_inputs, sampling, advantages, kl_beta, eps, timestep_fraction, guidance_scale):
             Computes the GRPO loss for reinforcement learning.
         add_noise(x, timesteps, noise): Adds noise to the input according to the timesteps.
-        denoise(model, data_shape, model_inputs, use_tqdm, clamp_x, guidance_scale): Generates
-            samples by running the reverse diffusion process.
+        denoise(model, data_shape, model_inputs, use_tqdm, clamp_x, guidance_scale, sampler_args, return_intermediates):
+            Generates samples by running the reverse diffusion process.
     References:
         Lipman, Y., et al. (2022). "Flow Matching for Generative Modeling."
         https://arxiv.org/abs/2210.02747
@@ -151,7 +150,7 @@ class Flow(Diffusion):
             Tensor: A tensor of shape (batch_size,) containing timestep values in the range [0, 1].
                 If `logits_normal` is False, timesteps are drawn from a uniform distribution.
                 If `logits_normal` is True, timesteps are drawn from a sigmoid-transformed
-                normal distribution, which concentrates more samples near 0 and 1.
+                normal distribution which concentrates samples around 0.5.
         """
 
         if self.logits_normal:

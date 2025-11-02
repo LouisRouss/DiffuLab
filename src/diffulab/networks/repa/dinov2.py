@@ -71,7 +71,6 @@ class DinoV2(REPA):
         # ensure float
         x = x.float()
 
-        # detect range once (cheaper than calling .min()/.max() repeatedly)
         x_min = x.min().item()
         x_max = x.max().item()
 

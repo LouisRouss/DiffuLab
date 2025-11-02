@@ -100,7 +100,8 @@ class Diffusion(ABC):
             *args (Any): Additional positional arguments specific to the diffusion implementation.
             **kwargs (Any): Additional keyword arguments specific to the diffusion implementation.
         Returns:
-            Tensor: The updated data tensor after one step of denoising.
+            StepResult: An object containing the results of the denoising step, which may
+            include the updated data tensor and any intermediate values.
         Note:
             The specific implementation details, such as how the model prediction is used to
             update the state, depend on the concrete diffusion model subclass.
@@ -197,7 +198,7 @@ class Diffusion(ABC):
             return_intermediates (bool, optional): Whether to return intermediate results at each step.
                 Defaults to False.
         Returns:
-            SamplingOutput: A dictionary that may contain (depending on sampler and return_intermediate option)
+            SamplingOutput: A dictionary that may contain (depending on sampler and return_intermediates option)
             the following keys:
                 - x (Tensor): The final generated sample tensor.
                 - xt (Tensor, optional): If `return_intermediates` is True, a tensor of shape
@@ -237,7 +238,7 @@ class Diffusion(ABC):
         Note:
             Different diffusion model implementations may use different distributions
             for sampling timesteps. For example:
-            - Gaussian diffusion typically samples integers from [0, num_diffusion_steps-1]
+            - Discrete gaussian diffusion typically samples integers from [0, num_diffusion_steps-1]
             - Flow-based diffusion typically samples continuous values from [0, 1]
         """
         pass

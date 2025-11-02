@@ -328,6 +328,26 @@ class DDPM(GaussianSampler):
         return eps
 
     def step(self, model_prediction: Tensor, timesteps: Tensor, xt: Tensor, clamp_x: bool = False) -> StepResult:
+        """
+        Performs a single reverse diffusion step using the DDPM approach.
+        This method computes the posterior mean and variance based on the model's prediction
+        and the current noisy state. It then samples the previous state from the posterior distribution.
+        Additionally, it calculates the log probability of the transition for potential use in
+        likelihood estimation or other analyses.
+        Args:
+            model_prediction (Tensor): The raw output from the denoising model.
+            timesteps (Tensor): The current timestep indices as a tensor.
+            x (Tensor): The current noisy state at timestep t (x_t).
+            clamp_x (bool, optional): Whether to clamp the predicted x_start to [-1, 1] range
+                for numerical stability. Defaults to False.
+        Returns:
+            StepResult: A dictionary containing the results of the step, including:
+                - x_prev (Tensor): The updated state tensor at the previous timestep.
+                - estimated_x0 (Tensor, optional): Estimated original data.
+                - x_prev_mean (Tensor, optional): The mean of the posterior distribution.
+                - x_prev_std (Tensor, optional): The standard deviation of the posterior distribution.
+                - logprob (Tensor, optional): The log probability of the transition.
+        """
         mean, var, log_var, x_start = self._get_p_mean_var(model_prediction, xt, timesteps, clamp_x)
         x_prev = self._get_x_prev_from_mean_var(mean, log_var, timesteps)
 

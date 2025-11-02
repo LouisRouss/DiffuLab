@@ -299,7 +299,6 @@ class AttentionBlock(ContextBlock):
 
         q = self.to_q(self.norm_x(x))  # (b, inner_channels, x_len)
         k, v = self.to_kv(self.norm_context(context)).chunk(2, dim=1)  # (b, inner_channels, context_len) each
-        x_len = x.shape[-1]
 
         q, k, v = (
             rearrange(q, "b (h d) n -> b h n d", h=self.num_heads),
@@ -318,8 +317,7 @@ class AttentionBlock(ContextBlock):
             scale=self.scale,
             attn_mask=attn_mask,
         )
-
-        out = out.reshape(b, -1, x_len)  # (b, inner_channels, x_len)
+        out = rearrange(out, "b h n d -> b (h d) n")
         out = self.to_out(out)
         return (x + out).reshape(b, c, *spatial)
 
@@ -468,127 +466,66 @@ class TransformerBlock(ContextBlock):
 
 class UNetModel(Denoiser):
     """
-    A UNet-based denoising network with residual, attention, and optional class/context conditioning,
-    inspired by OpenAI's guided-diffusion implementation (MIT license, referenced 2024-08-18).
+    U-Net denoiser with optional class-label and/or multimodal context conditioning.
 
-    The architecture consists of:
-    - Input convolution followed by a sequence of residual blocks (with optional attention) and
-        downsampling operations.
-    - A middle block combining residual + attention + residual structure.
-    - A symmetric decoding path with skip connections, residual blocks (with optional attention),
-        and upsampling.
-    - Final normalization + SiLU + zero-initialized convolution for stable training.
+    This model is a configurable U-Net backbone with:
+      - timestep embeddings added via ResBlocks (FiLM-style optional scale/shift),
+      - optional class-label conditioning for classifier-free guidance,
+      - optional cross-attention conditioning via a ContextEmbedder (Transformer blocks),
+      - optional gradient checkpointing for reduced memory usage.
 
-    Supports:
-    - Class conditioning via learned label embeddings (optional classifier-free guidance).
-    - Arbitrary external context (e.g. text/image) via a user-provided ContextEmbedder.
-    - Optional concatenation of auxiliary image-like conditioning input (x_context).
-    - Attention at user-specified resolutions.
-    - Optional scale–shift normalization (FiLM-like).
-    - Optional residual up/downsampling blocks instead of plain (up/down)sample layers.
-    - Mixed precision (bfloat16) compute path.
+    The spatial encoder-decoder is organized into stages specified by `channel_mult` and
+    `num_res_blocks`, with attention (self-attn or cross-attn) inserted at resolutions
+    defined in `attention_resolutions`. If a `context_embedder` is provided (n_output=1),
+    cross-attention is used; otherwise, self-attention is used.
 
     Args:
-        image_size (list[int]): Spatial size [H, W] expected for all inputs. Enforced at runtime.
-        in_channels (int): Number of channels in the noisy input tensor x. (If x_context is used,
-                the effective input channels become in_channels + x_context.channels.)
-        model_channels (int): Base channel width; channel multipliers expand from this.
-        out_channels (int): Number of channels in the model output (e.g., predicted noise or image).
-        num_res_blocks (int): Number of residual blocks at each resolution level (encoder side).
-        attention_resolutions (list[int]): Downsample factors (relative to input) at which to apply
-                self-attention (e.g., [4, 8]).
-        dropout (float, optional): Dropout probability inside residual blocks. Defaults to 0.
-        channel_mult (str, optional): Comma-separated multipliers per level (parsed via eval into
-                a list of ints). Defaults to "1, 2, 4, 8".
-        conv_resample (bool, optional): If True, learnable convolutional (up/down)sampling;
-                otherwise use nearest + conv or similar lightweight ops. Defaults to True.
-        use_checkpoint (bool, optional): Enables gradient checkpointing for memory efficiency
-                (slower compute). Defaults to False.
-        num_heads (int, optional): Number of attention heads in each AttentionBlock. Defaults to 1.
-        use_scale_shift_norm (bool, optional): Enables scale–shift (FiLM-like) conditioning inside
-                residual blocks. Defaults to False.
-        resblock_updown (bool, optional): If True, use residual blocks with internal (up/down)sampling
-                instead of dedicated (Up/Down)sample modules. Defaults to False.
-        n_classes (int | None, optional): If provided, enables class-conditioning via LabelEmbed.
-                Mutually exclusive with context_embedder. Defaults to None.
-        classifier_free (bool, optional): If True and n_classes is set, label embeddings can be
-                probabilistically dropped during training for classifier-free guidance. Defaults to False.
-        context_embedder (ContextEmbedder | None, optional): Module that embeds arbitrary context
-                (e.g., text tokens, images). Mutually exclusive with n_classes. Defaults to None.
-
-    Attributes:
-        image_size (list[int]): Expected spatial shape of inputs.
-        in_channels (int): Base number of channels for the primary input tensor.
-        out_channels (int): Output channel count (predicted target).
-        model_channels (int): Base feature width before multipliers.
-        channel_mult (list[int]): Parsed channel multipliers per resolution stage.
-        time_embed_dim (int): Dimensionality of the sinusoidal + MLP time embedding.
-        time_embed (nn.Sequential): Two-layer MLP mapping time features to conditioning embedding.
-        label_embed (LabelEmbed | None): Label embedding module (if class-conditional).
-        context_embedder (ContextEmbedder | None): External context conditioning module.
-        classifier_free (bool): Whether classifier-free guidance is enabled for labels.
-        dtype (torch.dtype): Chosen compute dtype (bfloat16 or float32).
-        input_blocks (nn.ModuleList): Encoder path (with optional attention + downsampling).
-        middle_block (EmbedSequential): Bottleneck block (res-attn-res).
-        output_blocks (nn.ModuleList): Decoder path (skip connections + optional attention + upsampling).
-        out (nn.Sequential): Final projection layer producing the model output tensor.
-
-    Forward Args:
-        x (Tensor): Noisy input image tensor of shape (N, C, H, W); H, W must match image_size.
-        timesteps (Tensor): 1-D tensor of length N with integer or float diffusion timesteps.
-        y (Tensor | None, optional): Class label indices (N,) if class conditioning is enabled.
-                Required iff n_classes is not None.
-        context (Any | None, optional): Raw context data passed to context_embedder if present.
-                Required iff context_embedder is not None.
-        p (float, optional): Probability of dropping labels (classifier-free guidance). Only valid
-                if classifier_free is True and n_classes is set. Defaults to 0.0.
-        x_context (Tensor | None, optional): Additional image-like conditioning tensor concatenated
-                channel-wise with x (shape must be (N, C_ctx, H, W)). Defaults to None.
-
-    Forward Returns:
-        ModelOutput: A dictionary-like object with:
-                x (Tensor): The predicted output tensor of shape (N, out_channels, H, W).
-
-    Behavior:
-        - Timestep embeddings are generated via a sinusoidal embedding followed by an MLP.
-        - If class-conditional, label embeddings are added to the time embedding (with optional
-            dropout for classifier-free guidance).
-        - If context-conditional, the provided context is embedded and supplied to attention layers.
-        - The encoder stores intermediate feature maps for skip connections used in the decoder.
-        - Attention is selectively applied at resolutions whose downsample factors are in
-            attention_resolutions.
-        - The final conv is zero-initialized, encouraging the network to initially predict zeros
-            and stabilize training.
-
-    Raises:
-        AssertionError: If input spatial size mismatches image_size.
-        AssertionError: If label presence mismatches class-conditional configuration.
-        AssertionError: If context presence mismatches context-conditional configuration.
-        AssertionError: If p > 0 but classifier-free guidance is not properly enabled.
+        image_size (list[int]): Spatial size [H, W] the model expects. Inputs must match this
+            size at training/inference.
+        in_channels (int): Number of input channels consumed by the first convolution. If you
+            plan to provide `x_context` to forward (concatenated to x), set this to the
+            combined channel count (C + C_ctx) to avoid shape mismatch.
+        model_channels (int): Base channel width. Each level scales this by the factors in
+            `channel_mult`.
+        out_channels (int): Number of output channels predicted by the final conv head.
+        num_res_blocks (int): Number of residual blocks per resolution level (encoder and decoder).
+        attention_resolutions (list[int]): Downsampling factors at which to insert attention
+            blocks. The running downsample factor starts at 1 at the highest resolution,
+            doubles at each downsample, and halves on upsample. If the current factor `ds`
+            is in this list, an attention (or transformer) block is added at that stage.
+        dropout (float, default=0.0): Dropout probability used inside ResBlocks and attention FFNs.
+        channel_mult (str, default="1, 2, 4, 8"): Comma-separated multipliers determining the
+            channel width at each level: channels[level] = model_channels * channel_mult[level].
+        conv_resample (bool, default=True): If True, use convolutional up/downsampling ops
+            in the simple Upsample/Downsample paths.
+        use_checkpoint (bool, default=False): Enable torch.utils.checkpoint to trade compute
+            for reduced activation memory in supported blocks.
+        num_heads (int, default=1): Number of heads used by attention blocks.
+        use_scale_shift_norm (bool, default=False): If True, ResBlocks interpret the embedding MLP
+            output as (scale, shift) for FiLM-like modulation; otherwise the embedding is added.
+        resblock_updown (bool, default=False): If True, perform up/down sampling within ResBlocks
+            (learned, anti-aliased). If False, use separate Upsample/Downsample modules.
+        n_classes (int | None, default=None): Number of classes for class-conditional training. If
+            set, a label embedding is added to the timestep embedding in forward.
+        classifier_free (bool, default=False): Enable classifier-free guidance. When True, labels
+            can be randomly dropped with probability `p` during forward. Requires `n_classes` set.
+        context_embedder (ContextEmbedder | None, default=None): Optional embedder for external
+            conditioning (e.g., text). Must have `n_output == 1` and returns:
+              - embeddings: [B, C_ctx, L_ctx]
+              - attn_mask (optional): [B, L_ctx]
+            When provided, cross-attention Transformer blocks are used at attention stages.
+        transformer_depth (int, default=1): Number of stacked attention+MLP sub-blocks inside each
+            TransformerBlock inserted at attention resolutions.
 
     Notes:
-        - channel_mult is evaluated via Python eval; ensure trusted input.
-        - When both n_classes and context_embedder are provided (invalid), initialization fails.
-
-    Example:
-        ```python
-            model = UNetModel(
-                    image_size=[64, 64],
-                    in_channels=3,
-                    model_channels=128,
-                    out_channels=3,
-                    num_res_blocks=2,
-                    attention_resolutions=[4, 8],
-                    dropout=0.1,
-                    channel_mult="1, 2, 4",
-                    n_classes=10,
-                    classifier_free=True,
-            x = torch.randn(8, 3, 64, 64)
-            t = torch.randint(0, 1000, (8,))
-            labels = torch.randint(0, 10, (8,))
-            out = model(x, t, y=labels, p=0.1)
-            pred = out["x"]
-        ```
+        - Timestep embeddings are produced by `timestep_embedding(t, model_channels)` and
+          projected to `time_embed_dim = 4 * model_channels`.
+        - If `n_classes` is set, a LabelEmbed module adds label conditioning to the time embedding.
+        - With classifier-free guidance enabled, labels may be dropped in forward with probability `p`.
+        - If `context_embedder` is provided, it must have `n_output == 1`; its embeddings and
+          optional mask are fed to cross-attention Transformer blocks at configured resolutions.
+        - If you pass `x_context` to forward, ensure `in_channels` already accounts for those
+          extra channels (i.e., set `in_channels = C + C_ctx`).
     """
 
     def __init__(

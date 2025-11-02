@@ -62,10 +62,10 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 - [ ] add some more context embedders
 - [ ] add reflow algorithm
 - [ ] add EDM
-- [ ] think about how to add a sampler abstraction and use it in the different Diffusion classes (generalist class with euler, heuns etc)
+- [x] think about how to add a sampler abstraction and use it in the different Diffusion classes (generalist class with euler, heuns etc)
 - [ ] Train our models on toy datasets for different tasks (conditional generation, Image to Image ...)
 - [ ] Add possibility to train LORA/DORA
-- [ ] add different sampler
+- [x] add different sampler
 - [ ] Try out Differential Transformers
 - [ ] Check to add https://arxiv.org/pdf/2406.02507
 - [ ] inject lessons learned from nvidia https://developer.nvidia.com/blog/rethinking-how-to-train-diffusion-models/

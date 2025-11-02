@@ -24,12 +24,20 @@ class Diffuser:
                 - "rectified_flow": Flow-based diffusion model.
                 - "gaussian_diffusion": Gaussian diffusion model.
         n_steps (int, optional): Number of diffusion steps. Defaults to 1000.
+        vision_tower (VisionTower | None, optional): Vision tower for latent diffusion.
+            If provided, the diffuser will operate in the latent space defined by the vision tower.
+            Defaults to None.
         extra_args (dict[str, Any], optional): Additional arguments to pass to the diffusion model. Defaults to {}.
+        extra_losses (list[LossFunction], optional): Additional loss functions to compute during training.
+            Defaults to [].
 
     Attributes:
         model_type (str): Type of diffusion model used.
         denoiser (Denoiser): The neural network model used for denoising.
         n_steps (int): Number of diffusion steps.
+        vision_tower (VisionTower | None): Vision tower for latent diffusion.
+        extra_losses (list[LossFunction]): Additional loss functions for training.
+        latent_scale (float): Scale factor for the latent space when using a vision tower.
         diffusion (Diffusion): The diffusion model implementation.
 
     Methods:
@@ -124,11 +132,11 @@ class Diffuser:
             assert isinstance(self.diffusion, Flow), "GRPO loss computation is only available for Flow-based models"
             return self.diffusion.compute_loss_grpo(
                 self.denoiser,
-                model_inputs,  # type: ignore[reportArgumentType]
+                model_inputs,
                 **grpo_args,
             )
         assert timesteps is not None, "timesteps must be provided for loss computation"
-        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)  # type: ignore[reportArgumentType]
+        return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         """
