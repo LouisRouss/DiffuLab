@@ -53,8 +53,9 @@ class ResidualBlock(nn.Module):
         return (self.fn(x).add(x)).mul_(self.ratio)
 
 
-class RAEDiscriminator:
+class RAEDiscriminator(nn.Module):
     def __init__(self, model_name: str = "facebook/dino-vits8", features_depth: list[int] = [2, 5, 8, 11]):
+        super().__init__()  # type: ignore
         self.image_processor: ViTImageProcessor = ViTImageProcessor.from_pretrained(model_name, do_rescale=False)  # type: ignore
         self.dino_model: ViTModel = ViTModel.from_pretrained(model_name, add_pooling_layer=False)  # type: ignore
         self.features_depth = features_depth
