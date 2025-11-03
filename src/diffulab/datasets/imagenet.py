@@ -8,6 +8,58 @@ from torch.utils.data import Dataset
 from diffulab.datasets.base import BatchData
 
 
+class ImageNet(Dataset[BatchData]):
+    def __init__(
+        self,
+        data_path: str,
+        local: bool = True,
+        batch_size: int = 64,
+        split: str = "train",
+    ) -> None:
+        """Initialize the ImageNet dataset.
+
+        Args:
+            data_path: Path to the dataset leading to MDS shard files
+            local: Whether to use local files or remote files
+            batch_size: Batch size for optimized streaming dataset and future data loading
+            split: Dataset split to use (train, val, test)
+        """
+        super().__init__()
+        self.data_path = Path(data_path)
+        self.dataset = StreamingDataset(
+            remote=self.data_path.as_posix() if not local else None,
+            local=self.data_path.as_posix() if local else None,
+            batch_size=batch_size,
+            split=split,
+        )
+        self.transform = transforms.ToTensor()
+
+    def __len__(self) -> int:
+        """Return the number of samples in the dataset."""
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> BatchData:
+        """Get a sample from the dataset.
+        Args:
+            idx: Index of the sample to retrieve
+        Returns:
+            BatchData: A dictionary containing model inputs
+        """
+        sample = self.dataset[idx]
+        assert "x" in sample, "Batch must contain 'x' key"
+        assert "y" in sample, "Batch must contain 'y' key"
+
+        x = self.transform(sample["x"])
+        y = torch.tensor(sample["y"], dtype=torch.long)
+
+        batch_data: BatchData = {
+            "model_inputs": {"x": x, "y": y},
+            "extra": {},
+        }
+
+        return batch_data
+
+
 class ImageNetLatentREPA(Dataset[BatchData]):
     """ImageNet dataset for diffusion models with latent and DINOv2 features."""
 
