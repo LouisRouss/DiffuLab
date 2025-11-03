@@ -201,12 +201,22 @@ class GRPOTrainer(Trainer):
         original_batch_size = batch["model_inputs"]["context"].shape[0]
 
         if diffuser.vision_tower:
-            data_shape = (
-                original_batch_size,
-                diffuser.vision_tower.latent_channels,
-                image_resolution[0] // diffuser.vision_tower.compression_factor,
-                image_resolution[1] // diffuser.vision_tower.compression_factor,
-            )
+            if diffuser.vision_tower.compression_factor is not None:
+                data_shape = (
+                    original_batch_size,
+                    diffuser.vision_tower.latent_channels,
+                    image_resolution[0] // diffuser.vision_tower.compression_factor,
+                    image_resolution[1] // diffuser.vision_tower.compression_factor,
+                )
+            else:
+                assert diffuser.vision_tower.patch_size is not None, (
+                    "Patch size must be defined for vision tower if no compression factor"
+                )
+                data_shape = (
+                    original_batch_size,
+                    image_resolution[0] * image_resolution[1] // (diffuser.vision_tower.patch_size**2),
+                    diffuser.vision_tower.latent_channels,
+                )
         else:
             data_shape = (
                 original_batch_size,
