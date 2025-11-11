@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import torch
@@ -261,6 +261,7 @@ class RAEDecoder(nn.Module):
         self.patch_size = patch_size
         self.out_size = out_size
         self.out_channels = out_channels
+        self.encoder_dim = encoder_dim
 
     def _init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
@@ -351,31 +352,37 @@ class RAE(VisionTower):
 
     def __init__(
         self,
-        decoder: RAEDecoder | None = None,
-        decoder_config: dict[str, Any] | None = None,
+        decoder: RAEDecoder,
         dinov3_id: str = "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+        load_encoder: bool = True,
+        encoder_patch_size: int | None = None,
     ) -> None:
         super().__init__()  # type: ignore
-        self.processor = cast("DINOv3ViTImageProcessorFast", AutoImageProcessor.from_pretrained(dinov3_id))  # type: ignore[reportUnknownMemberType]
-        self.encoder = cast(
-            "DINOv3ViTModel",
-            AutoModel.from_pretrained(  # type: ignore[reportUnknownMemberType]
-                dinov3_id,
-                device_map="auto",
-            ),
-        )
-        self.encoder.eval()
-        for param in self.encoder.parameters():
-            param.requires_grad = False
+        assert load_encoder or encoder_patch_size, "If not loading the encoder, must provide encoder_patch_size"
+        self.load_encoder = load_encoder
+        self._patch_size = encoder_patch_size
+        self._latent_channels = decoder.encoder_dim
+        if load_encoder:
+            self.processor = cast("DINOv3ViTImageProcessorFast", AutoImageProcessor.from_pretrained(dinov3_id))  # type: ignore[reportUnknownMemberType]
+            self.encoder = cast(
+                "DINOv3ViTModel",
+                AutoModel.from_pretrained(  # type: ignore[reportUnknownMemberType]
+                    dinov3_id,
+                    device_map="auto",
+                ),
+            )
+            norm = self.encoder.norm
+            norm.register_parameter("weight", None)
+            norm.register_parameter("bias", None)
+            norm.elementwise_affine = False
+            self.encoder.eval()
+            for param in self.encoder.parameters():
+                param.requires_grad = False
 
-        self._latent_channels = self.encoder.config.hidden_size
-        self._patch_size = self.encoder.config.patch_size
+            assert self._latent_channels == self.encoder.config.hidden_size
+            self._patch_size = self.encoder.config.patch_size
 
-        if decoder:
-            self.decoder = decoder
-        else:
-            assert decoder_config is not None
-            self.decoder = RAEDecoder(**decoder_config)
+        self.decoder = decoder
 
     @property
     def latent_channels(self) -> int:
@@ -383,6 +390,7 @@ class RAE(VisionTower):
         Number of channels in the latent space.
         This should be implemented in subclasses to return the specific number of latent channels.
         """
+        assert self._latent_channels is not None, "latent_channels is not set"
         return self._latent_channels
 
     @property
@@ -390,6 +398,7 @@ class RAE(VisionTower):
         """
         Patch size of the encoder.
         """
+        assert self._patch_size is not None, "patch_size is not set"
         return self._patch_size
 
     def preprocess(self, x: Float[Tensor, "batch_size channels height width"]) -> "BatchFeature":
@@ -439,6 +448,7 @@ class RAE(VisionTower):
         Returns:
             Tensor: Encoded representation of the input tensor.
         """
+        assert self.load_encoder, "Encoder must be loaded to use encode()"
         x_processed = self.preprocess(x)
         with torch.no_grad():
             outputs: "BaseModelOutputWithPooling" = self.encoder(**x_processed)
@@ -472,6 +482,7 @@ class RAE(VisionTower):
         Returns:
             Tensor: Output tensor after encoding and decoding.
         """
+        assert self.load_encoder, "Encoder must be loaded to use forward(), use decode() directly instead."
         z = self.encode(x)
         x_recon = self.decode(z)
         return x_recon

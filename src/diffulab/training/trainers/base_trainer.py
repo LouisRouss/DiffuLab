@@ -175,7 +175,7 @@ class BaseTrainer(Trainer):
         """
         model_inputs: ModelInput = val_batch["model_inputs"]
         timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
-        model_inputs: ModelInput = self.move_dict_to_device(model_inputs)  # type: ignore
+        model_inputs = self.move_dict_to_device(model_inputs)  # type: ignore
         extra_args = val_batch.get("extra", {})
         extra_args = self.move_dict_to_device(extra_args)
         val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)

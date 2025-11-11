@@ -91,7 +91,7 @@ class LPIPS(LossFunction):
 
     URL_MAP: dict[str, str] = {"vgg_lpips": "https://heibox.uni-heidelberg.de/f/607503859c864bc1b30b/?dl=1"}
 
-    CKPT_MAP: dict[str, str] = {".cache/rae/vgg_lpips": "vgg.pth"}
+    CKPT_MAP: dict[str, str] = {"vgg_lpips": "vgg.pth"}
 
     def __init__(self, use_dropout: bool = True, root: str = Path.home().as_posix()) -> None:
         super().__init__()
@@ -120,10 +120,10 @@ class LPIPS(LossFunction):
 
     def _get_ckpt_path(self, root: str, name: str, check: bool = False):
         assert name in self.URL_MAP
-        path = Path(root) / self.CKPT_MAP[name]
+        path = Path(root) / ".cache/diffulab" / self.CKPT_MAP[name]
         if not path.exists():
             print("Downloading {} model from {} to {}".format(name, self.URL_MAP[name], path))
-            self._download(name, path)
+            self._download(self.URL_MAP[name], path)
             with open(path, "rb") as f:
                 content = f.read()
                 assert hashlib.md5(content).hexdigest() == "d507d7349b931f0638a25a48a722f98a"
@@ -185,14 +185,14 @@ class GANLoss(LossFunction):
             return -reduce(logits_fake)
         return reduce(F.softplus(-logits_fake))
 
-    def compute_loss(
+    def forward(
         self,
         logits_fake: torch.Tensor,
         logits_real: torch.Tensor | None = None,
-        discriminator: bool = False,
+        is_disc: bool = False,
         reduction: str = "mean",
     ) -> torch.Tensor:
-        if discriminator:
+        if is_disc:
             assert logits_real is not None, "logits_real must be provided when computing discriminator loss"
             return self.compute_d_loss(logits_real, logits_fake, reduction=reduction)
         return self.compute_g_loss(logits_fake, reduction=reduction)
