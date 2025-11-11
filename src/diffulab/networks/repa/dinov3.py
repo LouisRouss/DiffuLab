@@ -24,6 +24,7 @@ class DinoV3(REPA):
         self,
         dino_model: str = "facebook/dinov3-vith16plus-pretrain-lvd1689m",
         cancel_affine: bool = False,
+        size: tuple[int, int] = (256, 256),
     ) -> None:
         super().__init__()
         self.processor = cast("DINOv3ViTImageProcessorFast", AutoImageProcessor.from_pretrained(dino_model))  # type: ignore[reportUnknownMemberType]
@@ -34,6 +35,7 @@ class DinoV3(REPA):
                 device_map="auto",
             ),
         )
+        self.size = size
         if cancel_affine:
             norm = self.encoder.norm
             norm.register_parameter("weight", None)
@@ -96,7 +98,7 @@ class DinoV3(REPA):
             arr = cast(NDArray[np.uint8], xi.permute(1, 2, 0).contiguous().numpy())  # type: ignore[reportUnknownMemberType]
             imgs.append(Image.fromarray(arr))
 
-        processed_imgs = self.processor(images=imgs, return_tensors="pt").to(self.encoder.device)  # type: ignore[reportUnknownMemberType]
+        processed_imgs = self.processor(images=imgs, return_tensors="pt", size=self.size).to(self.encoder.device)  # type: ignore[reportUnknownMemberType]
         return processed_imgs
 
     @torch.inference_mode()
