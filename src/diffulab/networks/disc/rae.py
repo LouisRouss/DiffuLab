@@ -1,8 +1,9 @@
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.spectral_norm import SpectralNorm
 from transformers import ViTImageProcessor, ViTModel
 
@@ -56,7 +57,11 @@ class ResidualBlock(nn.Module):
 class RAEDiscriminator(nn.Module):
     def __init__(self, model_name: str = "facebook/dino-vits8", features_depth: list[int] = [2, 5, 8, 11]):
         super().__init__()  # type: ignore
-        self.image_processor: ViTImageProcessor = ViTImageProcessor.from_pretrained(model_name, do_rescale=False)  # type: ignore
+        image_processor: ViTImageProcessor = ViTImageProcessor.from_pretrained(model_name, do_rescale=False)  # type: ignore
+        self.register_buffer("image_mean", torch.tensor(image_processor.image_mean).view(1, -1, 1, 1))
+        self.register_buffer("image_std", torch.tensor(image_processor.image_std).view(1, -1, 1, 1))
+        self.image_size: tuple[int, int] = (image_processor.size["height"], image_processor.size["width"])
+
         self.dino_model: ViTModel = ViTModel.from_pretrained(model_name, add_pooling_layer=False)  # type: ignore
         self.features_depth = features_depth
 
@@ -95,8 +100,18 @@ class RAEDiscriminator(nn.Module):
         Returns:
             torch.Tensor: discriminator outputs (B, sum of N_i)
         """
-        inputs = self.image_processor(images=x, return_tensors="pt").to(self.dino_model.device)  # type: ignore
-        features: list[torch.Tensor] = list(self.dino_model(**inputs, output_hidden_states=True).hidden_states)  # type: ignore
+        inputs = x.float()
+        inputs = cast(
+            torch.Tensor,
+            F.interpolate(inputs, size=self.image_size, mode="bilinear", align_corners=False, antialias=True),  # type: ignore
+        )
+        inputs = (inputs - self.image_mean.to(dtype=inputs.dtype, device=x.device)) / self.image_std.to(  # type: ignore
+            dtype=inputs.dtype, device=inputs.device
+        )
+        inputs = inputs.to(dtype=x.dtype)  # type: ignore
+        features: list[torch.Tensor] = list(
+            self.dino_model(pixel_values=inputs, output_hidden_states=True).hidden_states
+        )  # type: ignore
         activations = [
             features[i + 1][:, 1:, :].transpose(1, 2) for i in self.features_depth
         ]  # skip cls token and transpose to (B, C, N)
