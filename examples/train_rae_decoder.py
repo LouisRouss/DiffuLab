@@ -28,7 +28,7 @@ def get_cosine_schedule_with_warmup_and_min_lr(
     optimizer: torch.optim.Optimizer, num_warmup_steps: int, num_training_steps: int, min_lr_factor: float = 0.1
 ) -> LambdaLR:
     lr_lambda = lambda step: cosine_with_warmup_and_min_lr_lambda(  # type: ignore
-        step,
+        step,  # type: ignore
         num_warmup_steps,
         num_training_steps,
         min_lr_factor,  # type: ignore

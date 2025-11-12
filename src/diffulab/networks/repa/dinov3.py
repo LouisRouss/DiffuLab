@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 class DinoV3(REPA):
     def __init__(
         self,
-        dino_model: str = "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+        dino_model: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
         cancel_affine: bool = False,
         size: tuple[int, int] = (256, 256),
     ) -> None:
