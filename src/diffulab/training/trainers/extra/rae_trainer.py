@@ -6,6 +6,7 @@ from math import ceil, sqrt
 from pathlib import Path
 from typing import Any, Iterable, cast
 
+import numpy as np
 import torch
 import torchvision.transforms.v2 as v2  # type: ignore[reportMissingTypeStubs]
 import wandb
@@ -157,11 +158,9 @@ class RAETrainer:
         epoch: int,
     ) -> None:
         batch = next(iter(val_dataloader))
-        real = cast(torch.Tensor | None, batch.get("extra", {}).get("x0"))
+        real = cast(torch.Tensor | None, batch.get("extra", {}).get("x0")).cpu()  # type: ignore
         assert real is not None, "Validation batch must contain 'x0' in extra"
         reconstruct = rae.decode(batch["model_inputs"]["x"])
-
-        real = (real * 0.5 + 0.5).clamp(0, 1).cpu()
         reconstruct = (reconstruct * 0.5 + 0.5).clamp(0, 1).cpu()
         paired = torch.cat([real, reconstruct], dim=-1)
         grid = make_grid(paired, nrow=int(ceil(sqrt(real.shape[0]))), padding=2)
@@ -252,7 +251,7 @@ class RAETrainer:
                     loss_gan_rae, cast(torch.nn.Linear, rae.decoder.last_layer[1]).weight, retain_graph=True
                 )[0]
                 adaptive_weight = cast(Tensor, torch.norm(loss_rae_grads) / (torch.norm(loss_gan_grads) + 1e-6))  # type: ignore
-                adaptive_weight = torch.clamp(adaptive_weight, 0.0, 1e5).detach()
+                adaptive_weight = torch.clamp(adaptive_weight, 0.0, 1e4).detach()
                 loss_rae = loss_rae + adaptive_weight * lambda_gan * loss_gan_rae
             else:
                 loss_rae = loss_rae + lambda_gan * loss_gan_rae
@@ -445,7 +444,7 @@ class RAETrainer:
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
                     gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
-                        Tensor(value, device=self.accelerator.device)
+                        torch.tensor(value, device=self.accelerator.device)
                     )
                     self.accelerator.log(  # type: ignore
                         {key: gathered_loss.mean().item()}, step=epoch + 1
@@ -486,7 +485,7 @@ class RAETrainer:
                 for key, value in tracker.avg.items():
                     if key.startswith("val/"):
                         gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
-                            Tensor(value, device=self.accelerator.device)
+                            torch.tensor(value, device=self.accelerator.device)
                         )
                         self.accelerator.log(  # type: ignore
                             {key: gathered_loss.mean().item()}, step=epoch + 1
