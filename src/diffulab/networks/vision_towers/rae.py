@@ -331,7 +331,7 @@ class RAE(VisionTower):
         decoder_config (dict[str, Any] | None): Keyword args for `RAEDecoder`
             when `decoder` is not provided.
         dinov3_id (str): Model identifier for the DINOv3 ViT on Hugging Face
-            (e.g., "facebook/dinov3-vith16plus-pretrain-lvd1689m").
+            (e.g., "facebook/dinov3-vitb16-pretrain-lvd1689m").
 
     Properties:
         latent_channels (int): Encoder hidden size (channel dimension of tokens).
@@ -353,7 +353,7 @@ class RAE(VisionTower):
     def __init__(
         self,
         decoder: RAEDecoder,
-        dinov3_id: str = "facebook/dinov3-vith16plus-pretrain-lvd1689m",
+        dinov3_id: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
         load_encoder: bool = True,
         encoder_patch_size: int | None = None,
     ) -> None:
