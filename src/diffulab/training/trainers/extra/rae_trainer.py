@@ -398,7 +398,6 @@ class RAETrainer:
         if disc_scheduler is not None:
             disc_scheduler = self.accelerator.prepare_scheduler(disc_scheduler)
 
-        best_val_loss = float("inf")
         tracker = AverageMeter()
         tq_epoch = tqdm(
             range(epoch_start, self.n_epoch), disable=not self.accelerator.is_main_process, leave=False, position=0
@@ -506,17 +505,15 @@ class RAETrainer:
                     # Restore original model
                     rae.decoder = original_model
 
-                if total_loss < best_val_loss:
-                    best_val_loss = total_loss
-                    self.save_model(
-                        rae=rae,  # type: ignore
-                        disc=disc,  # type: ignore
-                        rae_optimizer=rae_optimizer,  # type: ignore
-                        disc_optimizer=disc_optimizer,  # type: ignore
-                        ema=ema,  # type: ignore
-                        rae_scheduler=rae_scheduler,
-                        disc_scheduler=disc_scheduler,
-                    )
+                self.save_model(
+                    rae=rae,  # type: ignore
+                    disc=disc,  # type: ignore
+                    rae_optimizer=rae_optimizer,  # type: ignore
+                    disc_optimizer=disc_optimizer,  # type: ignore
+                    ema=ema,  # type: ignore
+                    rae_scheduler=rae_scheduler,
+                    disc_scheduler=disc_scheduler,
+                )
                 tracker.reset()
 
             self.accelerator.wait_for_everyone()
