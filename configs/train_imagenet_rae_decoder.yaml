@@ -1,0 +1,41 @@
+defaults:
+  - vision_tower: rae
+  - discriminator: rae
+  - dataloader: default
+  - dataset: imagenet_noised_latents
+  - /optimizer@optimizer.rae_decoder: adam
+  - /optimizer@optimizer.discriminator: adam
+  - trainer: default
+
+vision_tower:
+  load_encoder: false
+
+optimizer:
+  rae_decoder:
+    betas: [0.5, 0.9]
+    lr : 2e-4
+  discriminator:
+    betas: [0.5, 0.9]
+    lr : 2e-4
+
+dataloader:
+  batch_size: 32
+
+dataset:
+  train:
+    batch_size: 32
+  val:
+    batch_size: 32
+
+trainer:
+  project_name: imagenet_rae_decoder
+  n_epoch: 16
+  precision_type: "bf16"
+  per_batch_scheduler: true
+  disc_epoch_start: 6
+  gan_epoch_start: 8
+  lpips_epoch_start: 1
+  lambda_lpips: 1
+  lambda_gan: 0.75
+  use_adaptive_weight_loss: true
+  gradient_accumulation_step: 16

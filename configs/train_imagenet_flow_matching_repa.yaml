@@ -1,10 +1,10 @@
-# configs/train_cifar10_flow_matching.yaml
+# configs/train_imagenet_flow_matching_repa.yaml
 # @package _global_
 defaults:
   - model: dit
   - diffuser: rectified_flow
   - trainer: default
-  - dataset: imagenet_repa
+  - dataset: imagenet_latents
   - dataloader: default
   - optimizer: adamw
   - vision_tower: dcae

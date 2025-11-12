@@ -1,0 +1,3 @@
+_target_: diffulab.networks.disc.RAEDiscriminator
+model_name: facebook/dino-vits8
+features_depth: [2, 5, 8, 11]
