@@ -31,6 +31,8 @@ class Flow(Diffusion):
             normal distribution. Defaults to False.
         sampler_parameters (dict[str, Any], optional): Additional parameters for the sampler.
             Defaults to an empty dictionary.
+        alpha_t (float, optional): Factor for shifting timestep strategy during training.
+
     Methods:
         set_steps(n_steps, schedule): Sets the number of timesteps and their spacing.
         at(timesteps): Computes the "a(t)" coefficient for noise mixing.
@@ -64,6 +66,7 @@ class Flow(Diffusion):
         latent_diffusion: bool = False,
         logits_normal: bool = False,
         sampler_parameters: dict[str, Any] = {},
+        alpha_t: float = 1,
     ) -> None:
         super().__init__(
             n_steps=n_steps,
@@ -73,6 +76,9 @@ class Flow(Diffusion):
             sampler_parameters=sampler_parameters,
         )
         self.logits_normal = logits_normal
+        if alpha_t != 1:
+            assert not logits_normal, "alpha_t setting is not compatible with logits normal sampling"
+        self.alpha_t = alpha_t
 
     def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
         """
@@ -156,8 +162,8 @@ class Flow(Diffusion):
         if self.logits_normal:
             nt = torch.randn((batch_size), dtype=torch.float32)
             return torch.sigmoid(nt)
-
-        return torch.rand((batch_size), dtype=torch.float32)
+        nt = torch.rand((batch_size), dtype=torch.float32)
+        return (self.alpha_t * nt) / (1 + (self.alpha_t - 1) * nt)
 
     def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         """
