@@ -127,6 +127,7 @@ class RAETrainer:
         Returns:
             Tensor: Augmented tensor of shape (B, C, H, W) in the range [-1, 1].
         """
+        x = x.float()
         x = (x + 1.0) * 0.5  # rescale to [0, 1]
         _, _, H, W = x.shape
         dtype = x.dtype
@@ -139,7 +140,7 @@ class RAETrainer:
         if random.random() < prob:
             bias = AddPerChannelBias(0.5)
             color = v2.ColorJitter(brightness=0.5, contrast=(0.5, 1.5))
-            x = bias(x.float())
+            x = bias(x)
             x = color(x)
             x = x.clamp(0.0, 1.0).to(dtype)
         # cutout
@@ -148,6 +149,7 @@ class RAETrainer:
             cutout = v2.RandomErasing(p=1.0, scale=(area, area), ratio=(W / H, W / H), value=0.0, inplace=False)
             x = cutout(x)
         x = x * 2.0 - 1.0  # rescale to [-1, 1]
+        x = x.to(dtype)
         return x
 
     @torch.no_grad()  # type: ignore
@@ -224,6 +226,8 @@ class RAETrainer:
         use_lpips: bool = True,
     ) -> None:
         # Train generator (RAE)
+        for p in disc.heads.parameters():
+            p.requires_grad = False
         rae_optimizer.zero_grad(set_to_none=True)
         real = cast(torch.Tensor | None, batch.get("extra", {}).get("x0"))
         assert real is not None, "Training batch must contain 'x0' in extra"
@@ -240,7 +244,7 @@ class RAETrainer:
             # Compute adversarial loss for RAE
             disc.eval()
             fake_aug = self.disc_augment(fake)
-            fake_pred = disc(fake_aug * 0.5 + 0.5)  # rescale to [0, 1]
+            fake_pred = disc(fake_aug * 0.5 + 0.5)
             loss_gan_rae: Tensor = gan_loss(logits_fake=fake_pred, is_disc=False)
             if use_adaptive_weight_loss:
                 # Compute adaptive weight for GAN loss
@@ -264,6 +268,8 @@ class RAETrainer:
             ema.update()
 
         # train discriminator
+        for p in disc.heads.parameters():
+            p.requires_grad = True
         if train_disc:
             disc.train()
             disc_optimizer.zero_grad(set_to_none=True)
@@ -326,6 +332,8 @@ class RAETrainer:
         log_validation_images: bool = True,
         rae_optimizer_ckpt: str | None = None,
         disc_optimizer_ckpt: str | None = None,
+        rae_scheduler_ckpt: str | None = None,
+        disc_scheduler_ckpt: str | None = None,
         rae_ckpt: str | None = None,
         disc_ckpt: str | None = None,
         ema_ckpt: str | None = None,
@@ -337,6 +345,9 @@ class RAETrainer:
         lambda_gan: float = 0.75,
         use_adaptive_weight_loss: bool = True,
     ):
+        assert not (self.compile and use_adaptive_weight_loss), (
+            "Adaptive weight loss is not supported with compiled mode (double backward)."
+        )
         if self.use_ema:
             ema = EMA(
                 rae.decoder,
@@ -351,7 +362,7 @@ class RAETrainer:
             ema = None
 
         if rae_ckpt:
-            rae.load_state_dict(
+            rae.decoder.load_state_dict(
                 torch.load(rae_ckpt),  # type: ignore
             )
 
@@ -368,6 +379,15 @@ class RAETrainer:
         if disc_optimizer_ckpt:
             disc_optimizer.load_state_dict(
                 torch.load(disc_optimizer_ckpt, weights_only=False),  # type: ignore
+            )
+
+        if rae_scheduler_ckpt and rae_scheduler is not None:
+            rae_scheduler.load_state_dict(
+                torch.load(rae_scheduler_ckpt, weights_only=False),  # type: ignore
+            )
+        if disc_scheduler_ckpt and disc_scheduler is not None:
+            disc_scheduler.load_state_dict(
+                torch.load(disc_scheduler_ckpt, weights_only=False),  # type: ignore
             )
 
         gan_loss = GANLoss()
@@ -428,16 +448,16 @@ class RAETrainer:
                             lambda_lpips=lambda_lpips,
                             lambda_gan=lambda_gan,
                             use_adaptive_weight_loss=use_adaptive_weight_loss,
-                            train_gan=(epoch >= gan_epoch_start),
-                            train_disc=(epoch >= disc_epoch_start),
-                            use_lpips=(epoch >= lpips_epoch_start),
+                            train_gan=(epoch + 1 >= gan_epoch_start),
+                            train_disc=(epoch + 1 >= disc_epoch_start),
+                            use_lpips=(epoch + 1 >= lpips_epoch_start),
                         )
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
             if rae_scheduler is not None and not per_batch_scheduler:
                 rae_scheduler.step()
-            if disc_scheduler is not None and not per_batch_scheduler and epoch >= disc_epoch_start:
+            if disc_scheduler is not None and not per_batch_scheduler and epoch + 1 >= disc_epoch_start:
                 disc_scheduler.step()
 
             for key, value in tracker.avg.items():
@@ -471,10 +491,10 @@ class RAETrainer:
                             batch=val_batch,
                             lpips_loss=lpips_loss,  # type: ignore
                             gan_loss=gan_loss,  # type: ignore
-                            train_gan=(epoch >= gan_epoch_start),
-                            train_disc=(epoch >= disc_epoch_start),
+                            train_gan=(epoch + 1 >= gan_epoch_start),
+                            train_disc=(epoch + 1 >= disc_epoch_start),
                             tracker=tracker,
-                            use_lpips=(epoch >= lpips_epoch_start),
+                            use_lpips=(epoch + 1 >= lpips_epoch_start),
                         )
                     tq_val_batch.set_description(
                         f"Val Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('val/')):.4f}"
