@@ -279,7 +279,7 @@ class RAETrainer:
             fake_pred = disc(fake_aug * 0.5 + 0.5)  # rescale to [0, 1]
             real_pred = disc(real_aug * 0.5 + 0.5)  # rescale to [0, 1]
             loss_disc: Tensor = gan_loss(logits_real=real_pred, logits_fake=fake_pred, is_disc=True)
-            tracker.update(key="train_d/loss_disc", val=loss_disc.item())
+            tracker.update(key="train_disc/loss_disc", val=loss_disc.item())
             self.accelerator.backward(loss_disc)  # type: ignore
             disc_optimizer.step()
             if disc_scheduler is not None and per_batch_scheduler:
@@ -316,7 +316,7 @@ class RAETrainer:
             fake_pred = disc(fake * 0.5 + 0.5)  # rescale to [0, 1]
             real_pred = disc(real)
             loss_disc: Tensor = gan_loss(logits_real=real_pred, logits_fake=fake_pred, is_disc=True)
-            tracker.update(key="val_d/loss_disc", val=loss_disc.item())
+            tracker.update(key="val_disc/loss_disc", val=loss_disc.item())
 
     def train(
         self,
@@ -461,7 +461,7 @@ class RAETrainer:
                 disc_scheduler.step()
 
             for key, value in tracker.avg.items():
-                if key.startswith("train/"):
+                if key.startswith("train"):
                     gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
                         torch.tensor(value, device=self.accelerator.device)
                     )
@@ -500,16 +500,14 @@ class RAETrainer:
                         f"Val Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('val/')):.4f}"
                     )
 
-                total_loss = 0
                 for key, value in tracker.avg.items():
-                    if key.startswith("val/"):
+                    if key.startswith("val"):
                         gathered_loss: Tensor = self.accelerator.gather(  # type: ignore
                             torch.tensor(value, device=self.accelerator.device)
                         )
                         self.accelerator.log(  # type: ignore
                             {key: gathered_loss.mean().item()}, step=epoch + 1
                         )
-                        total_loss += gathered_loss.mean().item()
 
                 if log_validation_images:
                     logging.info("creating validation images")
