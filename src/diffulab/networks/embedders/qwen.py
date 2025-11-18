@@ -16,6 +16,8 @@ class QwenTextEmbedder(ContextEmbedder):
         self.model: Qwen3VLForConditionalGeneration = Qwen3VLForConditionalGeneration.from_pretrained(  # type: ignore
             model_id, device_map=device, dtype="auto"
         )
+        self.model.eval()
+        self.model.requires_grad_(False)
         self.tokenizer: Qwen2Tokenizer = Qwen2Tokenizer.from_pretrained(model_id, device_map=device)  # type: ignore
         self.prompt_template: str = self._get_prompt_template()
         self.prompt_template_encoder_start_idx = 34
