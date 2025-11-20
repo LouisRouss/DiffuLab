@@ -344,6 +344,7 @@ class RAETrainer:
         lambda_lpips: float = 1.0,
         lambda_gan: float = 0.75,
         use_adaptive_weight_loss: bool = True,
+        hinge_gan: bool = True,
     ):
         assert not (self.compile and use_adaptive_weight_loss), (
             "Adaptive weight loss is not supported with compiled mode (double backward)."
@@ -390,7 +391,7 @@ class RAETrainer:
                 torch.load(disc_scheduler_ckpt, weights_only=False),  # type: ignore
             )
 
-        gan_loss = GANLoss()
+        gan_loss = GANLoss(gan_type="hinge" if hinge_gan else "vanilla")
         lpips_loss = LPIPS()
 
         rae, disc, train_dataloader, val_dataloader, rae_optimizer, disc_optimizer, lpips_loss, gan_loss = (  # type: ignore
