@@ -11,7 +11,7 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint  # type: ignore
 from transformers import AutoImageProcessor, AutoModel
 
-from diffulab.networks.utils.nn import QKNorm, RotaryPositionalEmbedding
+from diffulab.networks.utils.nn import QKNorm, RotaryPositionalEmbedding2D
 from diffulab.networks.vision_towers.common import VisionTower
 
 if TYPE_CHECKING:
@@ -62,7 +62,7 @@ class Attention(nn.Module):
         dim: int,
         num_heads: int,
         partial_rotary_factor: float = 1,
-        base: int = 10000,
+        base: int = 100,
         dropout: float = 0.0,
     ) -> None:
         super().__init__()  # type: ignore
@@ -75,12 +75,14 @@ class Attention(nn.Module):
 
         self.partial_rotary_factor = partial_rotary_factor
         self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
+        self.rope = RotaryPositionalEmbedding2D(dim=self.rotary_dim, base=base)
         self.dropout = dropout
 
         self.proj_out = nn.Linear(dim, input_dim)
 
-    def forward(self, input: Float[Tensor, "batch_size seq_len dim"]) -> Float[Tensor, "batch_size seq_len dim"]:
+    def forward(
+        self, input: Float[Tensor, "batch_size seq_len dim"], shape: tuple[int, int] | None = None
+    ) -> Float[Tensor, "batch_size seq_len dim"]:
         input_q, input_k, input_v = self.qkv(input).chunk(3, dim=-1)
         input_q, input_k = self.qk_norm(input_q, input_k, input_v)
 
@@ -90,7 +92,7 @@ class Attention(nn.Module):
             rearrange(input_v, "b n (h d) -> b n h d", h=self.num_heads),
         )
         # Remove CLS token for rotary embeddings
-        q[:, 1:], k[:, 1:], v = self.rope(q=q[:, 1:], k=k[:, 1:], v=v)
+        q[:, 1:], k[:, 1:], v = self.rope(q=q[:, 1:], k=k[:, 1:], v=v, shape=shape)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
         attn_output = nn.functional.scaled_dot_product_attention(
@@ -135,6 +137,7 @@ class TransformerBlock(nn.Module):
         num_heads: int,
         mlp_ratio: int,
         partial_rotary_factor: float = 1,
+        base: int = 100,
         use_checkpoint: bool = False,
         dropout_attn: float = 0,
         dropout_mlp: float = 0,
@@ -142,7 +145,12 @@ class TransformerBlock(nn.Module):
         super().__init__()  # type: ignore
         self.norm_1 = nn.RMSNorm(input_dim)
         self.attention = Attention(
-            input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor, dropout=dropout_attn
+            input_dim,
+            hidden_dim,
+            num_heads,
+            partial_rotary_factor=partial_rotary_factor,
+            base=base,
+            dropout=dropout_attn,
         )
         self.norm_2 = nn.RMSNorm(input_dim)
         self.mlp = nn.Sequential(
@@ -156,6 +164,7 @@ class TransformerBlock(nn.Module):
     def forward(
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        shape: tuple[int, int] | None = None,
     ) -> Float[Tensor, "batch_size seq_len input_dim"]:
         """
         Forward pass of the DiTBlock applying modulation and attention mechanisms.
@@ -165,13 +174,18 @@ class TransformerBlock(nn.Module):
         Returns:
             Tensor: The processed input tensor with residual connection
         """
-        return checkpoint(self._forward, *(input), use_reentrant=False) if self.use_checkpoint else self._forward(input)  # type: ignore
+        return (
+            checkpoint(self._forward, *(input, shape), use_reentrant=False)
+            if self.use_checkpoint
+            else self._forward(input, shape)
+        )  # type: ignore
 
     def _forward(
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        shape: tuple[int, int] | None = None,
     ) -> Float[Tensor, "batch_size seq_len embedding_dim"]:
-        input = input + self.attention(self.norm_1(input))
+        input = input + self.attention(self.norm_1(input), shape=shape)
         input = input + self.dropout(self.mlp(self.norm_2(input)))
         return input
 
@@ -230,6 +244,7 @@ class RAEDecoder(nn.Module):
         patch_size: int = 16,
         depth: int = 28,
         partial_rotary_factor: float = 1,
+        base: int = 100,
         use_checkpoint: bool = False,
         dropout_attn: float = 0,
         dropout_mlp: float = 0,
@@ -244,6 +259,7 @@ class RAEDecoder(nn.Module):
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     partial_rotary_factor=partial_rotary_factor,
+                    base=base,
                     use_checkpoint=use_checkpoint,
                     dropout_attn=dropout_attn,
                     dropout_mlp=dropout_mlp,
@@ -262,6 +278,7 @@ class RAEDecoder(nn.Module):
         self.out_size = out_size
         self.out_channels = out_channels
         self.encoder_dim = encoder_dim
+        self.grid_size = (out_size[0] // patch_size, out_size[1] // patch_size)
 
     def _init_weights(self, module: nn.Module) -> None:
         if isinstance(module, nn.Linear) or isinstance(module, nn.Conv2d):
@@ -279,16 +296,16 @@ class RAEDecoder(nn.Module):
         Returns:
             Tensor: Reconstructed image tensor of shape (B, C, H, W)
         """
-        H, W = self.out_size
-        patch_size = self.patch_size
-        p = self.out_channels
-
-        # Calculate number of patches in height and width dimensions
-        h = H // patch_size
-        w = W // patch_size
-
         # Reshape the tensor to the original image dimensions
-        x = rearrange(x, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", h=h, w=w, p1=patch_size, p2=patch_size, c=p)
+        x = rearrange(
+            x,
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
+            h=self.grid_size[0],
+            w=self.grid_size[1],
+            p1=self.patch_size,
+            p2=self.patch_size,
+            c=self.out_channels,
+        )
         return x
 
     def forward(
@@ -299,7 +316,7 @@ class RAEDecoder(nn.Module):
         x = torch.cat([self.cls_token.repeat(x.size(0), 1, 1), x], dim=1)
 
         for layer in self.layers:
-            x = layer(x)
+            x = layer(x, shape=self.grid_size)
 
         x = self.last_layer(x)
         x = self.unpatchify(x[:, 1:])  # remove cls token
