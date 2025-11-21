@@ -72,7 +72,7 @@ class DDT(Denoiser):
             dropped labels; in MMDiT mode, it is forwarded to the context embedder which may drop
             context. Default: False.
         context_embedder (ContextEmbedder | None): When `simple_ddt=False`, a module returning
-            `ContextEmbedderOutput`. Must be provided for text/image conditioning. Must be None
+            `ContextEmbedderOutput`. Must be provided for text conditioning. Must be None
             when `simple_ddt=True`. If the embedder returns pooled and token embeddings
             (`n_output == 2`), pooled features are fused into the timestep embedding via an MLP.
             Default: None.
@@ -93,7 +93,10 @@ class DDT(Denoiser):
         context_dim: int = 1024,
         encoder_depth: int = 8,
         decoder_depth: int = 4,
-        partial_rotary_factor: float = 1,
+        partial_rotary_factor_input: float = 1,
+        base_input: int = 100,
+        partial_rotary_factor_context: float = 1,
+        base_context: int = 10000,
         frequency_embedding: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
@@ -171,7 +174,10 @@ class DDT(Denoiser):
                     embedding_dim=input_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    partial_rotary_factor_input=partial_rotary_factor_input,
+                    base_input=base_input,
+                    partial_rotary_factor_context=partial_rotary_factor_context,
+                    base_context=base_context,
                     use_checkpoint=use_checkpoint,
                 )
                 if not self.simple_ddt
@@ -181,7 +187,7 @@ class DDT(Denoiser):
                     embedding_dim=input_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    partial_rotary_factor=partial_rotary_factor_input,
                     use_checkpoint=use_checkpoint,
                 )
                 for _ in range(encoder_depth)
@@ -199,7 +205,7 @@ class DDT(Denoiser):
                     embedding_dim=input_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    partial_rotary_factor=partial_rotary_factor_input,
                     use_checkpoint=use_checkpoint,
                 )
                 for _ in range(decoder_depth)
@@ -228,6 +234,8 @@ class DDT(Denoiser):
         self.original_size = (H, W)
 
         x = self.conv_proj_encoder(x) if encoder else self.conv_proj_decoder(x)
+        _, _, Hp, Wp = x.shape
+        self.grid_size = (Hp, Wp)
         x = rearrange(x, "b c h w -> b (h w) c")
 
         return x
@@ -242,16 +250,16 @@ class DDT(Denoiser):
         Returns:
             Tensor: Reconstructed image tensor of shape (B, C, H, W)
         """
-        H, W = self.original_size
-        patch_size = self.patch_size
-        p = self.output_channels
-
-        # Calculate number of patches in height and width dimensions
-        h = H // patch_size
-        w = W // patch_size
-
         # Reshape the tensor to the original image dimensions
-        x = rearrange(x, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", h=h, w=w, p1=patch_size, p2=patch_size, c=p)
+        x = rearrange(
+            x,
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
+            h=self.grid_size[0],
+            w=self.grid_size[1],
+            p1=self.patch_size,
+            p2=self.patch_size,
+            c=self.output_channels,
+        )
         return x
 
     def encode_mmddt(
@@ -291,7 +299,7 @@ class DDT(Denoiser):
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, emb, context, attn_mask=attn_mask)
+            x, context = layer(x, emb, context, attn_mask=attn_mask, shape=self.grid_size)
             if features is not None:
                 features.append(x)
 
@@ -302,7 +310,7 @@ class DDT(Denoiser):
 
     def encode_ddt(
         self,
-        x: Float[Tensor, "batch_size seq_len patch_dim"],
+        x: Float[Tensor, "batch_size seq_len_input patch_dim"],
         timestep: Float[Tensor, "batch_size"],
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
@@ -331,7 +339,7 @@ class DDT(Denoiser):
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x = layer(x, emb)
+            x = layer(x, emb, shape=self.grid_size)
             if features is not None:
                 features.append(x)
 
@@ -342,16 +350,16 @@ class DDT(Denoiser):
 
     def decode(
         self,
-        x: Float[Tensor, "batch_size seq_len patch_dim"],
-        encoder_output: Float[Tensor, "batch_size seq_len patch_dim"],
+        x: Float[Tensor, "batch_size seq_len_input patch_dim"],
+        encoder_output: Float[Tensor, "batch_size seq_len_tot patch_dim"],
         timesteps: Float[Tensor, "batch_size"],
         intermediate_features: bool = False,
     ) -> ModelOutput:
         """
         Forward pass through the decoder of the DDT model.
         Args:
-            x (Tensor): Input tensor of shape (B, seq_len, patch_dim)
-            encoder_output (Tensor): Encoder output tensor of shape (B, seq_len, patch_dim)
+            x (Tensor): Input tensor of shape (B, seq_len_input, patch_dim)
+            encoder_output (Tensor): Encoder output tensor of shape (B, seq_len_tot, patch_dim)
             timesteps (Tensor): Timestep tensor of shape (B,)
             intermediate_features (bool, optional): Whether to return intermediate features. Defaults to False.
         Returns:
@@ -362,7 +370,7 @@ class DDT(Denoiser):
 
         features: list[Tensor] | None = [] if intermediate_features else None
         for layer in self.decoder_layers:
-            x = layer(x, encoder_output)
+            x = layer(x, encoder_output, shape=self.grid_size)
             if features is not None:
                 features.append(x)
 
