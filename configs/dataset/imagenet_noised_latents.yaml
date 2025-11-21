@@ -1,14 +1,16 @@
 # CIFAR10 dataset configuration
 train:
-  _target_: diffulab.datasets.ImageNetLatentREPA
+  _target_: diffulab.datasets.ImageNetNoisyLatent
   data_path: "data/imagenet"
   local: true
   batch_size: 128
   split: "train"
+  noise_tau: 0.8
 
 val:
-  _target_: diffulab.datasets.ImageNetLatentREPA
+  _target_: diffulab.datasets.ImageNetNoisyLatent
   data_path: "data/imagenet"
   local: true
   batch_size: 128
   split: "val"
+  noise_tau : 0

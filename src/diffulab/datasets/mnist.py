@@ -24,7 +24,12 @@ class MNISTDataset(BaseDataset):
         self.images, self.labels = self.load_data()
 
     def load_data(self) -> tuple[NDArray[np.float32], NDArray[np.int64]]:
-        """Load MNIST data from files."""
+        """
+        Load MNIST data from files.
+
+        Returns:
+            A tuple of images and labels arrays.
+        """
         if self.train:
             images_file = self.data_path / "train-images-idx3-ubyte"
             labels_file = self.data_path / "train-labels-idx1-ubyte"
@@ -38,7 +43,13 @@ class MNISTDataset(BaseDataset):
         return images, labels
 
     def _load_images(self, file: Path) -> NDArray[np.float32]:
-        """Load and preprocess MNIST images."""
+        """
+        Load and preprocess MNIST images.
+        Args:
+            file: Path to the MNIST images file.
+        Returns:
+            A numpy array of shape (num_images, 1, 32, 32) containing the resized images.
+        """
         with open(file, "rb") as f:
             _, num_images, rows, cols = struct.unpack(">IIII", f.read(16))
             images = np.frombuffer(f.read(), dtype=np.uint8).reshape(num_images, 1, rows, cols)
@@ -52,12 +63,24 @@ class MNISTDataset(BaseDataset):
         return resized_images
 
     def _load_labels(self, file: Path) -> NDArray[np.int64]:
-        """Load MNIST labels."""
+        """
+        Load MNIST labels.
+        Args:
+            file: Path to the MNIST labels file.
+        Returns:
+            A numpy array of shape (num_labels,) containing the labels.
+        """
         with open(file, "rb") as f:
             _, _ = struct.unpack(">II", f.read(8))
             labels = np.frombuffer(f.read(), dtype=np.uint8)
         return labels.astype(np.int64)
 
     def preprocess_image(self, image: NDArray[Any]) -> NDArray[np.float32]:
-        """Normalize the image to [-1, 1] range."""
+        """
+        Normalize the image to [-1, 1] range.
+        Args:
+            image: A numpy array representing the image.
+        Returns:
+            A normalized numpy array.
+        """
         return ((image.astype(np.float32) / 255.0) - 0.5) / 0.5

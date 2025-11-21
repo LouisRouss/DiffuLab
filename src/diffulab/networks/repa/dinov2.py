@@ -17,7 +17,7 @@ class DinoV2(REPA):
 
     def __init__(
         self,
-        dino_model: str = f"dinov2_vitl14_reg",
+        dino_model: str = "dinov2_vitl14_reg",
         resolution: int = 256,
         target_seq_len: int | None = None,
     ) -> None:
@@ -37,8 +37,8 @@ class DinoV2(REPA):
             grid_size = int(sqrt_val)
             self.inference_resolution = grid_size * self.base_patch_pixel_size
 
-        self._encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(
-            self._encoder.pos_embed.data,  # type: ignore
+        self._encoder.pos_embed.data = timm.layers.pos_embed.resample_abs_pos_embed(  # type: ignore
+            self._encoder.pos_embed.data,
             [grid_size, grid_size],
         )
 
@@ -68,20 +68,18 @@ class DinoV2(REPA):
     def preprocess(
         self, x: Float[Tensor, "batch_size channels height width"]
     ) -> Float[Tensor, "batch_size channels height width"]:
+        # ensure float
         x = x.float()
 
         x_min = x.min().item()
         x_max = x.max().item()
 
-        # Normalize to [0,1]
-        if x_min >= -1.0 and x_max <= 1.0 and x_min < 0.0:
-            x = (x + 1.0) / 2.0
-        elif x_min >= 0.0 and x_max <= 1.0:
+        if x_min >= 0.0 and x_max <= 1.0:
             pass
-        elif x_min >= 0.0 and x_max <= 255.0:
+        elif x_min >= 0.0 and x_max <= 255.0 and x_max > 1.0:
             x = x / 255.0
         else:
-            raise ValueError("Input tensor range is not supported. Expected 0–255, 0–1, or -1–1.")
+            raise ValueError("Input tensor range is not supported. Expected 0–255 or 0–1")
 
         x = x.clamp(0.0, 1.0)
 
@@ -91,6 +89,7 @@ class DinoV2(REPA):
 
         return x
 
+    @torch.inference_mode()
     def forward(self, x: Float[Tensor, "batch_size channels height width"]) -> Float[Tensor, "batch_size seq_len dim"]:
         """
         Forward pass of the encoder.

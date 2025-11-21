@@ -5,12 +5,12 @@ from typing import Any
 import torch
 import torch.nn as nn
 from einops import rearrange
-from jaxtyping import Float, Int
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint  # type: ignore
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
     Modulation,
@@ -18,6 +18,7 @@ from diffulab.networks.utils.nn import (
     QKNorm,
     RMSNorm,
     RotaryPositionalEmbedding,
+    RotaryPositionalEmbedding2D,
     modulate,
     timestep_embedding,
 )
@@ -79,11 +80,15 @@ class DiTAttention(nn.Module):
 
         self.partial_rotary_factor = partial_rotary_factor
         self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
+        self.rope = RotaryPositionalEmbedding2D(dim=self.rotary_dim, base=base)
 
         self.proj_out = nn.Linear(dim, input_dim)
 
-    def forward(self, input: Float[Tensor, "batch_size seq_len dim"]) -> Float[Tensor, "batch_size seq_len dim"]:
+    def forward(
+        self,
+        input: Float[Tensor, "batch_size seq_len dim"],
+        shape: tuple[int, int] | None = None,
+    ) -> Float[Tensor, "batch_size seq_len dim"]:
         input_q, input_k, input_v = self.qkv(input).chunk(3, dim=-1)
         input_q, input_k = self.qk_norm(input_q, input_k, input_v)
 
@@ -92,7 +97,7 @@ class DiTAttention(nn.Module):
             rearrange(input_k, "b n (h d) -> b n h d", h=self.num_heads),
             rearrange(input_v, "b n (h d) -> b n h d", h=self.num_heads),
         )
-        q, k, v = self.rope(q=q, k=k, v=v)
+        q, k, v = self.rope(q=q, k=k, v=v, shape=shape)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
         attn_output = nn.functional.scaled_dot_product_attention(
@@ -161,8 +166,10 @@ class MMDiTAttention(nn.Module):
         input_dim: int,
         dim: int,
         num_heads: int,
-        partial_rotary_factor: float = 1,
-        base: int = 10000,
+        partial_rotary_factor_input: float = 1,
+        base_input: int = 100,
+        partial_rotary_factor_context: float = 1,
+        base_context: int = 10000,
     ):
         super().__init__()  # type: ignore
         self.num_heads = num_heads
@@ -174,17 +181,21 @@ class MMDiTAttention(nn.Module):
         self.qk_norm_input = QKNorm(dim)
         self.qk_norm_context = QKNorm(dim)
 
-        self.partial_rotary_factor = partial_rotary_factor
-        self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
+        rotary_dim_input = int(self.head_dim * partial_rotary_factor_input)
+        self.rope_input = RotaryPositionalEmbedding2D(dim=rotary_dim_input, base=base_input)
+
+        rotary_dim_context = int(self.head_dim * partial_rotary_factor_context)
+        self.rope_context = RotaryPositionalEmbedding(dim=rotary_dim_context, base=base_context)
 
         self.input_proj_out = nn.Linear(dim, input_dim)
         self.context_proj_out = nn.Linear(dim, context_dim)
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len input_dim"],
-        context: Float[Tensor, "batch_size seq_len context_dim"],
+        input: Float[Tensor, "batch_size seq_len_input input_dim"],
+        context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+        shape: tuple[int, int] | None = None,
     ) -> tuple[Float[Tensor, "batch_size seq_len input_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
         input_q, input_k, input_v = self.qkv_input(input).chunk(3, dim=-1)
         context_q, context_k, context_v = self.qkv_context(context).chunk(3, dim=-1)
@@ -192,19 +203,39 @@ class MMDiTAttention(nn.Module):
         input_q, input_k = self.qk_norm_input(input_q, input_k, input_v)
         context_q, context_k = self.qk_norm_context(context_q, context_k, context_v)
 
-        q, k, v = (
-            rearrange(torch.cat([context_q, input_q], dim=1), "b n (h d) -> b n h d", h=self.num_heads),
-            rearrange(torch.cat([context_k, input_k], dim=1), "b n (h d) -> b n h d", h=self.num_heads),
-            rearrange(torch.cat([context_v, input_v], dim=1), "b n (h d) -> b n h d", h=self.num_heads),
+        input_q, input_k, input_v = (
+            rearrange(input_q, "b n (h d) -> b n h d", h=self.num_heads),
+            rearrange(input_k, "b n (h d) -> b n h d", h=self.num_heads),
+            rearrange(input_v, "b n (h d) -> b n h d", h=self.num_heads),
         )
-        q, k, v = self.rope(q=q, k=k, v=v)
-        q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
+        context_q, context_k, context_v = (
+            rearrange(context_q, "b n (h d) -> b n h d", h=self.num_heads),
+            rearrange(context_k, "b n (h d) -> b n h d", h=self.num_heads),
+            rearrange(context_v, "b n (h d) -> b n h d", h=self.num_heads),
+        )
+
+        input_q, input_k, input_v = self.rope_input(q=input_q, k=input_k, v=input_v, shape=shape)
+        context_q, context_k, context_v = self.rope_context(q=context_q, k=context_k, v=context_v)
+
+        q, k, v = (
+            rearrange(torch.cat([context_q, input_q], dim=1), "b n h d -> b h n d"),
+            rearrange(torch.cat([context_k, input_k], dim=1), "b n h d -> b h n d"),
+            rearrange(torch.cat([context_v, input_v], dim=1), "b n h d -> b h n d"),
+        )
+
+        if attn_mask is not None:
+            attn_mask = torch.cat(
+                [
+                    attn_mask.bool(),
+                    torch.ones(attn_mask.size(0), input.size(1), device=attn_mask.device).bool(),
+                ],
+                dim=1,
+            )
+            b, n = attn_mask.shape
+            attn_mask = attn_mask[:, None, None, :].expand(b, 1, n, n)
 
         attn_output = nn.functional.scaled_dot_product_attention(
-            query=q,
-            key=k,
-            value=v,
-            scale=self.scale,
+            query=q, key=k, value=v, scale=self.scale, attn_mask=attn_mask
         )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
@@ -231,8 +262,7 @@ class DiTBlock(nn.Module):
             Performs the forward pass of the MMDiTBlock.
             Args:
                 input (Tensor): The input tensor.
-                y (Tensor): An additional tensor, not used in the current implementation.
-                context (Tensor): The context tensor.
+                y (Tensor): The conditioning tensor used for modulation
             Returns:
                 Tuple[Tensor, Tensor]: The processed input tensor.
 
@@ -252,12 +282,15 @@ class DiTBlock(nn.Module):
         num_heads: int,
         mlp_ratio: int,
         partial_rotary_factor: float = 1,
+        base: int = 100,
         use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
         self.modulation = Modulation(embedding_dim, input_dim)
         self.norm_1 = nn.RMSNorm(input_dim)
-        self.attention = DiTAttention(input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor)
+        self.attention = DiTAttention(
+            input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor, base=base
+        )
         self.norm_2 = nn.RMSNorm(input_dim)
         self.mlp_input = nn.Sequential(
             nn.Linear(input_dim, mlp_ratio * input_dim),
@@ -270,7 +303,8 @@ class DiTBlock(nn.Module):
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
-    ) -> Float[Tensor, "batch_size seq_len embedding_dim"]:
+        shape: tuple[int, int] | None = None,
+    ) -> Float[Tensor, "batch_size seq_len input_dim"]:
         """
         Forward pass of the DiTBlock applying modulation and attention mechanisms.
         Args:
@@ -280,19 +314,22 @@ class DiTBlock(nn.Module):
             Tensor: The processed input tensor with residual connection
         """
         return (
-            checkpoint(self._forward, *(input, y), use_reentrant=False)
+            checkpoint(self._forward, *(input, y, shape), use_reentrant=False)
             if self.use_checkpoint
-            else self._forward(input, y)
+            else self._forward(input, y, shape)
         )  # type: ignore
 
     def _forward(
-        self, input: Float[Tensor, "batch_size seq_len embedding_dim"], y: Float[Tensor, "batch_size embedding_dim"]
+        self,
+        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        y: Float[Tensor, "batch_size embedding_dim"] | Float[Tensor, "batch_size seq_len embedding_dim"],
+        shape: tuple[int, int] | None = None,
     ) -> Tensor:
         modulation: ModulationOut = self.modulation(y)
 
         modulated_input = (
             input
-            + self.attention(modulate(self.norm_1(input), scale=modulation.alpha, shift=modulation.beta))
+            + self.attention(modulate(self.norm_1(input), scale=modulation.alpha, shift=modulation.beta), shape=shape)
             * modulation.gamma
         )
 
@@ -345,7 +382,10 @@ class MMDiTBlock(nn.Module):
         embedding_dim: int,
         num_heads: int,
         mlp_ratio: int,
-        partial_rotary_factor: float = 1,
+        partial_rotary_factor_input: float = 1,
+        base_input: int = 100,
+        partial_rotary_factor_context: float = 1,
+        base_context: int = 10000,
         use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
@@ -356,7 +396,14 @@ class MMDiTBlock(nn.Module):
         self.input_norm_1 = RMSNorm(input_dim)
 
         self.attention = MMDiTAttention(
-            context_dim, input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor
+            context_dim,
+            input_dim,
+            hidden_dim,
+            num_heads,
+            partial_rotary_factor_input,
+            base_input,
+            partial_rotary_factor_context,
+            base_context,
         )
 
         self.context_norm_2 = RMSNorm(context_dim)
@@ -376,16 +423,22 @@ class MMDiTBlock(nn.Module):
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        input: Float[Tensor, "batch_size seq_len_input embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
-        context: Float[Tensor, "batch_size seq_len context_dim"],
-    ) -> tuple[Float[Tensor, "batch_size seq_len embedding_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
+        context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+        shape: tuple[int, int] | None = None,
+    ) -> tuple[
+        Float[Tensor, "batch_size seq_len_input embedding_dim"], Float[Tensor, "batch_size seq_len_context context_dim"]
+    ]:
         """
         Forward pass of the MMDiT module applying modulation and attention mechanisms.
         Args:
             - input (Tensor): The input tensor to be processed
             - y (Tensor): The conditioning tensor used for modulation
             - context (Tensor): The context tensor to be processed alongside input
+            - attn_mask (Tensor | None): Optional attention mask for context
+            - shape (tuple[int, int] | None): Optional shape for rotary embeddings
         Returns:
             tuple: A tuple containing:
                 - Tensor: The modulated and processed input tensor with residual connection
@@ -398,9 +451,9 @@ class MMDiTBlock(nn.Module):
         5. Residual connections for both input and context paths
         """
         return (
-            checkpoint(self._forward, *(input, y, context), use_reentrant=False)
+            checkpoint(self._forward, *(input, y, context, attn_mask, shape), use_reentrant=False)
             if self.use_checkpoint
-            else self._forward(input, y, context)
+            else self._forward(input, y, context, attn_mask, shape)
         )  # type: ignore
 
     def _forward(
@@ -408,6 +461,8 @@ class MMDiTBlock(nn.Module):
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
         context: Float[Tensor, "batch_size seq_len context_dim"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+        shape: tuple[int, int] | None = None,
     ):
         modulation_input: ModulationOut = self.modulation_input(y)
         modulation_context: ModulationOut = self.modulation_context(y)
@@ -417,7 +472,9 @@ class MMDiTBlock(nn.Module):
             self.context_norm_1(context), scale=modulation_context.alpha, shift=modulation_context.beta
         )
 
-        modulated_input, modulated_context = self.attention(modulated_input, modulated_context)
+        modulated_input, modulated_context = self.attention(
+            modulated_input, modulated_context, attn_mask=attn_mask, shape=shape
+        )
         modulated_input = input + modulated_input * modulation_input.gamma
         modulated_context = context + modulated_context * modulation_context.gamma
 
@@ -461,7 +518,51 @@ class ModulatedLastLayer(nn.Module):
 
 class MMDiT(Denoiser):
     """
-    architecture following https://arxiv.org/pdf/2403.03206
+    Multimodal DiT architecture following https://arxiv.org/pdf/2403.03206
+
+    This module implements a DiT-style transformer that can run in two modes:
+    - simple_dit=True: a single-stream DiT with label conditioning only (no multimodal context).
+    - simple_dit=False: an MMDiT with self attention with contextual tokens from a `context_embedder`.
+
+    In both modes the input image is patchified with a convolutional projection, processed by a stack
+    of DiT/MMDiT blocks, then projected back to per-patch predictions and finally unpatchified to
+    the image space via a modulation-aware last layer.
+
+    Args:
+        simple_dit (bool): If True, use DiT blocks with class-label conditioning only (no context
+            or cross-attention). If False, use MMDiT blocks with cross-attention to contextual tokens
+            produced by `context_embedder`. Default: False.
+        input_channels (int): Number of channels of the main input x. Default: 3.
+        output_channels (int | None): Number of channels to predict. If None, equals `input_channels`.
+            Default: None.
+        input_dim (int): Token/patch embedding width for the image stream. Also the hidden size used
+            before the final per-patch projection. Default: 4096.
+        hidden_dim (int): Inner attention dimension for attention projections. Default: 4096.
+        embedding_dim (int): Conditioning embedding width (for timestep/labels/pooled context) used
+            by modulation layers and the last prediction layer. Default: 4096.
+        num_heads (int): Number of attention heads in each block. Default: 16.
+        mlp_ratio (int): Expansion ratio for the MLP in each block. Default: 4.
+        patch_size (int): Side length P of square patches. Images are projected with stride P. Default: 16.
+        depth (int): Number of DiT/MMDiT blocks. Default: 38.
+        context_dim (int): Model width for contextual tokens after `context_embed` when
+            `simple_dit=False`. Ignored when `simple_dit=True`. Default: 4096.
+        partial_rotary_factor (float): Fraction of each head dimension using RoPE.
+            1.0 means full rotary. Default: 1.0.
+        frequency_embedding (int): Size of the Fourier timestep embedding before the time MLP.
+            Default: 256.
+        n_classes (int | None): Number of classes for label conditioning in `simple_dit` mode.
+            Required to use classifier-free guidance with labels. Must be None when using
+            a `context_embedder`. Default: None.
+        classifier_free (bool): Enables classifier-free guidance. In `simple_dit`, it applies to
+            dropped labels; in MMDiT mode, it is forwarded to the context embedder which may drop
+            context. Default: False.
+        context_embedder (ContextEmbedder | None): When `simple_dit=False`, a module returning
+            `ContextEmbedderOutput`. Must be provided for text conditioning and must be None
+            when `simple_dit=True`. If the embedder returns pooled and token embeddings
+            (`n_output == 2`), pooled features are fused into the timestep embedding via an MLP.
+            Default: None.
+        use_checkpoint (bool): Enable torch.utils.checkpoint in blocks to trade compute for memory.
+            Default: False.
     """
 
     def __init__(
@@ -477,7 +578,10 @@ class MMDiT(Denoiser):
         patch_size: int = 16,
         depth: int = 38,
         context_dim: int = 4096,
-        partial_rotary_factor: float = 1,
+        partial_rotary_factor_input: float = 1,
+        base_input: int = 100,
+        partial_rotary_factor_context: float = 1,
+        base_context: int = 10000,
         frequency_embedding: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
@@ -502,16 +606,23 @@ class MMDiT(Denoiser):
 
         if not self.simple_dit:
             assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
-            assert self.context_embedder.n_output == 2, "for MMDiT context embedder should provide 2 embeddings"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
                 isinstance(i, int) for i in self.context_embedder.output_size
             ), "context_embedder.output_size must be a tuple of integers"
-            self.mlp_pooled_context = nn.Sequential(
-                nn.Linear(self.context_embedder.output_size[0], embedding_dim),
-                nn.SiLU(),
-                nn.Linear(embedding_dim, embedding_dim),
-            )
-            self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+
+            self.pooled_embedding = False
+            self.mlp_pooled_context = None
+            if self.context_embedder.n_output == 2:
+                self.pooled_embedding = True
+                self.mlp_pooled_context = nn.Sequential(
+                    nn.Linear(self.context_embedder.output_size[0], embedding_dim),
+                    nn.SiLU(),
+                    nn.Linear(embedding_dim, embedding_dim),
+                )
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+            else:
+                assert self.context_embedder.n_output == 1
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
         else:
             self.label_embed = (
                 LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
@@ -540,7 +651,10 @@ class MMDiT(Denoiser):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    partial_rotary_factor_input=partial_rotary_factor_input,
+                    base_input=base_input,
+                    partial_rotary_factor_context=partial_rotary_factor_context,
+                    base_context=base_context,
                     use_checkpoint=use_checkpoint,
                 )
                 if not self.simple_dit
@@ -550,7 +664,8 @@ class MMDiT(Denoiser):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    partial_rotary_factor=partial_rotary_factor_input,
+                    base=base_input,
                     use_checkpoint=use_checkpoint,
                 )
                 for _ in range(depth)
@@ -579,6 +694,8 @@ class MMDiT(Denoiser):
         self.original_size = (H, W)
 
         x = self.conv_proj(x)
+        _, _, Hp, Wp = x.shape
+        self.grid_size = (Hp, Wp)
         x = rearrange(x, "b c h w -> b (h w) c")
 
         return x
@@ -593,16 +710,16 @@ class MMDiT(Denoiser):
         Returns:
             Tensor: Reconstructed image tensor of shape (B, C, H, W)
         """
-        H, W = self.original_size
-        patch_size = self.patch_size
-        p = self.output_channels
-
-        # Calculate number of patches in height and width dimensions
-        h = H // patch_size
-        w = W // patch_size
-
         # Reshape the tensor to the original image dimensions
-        x = rearrange(x, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", h=h, w=w, p1=patch_size, p2=patch_size, c=p)
+        x = rearrange(
+            x,
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
+            h=self.grid_size[0],
+            w=self.grid_size[1],
+            p1=self.patch_size,
+            p2=self.patch_size,
+            c=self.output_channels,
+        )
         return x
 
     def mmdit_forward(
@@ -615,18 +732,27 @@ class MMDiT(Denoiser):
     ) -> ModelOutput:
         assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))
-        context_pooled, context = self.context_embedder(initial_context, p)
-        context_pooled = self.mlp_pooled_context(context_pooled) + emb
+        context_output: ContextEmbedderOutput = self.context_embedder(initial_context, p)
+        if self.pooled_embedding:
+            assert self.mlp_pooled_context is not None, (
+                "for MMDiT with pooled context, mlp_pooled_context must be defined"
+            )
+            assert "pooled_embeddings" in context_output, "pooled embeddings must be in context_output"
+            context_pooled = context_output["pooled_embeddings"]
+            emb = self.mlp_pooled_context(context_pooled) + emb
+
+        context = context_output["embeddings"]
         context = self.context_embed(context)
+        attn_mask = context_output.get("attn_mask", None)
 
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, context_pooled, context)
+            x, context = layer(x, emb, context, attn_mask=attn_mask, shape=self.grid_size)
             if features:
                 features.append(x)
 
-        x = self.last_layer(x, context_pooled)
+        x = self.last_layer(x, emb)
         if features:
             features.append(x)
         model_output: ModelOutput = {"x": x}
@@ -654,7 +780,7 @@ class MMDiT(Denoiser):
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x = layer(x, emb)
+            x = layer(x, emb, shape=self.grid_size)
             if features:
                 features.append(x)
 
@@ -674,6 +800,7 @@ class MMDiT(Denoiser):
         p: float = 0.0,
         y: Int[Tensor, "batch_size"] | None = None,
         x_context: Tensor | None = None,
+        intermediate_features: bool = False,
     ) -> ModelOutput:
         assert not (initial_context is not None and y is not None), "initial_context and y cannot both be specified"
         if p > 0:
@@ -685,9 +812,9 @@ class MMDiT(Denoiser):
 
         x = self.patchify(x)
         if self.simple_dit:
-            model_output = self.simple_dit_forward(x, timesteps, p, y)
+            model_output = self.simple_dit_forward(x, timesteps, p, y, intermediate_features)
         else:
-            model_output = self.mmdit_forward(x, timesteps, initial_context, p)
+            model_output = self.mmdit_forward(x, timesteps, initial_context, p, intermediate_features)
         model_output["x"] = self.unpatchify(model_output["x"])
 
         return model_output

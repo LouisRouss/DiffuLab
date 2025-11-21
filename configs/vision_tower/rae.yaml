@@ -1,0 +1,19 @@
+_target_: diffulab.networks.vision_towers.RAE
+decoder:
+  _target_: diffulab.networks.vision_towers.RAEDecoder
+  out_size: [256, 256]
+  out_channels: 3
+  encoder_dim: 768
+  input_dim: 1024
+  hidden_dim: 1024
+  num_heads: 16
+  mlp_ratio: 4
+  patch_size: 16
+  depth: 24
+  partial_rotary_factor: 1
+  use_checkpoint: False
+  dropout_attn: 0
+  dropout_mlp: 0
+dinov3_id: facebook/dinov3-vitb16-pretrain-lvd1689m
+load_encoder: true
+encoder_patch_size: 16

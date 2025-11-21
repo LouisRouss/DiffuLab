@@ -8,10 +8,10 @@ from einops import rearrange, repeat
 from jaxtyping import Float
 from torch import Tensor, einsum, nn
 
-from diffulab.networks.utils.nn import RotaryPositionalEmbedding
+from diffulab.networks.utils.nn import RotaryPositionalEmbedding2D
 
 
-class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
+class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding2D):
     """Rotary positional embedding applied only to keys.
 
     This subclass restricts rotary application to the key tensor (``k``) while
@@ -31,11 +31,8 @@ class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
         q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
-    ) -> tuple[
-        Float[Tensor, "batch_size seq_len n_heads head_dim"],
-        Float[Tensor, "batch_size seq_len n_heads head_dim"],
-        Float[Tensor, "batch_size seq_len n_heads head_dim"],
-    ]:
+        shape: tuple[int, int] | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor]:
         """Apply rotary embedding to the key tensor only.
 
         Args:
@@ -48,17 +45,21 @@ class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
             the first ``dim`` key channels rotated.
         """
         seq_len = k.shape[1]
-        self._cache(seq_len)
-        cos = self.cos.to(device=k.device, dtype=k.dtype)
-        sin = self.sin.to(device=k.device, dtype=k.dtype)
+        if shape is None:
+            shape = (int(seq_len**0.5), int(seq_len**0.5))
+        height, width = shape
+        assert height * width == seq_len, "Sequence length does not match provided shape."
+        self._cache(height, width)
+
+        cos = self.cos.to(device=q.device, dtype=q.dtype)  # [S, dim]
+        sin = self.sin.to(device=q.device, dtype=q.dtype)  # [S, dim]
 
         # [batch_size, seq_length, num_heads, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
         k = k.transpose(1, 2)
 
         # K rotation
         k_rope, k_pass = k[..., : self.dim], k[..., self.dim :]
-        k_neg_half = self._neg_half(k_rope)
-        k_rope = (k_rope * cos[:seq_len]) + (k_neg_half * sin[:seq_len])
+        k_rope = self._apply_rotary(k_rope, cos, sin)
         k_rot = torch.cat((k_rope, k_pass), dim=-1)
 
         # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
