@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -217,7 +216,7 @@ class RotaryPositionalEmbedding(nn.Module):
         q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
@@ -230,7 +229,7 @@ class RotaryPositionalEmbedding(nn.Module):
             k (Tensor): the key tensor of shape [batch_size, seq_len, n_heads, head_dim].
             v (Tensor): the value tensor of shape [batch_size, seq_len, n_heads, head_dim].
         Returns:
-            Tuple[Tensor, Tensor, Tensor]: the rotated query and key tensors, and the unchanged value tensor.
+            tuple[Tensor, Tensor, Tensor]: the rotated query and key tensors, and the unchanged value tensor.
         """
         seq_len = q.shape[1]
         self._cache(seq_len)
@@ -254,6 +253,145 @@ class RotaryPositionalEmbedding(nn.Module):
         k_rot = torch.cat((k_rope, k_pass), dim=-1)
 
         # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
+        q_rot = q_rot.transpose(1, 2)
+        k_rot = k_rot.transpose(1, 2)
+
+        return q_rot, k_rot, v
+
+
+class RotaryPositionalEmbedding2D(nn.Module):
+    theta: Tensor
+    h: int
+    w: int
+    cos: Tensor
+    sin: Tensor
+    """
+    2D Rotary Positional Embedding (RoPE) module.
+    This module applies 2D rotary positional encoding to the query and key tensors in a multi-head attention mechanism.
+    """
+
+    def __init__(self, dim: int = 32, base: int = 100) -> None:
+        super().__init__()  # type: ignore
+        assert dim % 4 == 0, "Dimension must be divisible by 4 for 2D rotary embeddings."
+        self.dim = dim
+        self.base = base
+        self.register_buffer(
+            name="theta",
+            tensor=torch.pow(base, torch.arange(0, self.dim, 4, dtype=torch.float32) / self.dim).reciprocal(),
+        )
+        self.h = 0
+        self.w = 0
+        self.cos = torch.empty(0, requires_grad=False)
+        self.sin = torch.empty(0, requires_grad=False)
+
+    def get_2d_grid(self, height: int, width: int) -> tuple[Tensor, Tensor]:
+        """
+        Get a 2D grid of coordinates.
+        Args:
+            height (int): the height of the grid.
+            width (int): the width of the grid.
+        Returns:
+            tuple[Tensor, Tensor]: the y and x coordinates of the grid.
+        """
+        y, x = torch.meshgrid(
+            torch.arange(height, device=self.theta.device), torch.arange(width, device=self.theta.device), indexing="ij"
+        )
+        return y.flatten().float(), x.flatten().float()
+
+    def _cache(self, height: int, width: int) -> None:
+        """
+        Cache the cosine and sine values for the given height and width.
+        Args:
+            height (int): the height of the sequence for which to cache the values.
+            width (int): the width of the sequence for which to cache the values.
+        """
+        if self.h == height and self.w == width:
+            return
+        self.h = height
+        self.w = width
+        y, x = self.get_2d_grid(height, width)
+
+        angles_x = torch.outer(x, self.theta)
+        angles_y = torch.outer(y, self.theta)
+
+        freqs_pairs = torch.cat([angles_x, angles_y], dim=-1)  # [S, dim/2]
+
+        with torch.no_grad():
+            self.cos = freqs_pairs.cos().float()  # [N, dim]
+            self.sin = freqs_pairs.sin().float()  # [N, dim]
+
+    def _apply_rotary(
+        self,
+        x: Float[Tensor, "batch_size num_head seq_len dim_rot"],  # [B, H, S, D_rot]
+        cos: Float[Tensor, "seq_len dim_rot/2"],  # [S, D_rot/2]
+        sin: Float[Tensor, "seq_len dim_rot/2"],  # [S, D_rot/2]
+    ) -> Float[Tensor, "batch_size num_head seq_len dim_rot"]:
+        """
+        Apply rotary positional embedding to the input tensor.
+        Args:
+            x (Tensor): the input tensor
+            cos (Tensor): the cached cosine values
+            sin (Tensor): the cached sine values
+        Returns:
+            Tensor: the rotated tensor
+        """
+        # broadcast: [1,1,S,D/2]
+        cos = cos[None, None, :, :]
+        sin = sin[None, None, :, :]
+
+        # contiguous RoPE: pair (0,1), (2,3), ...
+        x_even = x[..., 0::2]  # [B, H, S, D/2]
+        x_odd = x[..., 1::2]  # [B, H, S, D/2]
+
+        x_rot_even = x_even * cos - x_odd * sin
+        x_rot_odd = x_even * sin + x_odd * cos
+
+        # interleave back to [B,H,S,D]
+        x_rot = torch.stack([x_rot_even, x_rot_odd], dim=-1)  # [B,H,S,D/2,2]
+        x_rot = x_rot.flatten(-2)  # [B,H,S,D]
+        return x_rot
+
+    def forward(
+        self,
+        q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        shape: tuple[int, int] | None = None,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """
+        Apply 2D Rotary Positional Encoding to the query and key tensors.
+        Args:
+            q (Tensor): the query tensor of shape [batch_size, seq_len, n_heads, head_dim].
+            k (Tensor): the key tensor of shape [batch_size, seq_len, n_heads, head_dim].
+            v (Tensor): the value tensor of shape [batch_size, seq_len, n_heads, head_dim].
+            shape (tuple[int, int] | None): the (height, width) shape of the sequence. If None, assumes square shape.
+        Returns:
+            tuple[Tensor, Tensor, Tensor]: the rotated query and key tensors, and the unchanged value tensor.
+        """
+        seq_len = q.shape[1]
+        if shape is None:
+            shape = (int(seq_len**0.5), int(seq_len**0.5))
+        height, width = shape
+        assert height * width == seq_len, "Sequence length does not match provided shape."
+        self._cache(height, width)
+
+        cos = self.cos.to(device=q.device, dtype=q.dtype)  # [S, dim]
+        sin = self.sin.to(device=q.device, dtype=q.dtype)  # [S, dim]
+
+        # [batch_size, seq_length, num_heads, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+
+        # Q rotation
+        q_rope, q_pass = q[..., : self.dim], q[..., self.dim :]
+        q_rope = self._apply_rotary(q_rope, cos, sin)
+        q_rot = torch.cat((q_rope, q_pass), dim=-1)
+
+        # K rotation
+        k_rope, k_pass = k[..., : self.dim], k[..., self.dim :]
+        k_rope = self._apply_rotary(k_rope, cos, sin)
+        k_rot = torch.cat((k_rope, k_pass), dim=-1)
+
         q_rot = q_rot.transpose(1, 2)
         k_rot = k_rot.transpose(1, 2)
 
