@@ -69,6 +69,7 @@ class Diffuser:
         self.extra_losses = extra_losses
         if self.vision_tower:
             self.latent_scale = self.vision_tower.latent_scale
+            self.latent_bias = self.vision_tower.latent_bias
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
@@ -215,7 +216,9 @@ class Diffuser:
                 return_intermediates=return_intermediates,
             )
             if not return_latents:
-                sampling_output["x"] = self.vision_tower.decode(sampling_output["x"] / self.latent_scale)
+                sampling_output["x"] = self.vision_tower.decode(
+                    sampling_output["x"] / self.latent_scale + self.latent_bias
+                )
             return sampling_output
 
         return self.diffusion.denoise(

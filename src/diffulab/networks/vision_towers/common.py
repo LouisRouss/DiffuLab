@@ -15,15 +15,17 @@ from tqdm import tqdm
 
 
 class VisionTower(nn.Module, ABC):
-    def __init__(self, latent_scale: float = 1.0) -> None:
+    def __init__(self, latent_scale: float | Tensor = 1.0, latent_bias: float | Tensor = 0) -> None:
         """
         Base class for vision towers, which are used to encode and decode images into latent representations.
 
         Args:
-            - latent_scale (float): Scale factor for the latent representation. Default is 1.0.
+            - latent_scale (float | Tensor): Scale factor for the latent representation. Default is 1.0.
+            - latent_bias (float | Tensor): Bias for the latent representation. Default is 0.
         """
         super().__init__()  # type: ignore
         self.latent_scale = latent_scale
+        self.latent_bias = latent_bias
 
     @property
     @abstractmethod
