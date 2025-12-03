@@ -8,10 +8,10 @@ from einops import rearrange, repeat
 from jaxtyping import Float
 from torch import Tensor, einsum, nn
 
-from diffulab.networks.utils.nn import RotaryPositionalEmbedding
+from diffulab.networks.utils.nn import RotaryPositionalEmbeddingNDim, get_cos_sin_ndim_grid
 
 
-class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
+class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbeddingNDim):
     """Rotary positional embedding applied only to keys.
 
     This subclass restricts rotary application to the key tensor (``k``) while
@@ -23,14 +23,15 @@ class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
         base (int): Base for rotary frequency computation.
     """
 
-    def __init__(self, dim: int = 32, base: int = 10_000) -> None:
-        super().__init__(dim, base)  # type: ignore
+    def __init__(self, axes_dim: list[int]) -> None:
+        super().__init__(axes_dim)  # type: ignore
 
     def forward(
         self,
         q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        cos_sin: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
     ) -> tuple[
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
@@ -42,26 +43,27 @@ class PerceiverRotaryPositionalEmbedding(RotaryPositionalEmbedding):
             q (Tensor): Query tensor of shape ``[B, N, H, D]``.
             k (Tensor): Key tensor of shape ``[B, N, H, D]``.
             v (Tensor): Value tensor of shape ``[B, N, H, D]``.
+            cos_sin (tuple): Precomputed cosine and sine tables.
 
         Returns:
             tuple: ``(q, k_rot, v)`` with identical shapes where ``k_rot`` has
             the first ``dim`` key channels rotated.
         """
-        seq_len = k.shape[1]
-        self._cache(seq_len)
-        cos = self.cos.to(device=k.device, dtype=k.dtype)
-        sin = self.sin.to(device=k.device, dtype=k.dtype)
+        cos, sin = cos_sin  # precomputed
+        cos = cos.to(device=q.device, dtype=q.dtype)  # [S, dim/2]
+        sin = sin.to(device=q.device, dtype=q.dtype)  # [S, dim/2]
 
-        # [batch_size, seq_length, num_heads, head_dim] -> [batch_size, num_heads, seq_length, head_dim]
+        # [B, S, H, D] -> [B, H, S, D]
         k = k.transpose(1, 2)
 
-        # K rotation
+        # Take rotary part and pass-through part
         k_rope, k_pass = k[..., : self.dim], k[..., self.dim :]
-        k_neg_half = self._neg_half(k_rope)
-        k_rope = (k_rope * cos[:seq_len]) + (k_neg_half * sin[:seq_len])
-        k_rot = torch.cat((k_rope, k_pass), dim=-1)
 
-        # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
+        # Apply RoPE on the first self.dim channels
+        k_rope = self._apply_rotary(k_rope, cos, sin)
+        k_rot = torch.cat([k_rope, k_pass], dim=-1)
+
+        # Back to [B, S, H, D]
         k_rot = k_rot.transpose(1, 2)
 
         return q, k_rot, v
@@ -101,7 +103,7 @@ class PerceiverAttention(nn.Module):
         partial_rotary_factor (float): Fraction (0..1] of ``head_dim`` receiving rotary embedding.
     """
 
-    def __init__(self, dim: int, head_dim: int = 64, num_heads: int = 8, partial_rotary_factor: float = 1) -> None:
+    def __init__(self, dim: int, axes_dim: list[int], head_dim: int = 64, num_heads: int = 8) -> None:
         super().__init__()  # type: ignore[reportUnknownMemberType]
         self.scale = head_dim**-0.5
         self.num_heads = num_heads
@@ -114,11 +116,13 @@ class PerceiverAttention(nn.Module):
         self.to_kv = nn.Linear(dim, inner_dim * 2, bias=False)
         self.to_out = nn.Linear(inner_dim, dim, bias=False)
 
-        rotary_dim = int(head_dim * partial_rotary_factor)
-        self.rope = PerceiverRotaryPositionalEmbedding(dim=rotary_dim)
+        self.rope = PerceiverRotaryPositionalEmbedding(axes_dim=axes_dim)
 
     def forward(
-        self, x: Float[Tensor, "batch n dim"], latents: Float[Tensor, "batch m dim"]
+        self,
+        x: Float[Tensor, "batch n dim"],
+        latents: Float[Tensor, "batch m dim"],
+        cos_sin: tuple[Float[Tensor, "n dim/2"], Float[Tensor, "n dim/2"]],
     ) -> Float[Tensor, "batch m dim"]:
         """
         Perform Perceiver cross/self attention update on latent tokens.
@@ -142,7 +146,7 @@ class PerceiverAttention(nn.Module):
             rearrange(k_x, "b n (h d) -> b n h d", h=self.num_heads),
             rearrange(v_x, "b n (h d) -> b n h d", h=self.num_heads),
         )
-        q, k_x, v_x = self.rope(q=q, k=k_x, v=v_x)
+        q, k_x, v_x = self.rope(q=q, k=k_x, v=v_x, cos_sin=cos_sin)
         q, k_x, v_x = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k_x, v_x])
 
         k_latent, v_latent = (
@@ -183,25 +187,43 @@ class PerceiverResampler(nn.Module):
     """
 
     def __init__(
-        self, dim: int, depth: int, head_dim: int = 64, num_heads: int = 8, ff_mult: int = 4, num_latents: int = 16
+        self,
+        dim: int,
+        depth: int,
+        rope_axes_dim: list[int] | None = None,
+        head_dim: int = 64,
+        num_heads: int = 8,
+        ff_mult: int = 4,
+        num_latents: int = 16,
+        rope_base: int = 10_000,
     ):
         super().__init__()  # type: ignore[reportUnknownMemberType]
         self.latents = nn.Parameter(torch.randn(num_latents, dim))
+        self.rope_base = rope_base
 
         self.layers = nn.ModuleList([])
+        if rope_axes_dim is None:
+            rope_axes_dim = [
+                int(head_dim // 2),  # H
+                int(head_dim // 2),  # W
+            ]
         for _ in range(depth):
             self.layers.append(
                 nn.ModuleList(
                     [
-                        PerceiverAttention(dim=dim, head_dim=head_dim, num_heads=num_heads),
+                        PerceiverAttention(dim=dim, axes_dim=rope_axes_dim, head_dim=head_dim, num_heads=num_heads),
                         FeedForward(dim=dim, mult=ff_mult),
                     ]
                 )
             )
-
+        self.rope_axes_dim = rope_axes_dim
         self.norm = nn.LayerNorm(dim)
 
-    def forward(self, x: Float[Tensor, "batch n dim"]) -> Float[Tensor, "batch m dim"]:
+    def forward(
+        self,
+        x: Float[Tensor, "batch n dim"],
+        cos_sin: tuple[Float[Tensor, "n dim/2"], Float[Tensor, "n dim/2"]] | None = None,
+    ) -> Float[Tensor, "batch m dim"]:
         """Encode an input sequence into a fixed set of latent tokens.
 
         Args:
@@ -210,10 +232,21 @@ class PerceiverResampler(nn.Module):
         Returns:
             Tensor: Latent tokens of shape ``[B, M, D]`` where ``M = num_latents``.
         """
+        if cos_sin is None:
+            H, W = int(x.shape[1] ** 0.5), int(x.shape[1] ** 0.5)
+            pos_ids = torch.stack(
+                torch.meshgrid(
+                    torch.arange(H, device=x.device),
+                    torch.arange(W, device=x.device),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).view(-1, 2)
+            cos_sin = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
         latents = repeat(self.latents, "n d -> b n d", b=x.shape[0])
 
         for attn, ff in self.layers:  # type: ignore
-            latents = cast(Tensor, attn(x, latents) + latents)
+            latents = cast(Tensor, attn(x, latents, cos_sin=cos_sin) + latents)
             latents = cast(Tensor, ff(latents) + latents)
 
         return self.norm(latents)

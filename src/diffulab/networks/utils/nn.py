@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass
-from typing import Tuple
 
 import torch
 import torch.nn as nn
@@ -217,7 +216,7 @@ class RotaryPositionalEmbedding(nn.Module):
         q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
-    ) -> Tuple[
+    ) -> tuple[
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
         Float[Tensor, "batch_size seq_len n_heads head_dim"],
@@ -254,6 +253,147 @@ class RotaryPositionalEmbedding(nn.Module):
         k_rot = torch.cat((k_rope, k_pass), dim=-1)
 
         # [batch_size, num_heads, seq_length, head_dim] -> [batch_size, seq_length, num_heads, head_dim]
+        q_rot = q_rot.transpose(1, 2)
+        k_rot = k_rot.transpose(1, 2)
+
+        return q_rot, k_rot, v
+
+
+def get_cos_sin_ndim_grid(
+    pos_id: Int[Tensor, "seq_len n_axes"], base: float, axes_dim: list[int]
+) -> tuple[Tensor, Tensor]:
+    """
+    Get cos/sin for N-D grid positions.
+
+    Args:
+        pos_id: [S, n_axes] positional IDs along each axis.
+        base: base frequency for RoPE.
+        axes_dim: list of rotary dimensions per axis.
+    Returns:
+        cos: [S, dim/2]
+        sin: [S, dim/2]
+    """
+    assert len(axes_dim) == pos_id.shape[1], "axes_dim length must match pos_id n_axes"
+    cos_chunks: list[Tensor] = []
+    sin_chunks: list[Tensor] = []
+
+    for axis_idx, axis_dim in enumerate(axes_dim):
+        # pos along this axis: [S]
+        pos_i = pos_id[:, axis_idx].to(dtype=torch.float64)
+
+        freqs = 1.0 / (
+            base
+            ** (
+                torch.arange(
+                    0,
+                    axis_dim,
+                    2,
+                    dtype=torch.float64,
+                    device=pos_i.device,
+                )
+                / axis_dim
+            )
+        )  # [D_i/2]
+
+        # angles: [S, D_i/2]
+        angles_i = torch.outer(pos_i, freqs)
+
+        cos_i = angles_i.cos().float()  # [S, D_i/2]
+        sin_i = angles_i.sin().float()  # [S, D_i/2]
+
+        cos_chunks.append(cos_i)
+        sin_chunks.append(sin_i)
+
+    return torch.cat(cos_chunks, dim=-1), torch.cat(sin_chunks, dim=-1)
+
+
+class RotaryPositionalEmbeddingNDim(nn.Module):
+    """
+    N-D Rotary Positional Embedding (RoPE)
+
+    - axes_dim[i] is the rotary dimension allocated to axis i.
+    - Total rotary dimension = sum(axes_dim), which must be <= head_dim.
+    - The first `dim` channels of q/k get RoPE; the rest pass through.
+    """
+
+    def __init__(self, axes_dim: list[int]) -> None:
+        super().__init__()  # type: ignore
+
+        assert len(axes_dim) > 0, "axes_dim must be non-empty"
+        for d in axes_dim:
+            assert d % 2 == 0, f"Each axis_dim must be even, got {d}"
+
+        self.axes_dim: list[int] = axes_dim
+        self.n_axes: int = len(axes_dim)
+        self.dim: int = int(sum(axes_dim))  # total rotary dim across all axes
+
+    @staticmethod
+    def _apply_rotary(
+        x: Float[Tensor, "batch_size num_head seq_len dim_rot"],  # [B, H, S, D_rot]
+        cos: Float[Tensor, "seq_len dim_rot_half"],  # [S, D_rot/2]
+        sin: Float[Tensor, "seq_len dim_rot_half"],  # [S, D_rot/2]
+    ) -> Float[Tensor, "batch_size num_head seq_len dim_rot"]:
+        """
+        Apply rotary positional embedding to the input tensor, assuming:
+        - x[..., 0::2] and x[..., 1::2] form the complex pairs
+        - cos/sin are per-pair, shape [S, D_rot/2]
+        """
+        # [1, 1, S, D_rot/2]
+        cos = cos[None, None, :, :]
+        sin = sin[None, None, :, :]
+
+        x_even = x[..., 0::2]  # [B, H, S, D_rot/2]
+        x_odd = x[..., 1::2]  # [B, H, S, D_rot/2]
+
+        x_rot_even = x_even * cos - x_odd * sin
+        x_rot_odd = x_even * sin + x_odd * cos
+
+        x_rot = torch.stack([x_rot_even, x_rot_odd], dim=-1)  # [B, H, S, D_rot/2, 2]
+        x_rot = x_rot.flatten(-2)  # [B, H, S, D_rot]
+        return x_rot
+
+    # ------------------------------------------------------------------ #
+    # Forward
+    # ------------------------------------------------------------------ #
+
+    def forward(
+        self,
+        q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
+        cos_sin: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+        # pos_id: Int[Tensor, "seq_len n_axes"],
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        """
+        Apply N-D RoPE to q and k.
+
+        Args:
+            q, k, v: [B, S, H, D_head]
+            pos_id: [S, n_axes] positional IDs along each axis.
+
+        Returns:
+            (q_rot, k_rot, v): q,k rotated on the first self.dim channels; v unchanged.
+        """
+        cos, sin = cos_sin  # precomputed
+        cos = cos.to(device=q.device, dtype=q.dtype)  # [S, dim/2]
+        sin = sin.to(device=q.device, dtype=q.dtype)  # [S, dim/2]
+
+        # [B, S, H, D] -> [B, H, S, D]
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+
+        # Take rotary part and pass-through part
+        q_rope, q_pass = q[..., : self.dim], q[..., self.dim :]
+        k_rope, k_pass = k[..., : self.dim], k[..., self.dim :]
+
+        # Apply RoPE on the first self.dim channels
+        q_rope = self._apply_rotary(q_rope, cos, sin)
+        k_rope = self._apply_rotary(k_rope, cos, sin)
+
+        q_rot = torch.cat([q_rope, q_pass], dim=-1)
+        k_rot = torch.cat([k_rope, k_pass], dim=-1)
+
+        # Back to [B, S, H, D]
         q_rot = q_rot.transpose(1, 2)
         k_rot = k_rot.transpose(1, 2)
 
@@ -333,6 +473,17 @@ class QKNorm(nn.Module):
         q = self.query_norm(q)
         k = self.key_norm(k)
         return q.to(v), k.to(v)
+
+
+class PackedSwiGLU(nn.Module):
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__()  # type: ignore
+
+    def forward(self, x: Float[Tensor, "batch_size seq_len 2*dim"]) -> Float[Tensor, "batch_size seq_len dim"]:
+        x1, x3 = torch.chunk(x, 2, dim=-1)
+        return F.silu(x1) * x3
 
 
 @dataclass

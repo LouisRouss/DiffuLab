@@ -15,6 +15,7 @@ from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock
 from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
+    get_cos_sin_ndim_grid,
     modulate,
     timestep_embedding,
 )
@@ -93,7 +94,9 @@ class DDT(Denoiser):
         context_dim: int = 1024,
         encoder_depth: int = 8,
         decoder_depth: int = 4,
+        rope_base: int = 10_000,
         partial_rotary_factor: float = 1,
+        rope_axes_dim: list[int] | None = None,
         frequency_embedding: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
@@ -112,10 +115,12 @@ class DDT(Denoiser):
         self.output_channels = output_channels
         self.context_embedder = context_embedder
         self.frequency_embedding = frequency_embedding
+        self.rope_base = rope_base
 
         self.n_classes = n_classes
         self.classifier_free = classifier_free
 
+        heads_dim = hidden_dim // num_heads
         if not self.simple_ddt:
             assert self.context_embedder is not None, "for ddt with text context embedder must be provided"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
@@ -135,11 +140,23 @@ class DDT(Denoiser):
             else:
                 assert self.context_embedder.n_output == 1
                 self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
+            if rope_axes_dim is None:
+                rope_axes_dim = [
+                    int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
+                    int((partial_rotary_factor * heads_dim) // 3),  # H set to 0 for text
+                    int((partial_rotary_factor * heads_dim) // 3),  # W set to 0 for text
+                ]
         else:
             self.label_embed = (
                 LabelEmbed(self.n_classes, input_dim, self.classifier_free) if self.n_classes is not None else None
             )
+            if rope_axes_dim is None:
+                rope_axes_dim = [
+                    int((partial_rotary_factor * heads_dim) // 2),  # H
+                    int((partial_rotary_factor * heads_dim) // 2),  # W
+                ]
 
+        self.rope_axes_dim = rope_axes_dim
         self.last_layer = ModulatedLastLayerDDT(
             embedding_dim=input_dim,
             hidden_size=input_dim,
@@ -171,7 +188,7 @@ class DDT(Denoiser):
                     embedding_dim=input_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
                 if not self.simple_ddt
@@ -181,7 +198,7 @@ class DDT(Denoiser):
                     embedding_dim=input_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
                 for _ in range(encoder_depth)
@@ -199,7 +216,7 @@ class DDT(Denoiser):
                     embedding_dim=input_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
                 for _ in range(decoder_depth)
@@ -228,6 +245,8 @@ class DDT(Denoiser):
         self.original_size = (H, W)
 
         x = self.conv_proj_encoder(x) if encoder else self.conv_proj_decoder(x)
+        _, _, Hp, Wp = x.shape
+        self.grid_size = (Hp, Wp)
         x = rearrange(x, "b c h w -> b (h w) c")
 
         return x
@@ -242,16 +261,16 @@ class DDT(Denoiser):
         Returns:
             Tensor: Reconstructed image tensor of shape (B, C, H, W)
         """
-        H, W = self.original_size
-        patch_size = self.patch_size
-        p = self.output_channels
-
-        # Calculate number of patches in height and width dimensions
-        h = H // patch_size
-        w = W // patch_size
-
         # Reshape the tensor to the original image dimensions
-        x = rearrange(x, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", h=h, w=w, p1=patch_size, p2=patch_size, c=p)
+        x = rearrange(
+            x,
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
+            h=self.grid_size[0],
+            w=self.grid_size[1],
+            p1=self.patch_size,
+            p2=self.patch_size,
+            c=self.output_channels,
+        )
         return x
 
     def encode_mmddt(
@@ -288,10 +307,36 @@ class DDT(Denoiser):
         context = self.context_embed(context)
         attn_mask = context_output.get("attn_mask", None)
 
+        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        # in mmdit attention we concat with context first. Context have 0,0 for h w
+        # text: (t>0, 0, 0)
+        text_pos_ids = torch.stack(
+            [
+                torch.arange(1, context.shape[1], device=x.device),
+                torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
+                torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
+            ],
+            dim=-1,
+        )
+
+        # image: (0, h, w)
+        img_pos_ids = torch.stack(
+            torch.meshgrid(
+                torch.zeros(1, device=x.device, dtype=torch.long),
+                torch.arange(self.grid_size[0], device=x.device),
+                torch.arange(self.grid_size[1], device=x.device),
+                indexing="ij",
+            ),
+            dim=-1,
+        ).view(-1, 3)
+
+        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0)
+        cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
+
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, emb, context, attn_mask=attn_mask)
+            x, context = layer(x, emb, context, cos_sin_rope=cos_sin_rope, attn_mask=attn_mask)
             if features is not None:
                 features.append(x)
 
@@ -328,10 +373,20 @@ class DDT(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
+        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        pos_ids = torch.stack(
+            torch.meshgrid(
+                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
+                indexing="ij",
+            ),
+            dim=-1,
+        ).view(-1, 2)
+        cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
+
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x = layer(x, emb)
+            x = layer(x, emb, cos_sin_rope=cos_sin_rope)
             if features is not None:
                 features.append(x)
 
@@ -360,9 +415,19 @@ class DDT(Denoiser):
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))[:, None, :]
         encoder_output = nn.functional.silu(encoder_output + emb)
 
+        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        pos_ids = torch.stack(
+            torch.meshgrid(
+                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
+                indexing="ij",
+            ),
+            dim=-1,
+        ).view(-1, 2)
+        cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
+
         features: list[Tensor] | None = [] if intermediate_features else None
         for layer in self.decoder_layers:
-            x = layer(x, encoder_output)
+            x = layer(x, encoder_output, cos_sin_rope=cos_sin_rope)
             if features is not None:
                 features.append(x)
 

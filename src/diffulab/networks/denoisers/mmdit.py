@@ -15,9 +15,10 @@ from diffulab.networks.utils.nn import (
     LabelEmbed,
     Modulation,
     ModulationOut,
+    PackedSwiGLU,
     QKNorm,
-    RMSNorm,
-    RotaryPositionalEmbedding,
+    RotaryPositionalEmbeddingNDim,
+    get_cos_sin_ndim_grid,
     modulate,
     timestep_embedding,
 )
@@ -31,8 +32,7 @@ class DiTAttention(nn.Module):
         input_dim (int): Dimension of the input.
         dim (int): Inner Attention dimension.
         num_heads (int): Number of attention heads.
-        partial_rotary_factor (float, optional): Factor for partial rotary embeddings. Default is 0.5.
-        base (int, optional): Base for rotary positional embeddings. Default is 10000.
+        rope_axes_dim (list[int]): List of dimensions for rotary positional embeddings.
 
     Attributes:
         num_heads (int): Number of attention heads.
@@ -40,10 +40,8 @@ class DiTAttention(nn.Module):
         scale (float): Scaling factor for attention scores.
         qkv (nn.Linear): Linear layer for query, key, and value projection of input.
         qk_norm (QKNorm): Normalization layer for input query and key.
-        partial_rotary_factor (float): Factor for partial rotary embeddings.
-        rotary_dim (int): Dimension for rotary embeddings.
         rope (RotaryPositionalEmbedding): Rotary positional embedding layer.
-        input_proj (nn.Linear): Linear layer for projecting the output of the input.
+        proj_out (nn.Linear): Linear layer for projecting the output.
 
     Methods:
         forward(input: Tensor, context: Tensor) -> tuple[Tensor, Tensor]:
@@ -57,18 +55,12 @@ class DiTAttention(nn.Module):
     Example:
         >>> dit_attention = DiTAttention(input_dim=512, dim=512, num_heads=8)
         >>> input_tensor = torch.randn(10, 25, 512)
-        >>> output_tensor = dit_attention(input_tensor)
-        >>> print(output_tensor.shape)  # Output: torch.Size([10, 25, 512])
+        >>> cos_sin_rope = (torch.randn(25, 256), torch.randn(25, 256))
+        >>> output = dit_attention(input_tensor, cos_sin_rope)
+
     """
 
-    def __init__(
-        self,
-        input_dim: int,
-        dim: int,
-        num_heads: int,
-        partial_rotary_factor: float = 1,
-        base: int = 10000,
-    ) -> None:
+    def __init__(self, input_dim: int, dim: int, num_heads: int, rope_axes_dim: list[int]) -> None:
         super().__init__()  # type: ignore
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
@@ -76,14 +68,14 @@ class DiTAttention(nn.Module):
 
         self.qkv = nn.Linear(input_dim, 3 * dim)
         self.qk_norm = QKNorm(dim)
-
-        self.partial_rotary_factor = partial_rotary_factor
-        self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
-
+        self.rope = RotaryPositionalEmbeddingNDim(axes_dim=rope_axes_dim)
         self.proj_out = nn.Linear(dim, input_dim)
 
-    def forward(self, input: Float[Tensor, "batch_size seq_len dim"]) -> Float[Tensor, "batch_size seq_len dim"]:
+    def forward(
+        self,
+        input: Float[Tensor, "batch_size seq_len dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+    ) -> Float[Tensor, "batch_size seq_len dim"]:
         input_q, input_k, input_v = self.qkv(input).chunk(3, dim=-1)
         input_q, input_k = self.qk_norm(input_q, input_k, input_v)
 
@@ -92,7 +84,7 @@ class DiTAttention(nn.Module):
             rearrange(input_k, "b n (h d) -> b n h d", h=self.num_heads),
             rearrange(input_v, "b n (h d) -> b n h d", h=self.num_heads),
         )
-        q, k, v = self.rope(q=q, k=k, v=v)
+        q, k, v = self.rope(q=q, k=k, v=v, cos_sin=cos_sin_rope)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
         attn_output = nn.functional.scaled_dot_product_attention(
@@ -118,8 +110,7 @@ class MMDiTAttention(nn.Module):
         input_dim (int): Dimension of the input.
         dim (int): Inner Attention dimension.
         num_heads (int): Number of attention heads.
-        partial_rotary_factor (float, optional): Factor for partial rotary embeddings. Default is 0.5.
-        base (int, optional): Base for rotary positional embeddings. Default is 10000.
+        rope_axes_dim (list[int]): List of dimensions for rotary positional embeddings.
 
     Attributes:
         num_heads (int): Number of attention heads.
@@ -129,19 +120,18 @@ class MMDiTAttention(nn.Module):
         qkv_context (nn.Linear): Linear layer for query, key, and value projection of context.
         qk_norm_input (QKNorm): Normalization layer for input query and key.
         qk_norm_context (QKNorm): Normalization layer for context query and key.
-        partial_rotary_factor (float): Factor for partial rotary embeddings.
-        rotary_dim (int): Dimension for rotary embeddings.
         rope (RotaryPositionalEmbedding): Rotary positional embedding layer.
         input_proj_out (nn.Linear): Linear layer for projecting the output of the input.
         context_proj_out (nn.Linear): Linear layer for projecting the output of the context.
 
     Methods:
-        forward(input: Tensor, context: Tensor) -> tuple[Tensor, Tensor]:
+        forward
             Forward pass of the attention mechanism.
-
             Args:
                 input (Tensor): Input tensor of shape (batch_size, seq_len, input_dim).
                 context (Tensor): Context tensor of shape (batch_size, seq_len, context_dim).
+                cos_sin_rope (tuple[Tensor, Tensor]): Tuple containing cosine and sine tensors for rotary embeddings.
+                attn_mask (Tensor): Attention mask tensor.
 
             Returns:
                 tuple[Tensor, Tensor]: Tuple containing the output tensors for input and context.
@@ -150,7 +140,8 @@ class MMDiTAttention(nn.Module):
         >>> mmdit_attention = MMDiTAttention(context_dim=512, input_dim=512, dim=512, num_heads=8)
         >>> input_tensor = torch.randn(10, 25, 512)
         >>> context_tensor = torch.randn(10, 32, 512)
-        >>> output_input, output_context = mmdit_attention(input_tensor, context_tensor)
+        >>> cos_sin_rope = (torch.randn(57, 256), torch.randn(57, 256))
+        >>> output_input, output_context = mmdit_attention(input_tensor, context_tensor, cos_sin_rope)
         >>> print(output_input.shape)  # Output: torch.Size([10, 25, 512])
         >>> print(output_context.shape)  # Output: torch.Size([10, 32, 512])
     """
@@ -161,8 +152,7 @@ class MMDiTAttention(nn.Module):
         input_dim: int,
         dim: int,
         num_heads: int,
-        partial_rotary_factor: float = 1,
-        base: int = 10000,
+        rope_axes_dim: list[int],
     ):
         super().__init__()  # type: ignore
         self.num_heads = num_heads
@@ -174,9 +164,7 @@ class MMDiTAttention(nn.Module):
         self.qk_norm_input = QKNorm(dim)
         self.qk_norm_context = QKNorm(dim)
 
-        self.partial_rotary_factor = partial_rotary_factor
-        self.rotary_dim = int(self.head_dim * self.partial_rotary_factor)
-        self.rope = RotaryPositionalEmbedding(dim=self.rotary_dim, base=base)
+        self.rope = RotaryPositionalEmbeddingNDim(axes_dim=rope_axes_dim)
 
         self.input_proj_out = nn.Linear(dim, input_dim)
         self.context_proj_out = nn.Linear(dim, context_dim)
@@ -185,6 +173,7 @@ class MMDiTAttention(nn.Module):
         self,
         input: Float[Tensor, "batch_size seq_len_input input_dim"],
         context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
         attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> tuple[Float[Tensor, "batch_size seq_len input_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
         input_q, input_k, input_v = self.qkv_input(input).chunk(3, dim=-1)
@@ -198,7 +187,7 @@ class MMDiTAttention(nn.Module):
             rearrange(torch.cat([context_k, input_k], dim=1), "b n (h d) -> b n h d", h=self.num_heads),
             rearrange(torch.cat([context_v, input_v], dim=1), "b n (h d) -> b n h d", h=self.num_heads),
         )
-        q, k, v = self.rope(q=q, k=k, v=v)
+        q, k, v = self.rope(q=q, k=k, v=v, cos_sin=cos_sin_rope)
         q, k, v = map(lambda x: rearrange(x, "b n h d -> b h n d"), [q, k, v])
 
         if attn_mask is not None:
@@ -234,14 +223,16 @@ class DiTBlock(nn.Module):
         embedding_dim (int): Dimension of the embedding used in modulation.
         num_heads (int): Number of attention heads.
         mlp_ratio (int): Ratio used to determine the size of the MLP layers.
+        rope_axes_dim (list[int]): List of dimensions for rotary positional embeddings.
+        use_checkpoint (bool): Whether to use gradient checkpointing for memory efficiency. Default is False.
 
     Methods:
-        forward(input: Tensor, y: Tensor, context: Tensor) -> Tuple[Tensor, Tensor]:
+        forward
             Performs the forward pass of the MMDiTBlock.
             Args:
                 input (Tensor): The input tensor.
                 y (Tensor): An additional tensor, not used in the current implementation.
-                context (Tensor): The context tensor.
+                cos_sin_rope (tuple): Tuple containing cosine and sine tensors for rotary embeddings.
             Returns:
                 Tuple[Tensor, Tensor]: The processed input tensor.
 
@@ -249,6 +240,7 @@ class DiTBlock(nn.Module):
         >>> dit_block = DiTBlock(input_dim=512, hidden_dim=512, embedding_dim=512, num_heads=8, mlp_ratio=4)
         >>> input_tensor = torch.randn(10, 25, 512)
         >>> y = torch.randn(10, 512)
+        >>> cos_sin_rope = (torch.randn(25, 256), torch.randn(25, 256))
         >>> output_tensor = dit_block(input_tensor, y)
         >>> print(output_tensor.shape)  # Output: torch.Size([10, 25, 512])
     """
@@ -260,17 +252,17 @@ class DiTBlock(nn.Module):
         embedding_dim: int,
         num_heads: int,
         mlp_ratio: int,
-        partial_rotary_factor: float = 1,
+        rope_axes_dim: list[int],
         use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
         self.modulation = Modulation(embedding_dim, input_dim)
-        self.norm_1 = nn.RMSNorm(input_dim)
-        self.attention = DiTAttention(input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor)
-        self.norm_2 = nn.RMSNorm(input_dim)
+        self.norm_1 = nn.LayerNorm(input_dim)
+        self.attention = DiTAttention(input_dim, hidden_dim, num_heads, rope_axes_dim=rope_axes_dim)
+        self.norm_2 = nn.LayerNorm(input_dim)
         self.mlp_input = nn.Sequential(
-            nn.Linear(input_dim, mlp_ratio * input_dim),
-            nn.GELU(approximate="tanh"),
+            nn.Linear(input_dim, mlp_ratio * input_dim * 2),
+            PackedSwiGLU(),
             nn.Linear(mlp_ratio * input_dim, input_dim),
         )
         self.use_checkpoint = use_checkpoint
@@ -279,31 +271,36 @@ class DiTBlock(nn.Module):
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
     ) -> Float[Tensor, "batch_size seq_len input_dim"]:
         """
         Forward pass of the DiTBlock applying modulation and attention mechanisms.
         Args:
             - input (Tensor): The input tensor to be processed
             - y (Tensor): The conditioning tensor used for modulation
+            - cos_sin_rope (tuple): Tuple containing cosine and sine tensors for rotary embeddings
         Returns:
             Tensor: The processed input tensor with residual connection
         """
         return (
-            checkpoint(self._forward, *(input, y), use_reentrant=False)
+            checkpoint(self._forward, *(input, y, cos_sin_rope), use_reentrant=False)
             if self.use_checkpoint
-            else self._forward(input, y)
+            else self._forward(input, y, cos_sin_rope)
         )  # type: ignore
 
     def _forward(
         self,
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"] | Float[Tensor, "batch_size seq_len embedding_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
     ) -> Tensor:
         modulation: ModulationOut = self.modulation(y)
 
         modulated_input = (
             input
-            + self.attention(modulate(self.norm_1(input), scale=modulation.alpha, shift=modulation.beta))
+            + self.attention(
+                modulate(self.norm_1(input), scale=modulation.alpha, shift=modulation.beta), cos_sin_rope=cos_sin_rope
+            )
             * modulation.gamma
         )
 
@@ -327,14 +324,18 @@ class MMDiTBlock(nn.Module):
         embedding_dim (int): Dimension of the embedding used in modulation.
         num_heads (int): Number of attention heads.
         mlp_ratio (int): Ratio used to determine the size of the MLP layers.
+        rope_axes_dim (list[int]): List of dimensions for rotary positional embeddings.
+        use_checkpoint (bool): Whether to use gradient checkpointing for memory efficiency. Default is False.
 
     Methods:
-        forward(input: Tensor, y: Tensor, context: Tensor) -> Tuple[Tensor, Tensor]:
+        forward
             Performs the forward pass of the MMDiTBlock.
             Args:
                 input (Tensor): The input tensor.
                 y (Tensor): An additional tensor, not used in the current implementation.
                 context (Tensor): The context tensor.
+                cos_sin_rope (tuple): Tuple containing cosine and sine tensors for rotary embeddings.
+                attn_mask (Tensor): Attention mask tensor.
             Returns:
                 Tuple[Tensor, Tensor]: The modulated input and context tensors.
 
@@ -343,7 +344,8 @@ class MMDiTBlock(nn.Module):
         >>> input_tensor = torch.randn(10, 25, 512)
         >>> y = torch.randn(10, 512)
         >>> context_tensor = torch.randn(10, 32, 512)
-        >>> output_input, output_context = mmdit_block(input_tensor, y, context_tensor)
+        >>> cos_sin_rope = (torch.randn(57, 256), torch.randn(57, 256))
+        >>> output_input, output_context = mmdit_block(input_tensor, y, context_tensor, cos_sin_rope)
         >>> print(output_input.shape)  # Output: torch.Size([10, 25, 512])
         >>> print(output_context.shape)  # Output: torch.Size([10, 32, 512])
     """
@@ -356,31 +358,29 @@ class MMDiTBlock(nn.Module):
         embedding_dim: int,
         num_heads: int,
         mlp_ratio: int,
-        partial_rotary_factor: float = 1,
+        rope_axes_dim: list[int],
         use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
         self.modulation_context = Modulation(embedding_dim, context_dim)
         self.modulation_input = Modulation(embedding_dim, input_dim)
 
-        self.context_norm_1 = RMSNorm(context_dim)
-        self.input_norm_1 = RMSNorm(input_dim)
+        self.context_norm_1 = nn.LayerNorm(context_dim)
+        self.input_norm_1 = nn.LayerNorm(input_dim)
 
-        self.attention = MMDiTAttention(
-            context_dim, input_dim, hidden_dim, num_heads, partial_rotary_factor=partial_rotary_factor
-        )
+        self.attention = MMDiTAttention(context_dim, input_dim, hidden_dim, num_heads, rope_axes_dim=rope_axes_dim)
 
-        self.context_norm_2 = RMSNorm(context_dim)
-        self.input_norm_2 = RMSNorm(input_dim)
+        self.context_norm_2 = nn.LayerNorm(context_dim)
+        self.input_norm_2 = nn.LayerNorm(input_dim)
 
         self.mlp_context = nn.Sequential(
-            nn.Linear(context_dim, mlp_ratio * context_dim),
-            nn.GELU(approximate="tanh"),
+            nn.Linear(context_dim, mlp_ratio * context_dim * 2),
+            PackedSwiGLU(),
             nn.Linear(mlp_ratio * context_dim, context_dim),
         )
         self.mlp_input = nn.Sequential(
-            nn.Linear(input_dim, mlp_ratio * input_dim),
-            nn.GELU(approximate="tanh"),
+            nn.Linear(input_dim, mlp_ratio * input_dim * 2),
+            PackedSwiGLU(),
             nn.Linear(mlp_ratio * input_dim, input_dim),
         )
         self.use_checkpoint = use_checkpoint
@@ -390,6 +390,7 @@ class MMDiTBlock(nn.Module):
         input: Float[Tensor, "batch_size seq_len_input embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
         context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
         attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> tuple[
         Float[Tensor, "batch_size seq_len_input embedding_dim"], Float[Tensor, "batch_size seq_len_context context_dim"]
@@ -400,6 +401,7 @@ class MMDiTBlock(nn.Module):
             - input (Tensor): The input tensor to be processed
             - y (Tensor): The conditioning tensor used for modulation
             - context (Tensor): The context tensor to be processed alongside input
+            - cos_sin_rope (tuple): Tuple containing cosine and sine tensors for rotary embeddings
             - attn_mask (Tensor | None): Optional attention mask for context
         Returns:
             tuple: A tuple containing:
@@ -413,9 +415,9 @@ class MMDiTBlock(nn.Module):
         5. Residual connections for both input and context paths
         """
         return (
-            checkpoint(self._forward, *(input, y, context, attn_mask), use_reentrant=False)
+            checkpoint(self._forward, *(input, y, context, cos_sin_rope, attn_mask), use_reentrant=False)
             if self.use_checkpoint
-            else self._forward(input, y, context, attn_mask)
+            else self._forward(input, y, context, cos_sin_rope, attn_mask)
         )  # type: ignore
 
     def _forward(
@@ -423,6 +425,7 @@ class MMDiTBlock(nn.Module):
         input: Float[Tensor, "batch_size seq_len embedding_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
         context: Float[Tensor, "batch_size seq_len context_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
         attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ):
         modulation_input: ModulationOut = self.modulation_input(y)
@@ -433,7 +436,9 @@ class MMDiTBlock(nn.Module):
             self.context_norm_1(context), scale=modulation_context.alpha, shift=modulation_context.beta
         )
 
-        modulated_input, modulated_context = self.attention(modulated_input, modulated_context, attn_mask=attn_mask)
+        modulated_input, modulated_context = self.attention(
+            modulated_input, modulated_context, cos_sin_rope=cos_sin_rope, attn_mask=attn_mask
+        )
         modulated_input = input + modulated_input * modulation_input.gamma
         modulated_context = context + modulated_context * modulation_context.gamma
 
@@ -505,8 +510,13 @@ class MMDiT(Denoiser):
         depth (int): Number of DiT/MMDiT blocks. Default: 38.
         context_dim (int): Model width for contextual tokens after `context_embed` when
             `simple_dit=False`. Ignored when `simple_dit=True`. Default: 4096.
+        rope_base (int): Base frequency for RoPE. Default: 10000.
         partial_rotary_factor (float): Fraction of each head dimension using RoPE.
             1.0 means full rotary. Default: 1.0.
+        rope_axes_dim (list[int] | None): List of dimensions for rotary positional embeddings.
+            When `simple_dit=True`, should contain 2 integers for H and W axes. When `simple_dit=False`,
+            should contain 3 integers for L, H, W axes. If None, defaults are used based on
+            partial_rotary_factor and the heads_dim. Default: None
         frequency_embedding (int): Size of the Fourier timestep embedding before the time MLP.
             Default: 256.
         n_classes (int | None): Number of classes for label conditioning in `simple_dit` mode.
@@ -537,7 +547,9 @@ class MMDiT(Denoiser):
         patch_size: int = 16,
         depth: int = 38,
         context_dim: int = 4096,
+        rope_base: int = 10_000,
         partial_rotary_factor: float = 1,
+        rope_axes_dim: list[int] | None = None,
         frequency_embedding: int = 256,
         n_classes: int | None = None,
         classifier_free: bool = False,
@@ -556,10 +568,12 @@ class MMDiT(Denoiser):
         self.output_channels = output_channels
         self.context_embedder = context_embedder
         self.frequency_embedding = frequency_embedding
+        self.rope_base = rope_base
 
         self.n_classes = n_classes
         self.classifier_free = classifier_free
 
+        heads_dim = hidden_dim // num_heads
         if not self.simple_dit:
             assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
@@ -579,11 +593,24 @@ class MMDiT(Denoiser):
             else:
                 assert self.context_embedder.n_output == 1
                 self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
+            if rope_axes_dim is None:
+                rope_axes_dim = [
+                    int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
+                    int((partial_rotary_factor * heads_dim) // 3),  # H set to 0 for text
+                    int((partial_rotary_factor * heads_dim) // 3),  # W set to 0 for text
+                ]
+
         else:
             self.label_embed = (
                 LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
             )
+            if rope_axes_dim is None:
+                rope_axes_dim = [
+                    int((partial_rotary_factor * heads_dim) // 2),  # H
+                    int((partial_rotary_factor * heads_dim) // 2),  # W
+                ]
 
+        self.rope_axes_dim = rope_axes_dim
         self.last_layer = ModulatedLastLayer(
             embedding_dim=embedding_dim,
             hidden_size=input_dim,
@@ -607,7 +634,7 @@ class MMDiT(Denoiser):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
                 if not self.simple_dit
@@ -617,7 +644,7 @@ class MMDiT(Denoiser):
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
-                    partial_rotary_factor=partial_rotary_factor,
+                    rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
                 for _ in range(depth)
@@ -646,6 +673,8 @@ class MMDiT(Denoiser):
         self.original_size = (H, W)
 
         x = self.conv_proj(x)
+        _, _, Hp, Wp = x.shape
+        self.grid_size = (Hp, Wp)
         x = rearrange(x, "b c h w -> b (h w) c")
 
         return x
@@ -660,16 +689,16 @@ class MMDiT(Denoiser):
         Returns:
             Tensor: Reconstructed image tensor of shape (B, C, H, W)
         """
-        H, W = self.original_size
-        patch_size = self.patch_size
-        p = self.output_channels
-
-        # Calculate number of patches in height and width dimensions
-        h = H // patch_size
-        w = W // patch_size
-
         # Reshape the tensor to the original image dimensions
-        x = rearrange(x, "b (h w) (p1 p2 c) -> b c (h p1) (w p2)", h=h, w=w, p1=patch_size, p2=patch_size, c=p)
+        x = rearrange(
+            x,
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
+            h=self.grid_size[0],
+            w=self.grid_size[1],
+            p1=self.patch_size,
+            p2=self.patch_size,
+            c=self.output_channels,
+        )
         return x
 
     def mmdit_forward(
@@ -692,13 +721,39 @@ class MMDiT(Denoiser):
             emb = self.mlp_pooled_context(context_pooled) + emb
 
         context = context_output["embeddings"]
-        context = self.context_embed(context)
+        context: Tensor = self.context_embed(context)
         attn_mask = context_output.get("attn_mask", None)
+
+        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        # in mmdit attention we concat with context first. Context have 0,0 for h w
+        # text: (t>0, 0, 0)
+        text_pos_ids = torch.stack(
+            [
+                torch.arange(1, context.shape[1], device=x.device),
+                torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
+                torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
+            ],
+            dim=-1,
+        )
+
+        # image: (0, h, w)
+        img_pos_ids = torch.stack(
+            torch.meshgrid(
+                torch.zeros(1, device=x.device, dtype=torch.long),
+                torch.arange(self.grid_size[0], device=x.device),
+                torch.arange(self.grid_size[1], device=x.device),
+                indexing="ij",
+            ),
+            dim=-1,
+        ).view(-1, 3)
+
+        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0)
+        cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         features: list[Tensor] | None = [] if intermediate_features else None
         # Pass through each layer sequentially
         for layer in self.layers:
-            x, context = layer(x, emb, context, attn_mask=attn_mask)
+            x, context = layer(x, emb, context, cos_sin_rope=cos_sin_rope, attn_mask=attn_mask)
             if features:
                 features.append(x)
 
@@ -727,10 +782,20 @@ class MMDiT(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
-        features: list[Tensor] | None = [] if intermediate_features else None
+        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        pos_ids = torch.stack(
+            torch.meshgrid(
+                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
+                indexing="ij",
+            ),
+            dim=-1,
+        ).view(-1, 2)
+        cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
+
         # Pass through each layer sequentially
+        features: list[Tensor] | None = [] if intermediate_features else None
         for layer in self.layers:
-            x = layer(x, emb)
+            x = layer(x, emb, cos_sin_rope=cos_sin_rope)
             if features:
                 features.append(x)
 
