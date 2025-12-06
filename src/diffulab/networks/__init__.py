@@ -1,7 +1,7 @@
 from .denoisers import Denoiser, MMDiT, UNetModel
-from .embedders import SD3TextEmbedder
+from .embedders import QwenTextEmbedder, SD3TextEmbedder
 from .repa import REPA, DinoV2, PerceiverResampler
-from .vision_towers import DCAE, VisionTower
+from .vision_towers import DCAE, Flux2VAE, VisionTower
 
 __all__ = [
     "Denoiser",
@@ -13,4 +13,5 @@ __all__ = [
     "PerceiverResampler",
     "DCAE",
     "VisionTower",
+    "Flux2VAE",
 ]

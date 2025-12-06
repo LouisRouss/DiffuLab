@@ -148,7 +148,7 @@ class VisionTower(nn.Module, ABC):
             logger.warning(f"device and dtype not found | defaulting to {device} and {dtype}.")
 
         transform = transforms.ToTensor()
-        with MDSWriter(out=dst_path, columns=dst_columns, compression="zstd") as writer:
+        with MDSWriter(out=dst_path, columns=dst_columns) as writer:
             for batch in tqdm(dataloader, desc="computing embeddings", unit="batch"):
                 to_process_data = batch[to_process_data_key]
                 assert all(isinstance(img, Image.Image) for img in to_process_data), (

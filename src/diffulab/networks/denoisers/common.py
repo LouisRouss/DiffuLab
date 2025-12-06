@@ -9,7 +9,7 @@ class ModelInput(TypedDict, total=False):
     x: Required[Tensor]  # input tensor
     p: NotRequired[float]  # probabilily of label dropping
     y: NotRequired[Tensor]  # class labels
-    context: NotRequired[Tensor]  # context information, can be text image etc
+    initial_context: NotRequired[Any]  # context information, can be text image etc
     x_context: NotRequired[Tensor]  # additional image context, will be concatenated to x
 
 
