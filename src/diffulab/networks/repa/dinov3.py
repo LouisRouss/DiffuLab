@@ -24,7 +24,6 @@ class DinoV3(REPA):
         self,
         dino_model: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
         cancel_affine: bool = False,
-        size: tuple[int, int] = (256, 256),
     ) -> None:
         super().__init__()
         self.processor = cast("DINOv3ViTImageProcessorFast", AutoImageProcessor.from_pretrained(dino_model))  # type: ignore[reportUnknownMemberType]
@@ -35,7 +34,6 @@ class DinoV3(REPA):
                 device_map="auto",
             ),
         )
-        self.size = size
         if cancel_affine:
             norm = self.encoder.norm
             norm.register_parameter("weight", None)
