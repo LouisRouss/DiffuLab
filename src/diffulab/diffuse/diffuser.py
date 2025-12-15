@@ -139,7 +139,7 @@ class Diffuser:
         assert timesteps is not None, "timesteps must be provided for loss computation"
         return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
-    def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
+    def set_steps(self, n_steps: int, schedule: str = "linear", *args: Any, **kwargs: Any) -> None:
         """
         Update the number of diffusion steps and related parameters.
         This method allows changing the number of steps used in the diffusion process
@@ -148,6 +148,8 @@ class Diffuser:
         Args:
             n_steps (int): The new number of diffusion steps to use.
             schedule (str, optional): The schedule to use for the timesteps. Defaults to "linear".
+            args: Additional positional arguments to pass to the diffusion model's set_steps method.
+            kwargs: Additional keyword arguments to pass to the diffusion model's set_steps method.
         Example:
             ```
             diffuser = Diffuser(denoiser, sampling_method="ddpm", n_steps=1000)
@@ -155,7 +157,7 @@ class Diffuser:
             diffuser.set_steps(100, schedule="linear")
             ```
         """
-        self.diffusion.set_steps(n_steps, schedule=schedule)
+        self.diffusion.set_steps(n_steps, schedule=schedule, *args, **kwargs)
 
     def generate(
         self,
@@ -216,9 +218,13 @@ class Diffuser:
                 return_intermediates=return_intermediates,
             )
             if not return_latents:
-                sampling_output["x"] = self.vision_tower.decode(
-                    sampling_output["x"] / self.latent_scale + self.latent_bias
-                )
+                latent_scale = self.latent_scale
+                latent_bias = self.latent_bias
+                if isinstance(latent_scale, Tensor):
+                    latent_scale = latent_scale.to(sampling_output["x"].device)
+                if isinstance(latent_bias, Tensor):
+                    latent_bias = latent_bias.to(sampling_output["x"].device)
+                sampling_output["x"] = self.vision_tower.decode(sampling_output["x"] / latent_scale + latent_bias)
             return sampling_output
 
         return self.diffusion.denoise(

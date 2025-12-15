@@ -194,6 +194,7 @@ class BaseTrainer(Trainer):
         train_embedder: bool = False,
         p_classifier_free_guidance: float = 0.2,
         val_steps: int = 50,
+        val_step_shift: float | None = None,
         optimizer_ckpt: str | None = None,
         denoiser_ckpt: str | None = None,
         ema_ckpt: str | None = None,
@@ -222,6 +223,8 @@ class BaseTrainer(Trainer):
                 guidance during training. Defaults to 0.2
             val_steps (int, optional): Number of steps to use for validation image generation.
                 Defaults to 50.
+            val_step_shift (float | None, optional): If provided, applies time-shifting during
+                validation image generation. Defaults to None. (only supported for flow-based models)
             ema_ckpt (str | None, optional): Path to EMA model checkpoint for loading pretrained
                 weights. Defaults to None.
             epoch_start (int, optional): Starting epoch number, useful for resuming training.
@@ -233,6 +236,11 @@ class BaseTrainer(Trainer):
             - Model checkpoints are saved when validation loss improves.
             - EMA model is used for validation if enabled.
         """
+        if val_step_shift is not None:
+            assert diffuser.model_type == "rectified_flow", (
+                "Time-shifting during validation is only supported for flow-based models."
+            )
+
         if not diffuser.denoiser.classifier_free:
             p_classifier_free_guidance = 0
 
@@ -370,6 +378,7 @@ class BaseTrainer(Trainer):
                                 val_dataloader,  # type: ignore
                                 epoch,
                                 val_steps,
+                                step_shift=val_step_shift,
                                 guidance_scale=4 if original_model.classifier_free else 0,  # type: ignore
                             )
 

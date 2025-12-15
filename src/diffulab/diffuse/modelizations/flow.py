@@ -1,5 +1,5 @@
 import random
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import torch
 from torch import Tensor
@@ -63,8 +63,13 @@ class Flow(Diffusion):
         schedule: str = "linear",
         latent_diffusion: bool = False,
         logits_normal: bool = False,
+        shift: float | None = None,
         sampler_parameters: dict[str, Any] = {},
+        prediction_type: Literal["v", "x"] = "v",
     ) -> None:
+        assert prediction_type in ["v", "x"], (
+            "prediction_type must be either 'v' or 'x', noise prediction not supported yet for flow models"
+        )
         super().__init__(
             n_steps=n_steps,
             sampling_method=sampling_method,
@@ -73,8 +78,27 @@ class Flow(Diffusion):
             sampler_parameters=sampler_parameters,
         )
         self.logits_normal = logits_normal
+        self.shift = shift
+        self.x_prediction = prediction_type == "x"
 
-    def set_steps(self, n_steps: int, schedule: str = "linear") -> None:
+    @staticmethod
+    def _shift_timestep(t: Tensor | float, alpha: float) -> Tensor | float:
+        """
+        Applies the time-shifting function s(α, t) = αt / (1 + (α - 1)t).
+
+        This shifts the timestep distribution to concentrate more samples
+        at certain noise levels during training.
+
+        Args:
+            t: The original timestep(s) in [0, 1].
+            alpha: The shift parameter. alpha > 1 shifts toward higher noise levels.
+
+        Returns:
+            The shifted timestep(s).
+        """
+        return alpha * t / (1 + (alpha - 1) * t)
+
+    def set_steps(self, n_steps: int, schedule: str = "linear", shift: float | None = None) -> None:
         """
         Update the number of steps and schedule for the flow-based diffusion model.
         This method configures the timesteps sequence based on the specified number of steps
@@ -84,6 +108,7 @@ class Flow(Diffusion):
             n_steps (int): The number of diffusion steps to use.
             schedule (str, optional): The scheduling algorithm to use for timestep generation.
                 Currently only "linear" is implemented. Defaults to "linear".
+            shift (float | None, optional): If provided, applies time-shifting to the timesteps
         Raises:
             NotImplementedError: If a schedule other than "linear" is specified.
         Note:
@@ -96,10 +121,12 @@ class Flow(Diffusion):
             flow.set_steps(50)  # Will create a new linear schedule with 50 steps
             ```
         """
-
+        self.shift = shift
         if schedule == "linear":
             self.schedule = schedule
-            self.timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
+            timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
+            if self.shift is not None:
+                timesteps = [self._shift_timestep(t, self.shift) for t in timesteps]  # type: ignore
             self.steps = n_steps
         else:
             raise NotImplementedError("Only linear schedule is supported for the moment")
@@ -155,9 +182,18 @@ class Flow(Diffusion):
 
         if self.logits_normal:
             nt = torch.randn((batch_size), dtype=torch.float32)
-            return torch.sigmoid(nt)
+            t: Tensor = torch.sigmoid(nt)
+        else:
+            t = torch.rand((batch_size), dtype=torch.float32)
 
-        return torch.rand((batch_size), dtype=torch.float32)
+        # Apply time-shifting if shift_value is set
+        if self.shift is not None:
+            t = self._shift_timestep(t, self.shift)  # type: ignore
+
+        if self.x_prediction:
+            t = t.clamp(min=0.05)
+
+        return t
 
     def get_v(self, model: Denoiser, model_inputs: ModelInput, t_curr: float) -> Tensor:
         """
@@ -178,6 +214,9 @@ class Flow(Diffusion):
         dtype = next(model.parameters()).dtype
         timesteps = torch.full((model_inputs["x"].shape[0],), t_curr, device=device, dtype=dtype)
         prediction = model(**model_inputs, timesteps=timesteps)["x"]
+        if self.x_prediction:
+            return (model_inputs["x"] - prediction) / max(t_curr, 0.05)
+
         return prediction
 
     def one_step_denoise(
@@ -257,6 +296,10 @@ class Flow(Diffusion):
         x_0 = model_inputs["x"].clone()
         model_inputs["x"], noise = self.add_noise(model_inputs["x"], timesteps, noise)
         prediction: ModelOutput = model(**model_inputs, timesteps=timesteps)
+        if self.x_prediction:
+            prediction["x"] = (model_inputs["x"] - prediction["x"]) / timesteps.view(
+                -1, *([1] * (model_inputs["x"].dim() - 1))
+            )  # get v from x prediction
 
         # Compute flow matching loss
         losses = ((noise - x_0) - prediction["x"]) ** 2

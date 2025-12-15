@@ -182,6 +182,7 @@ class Trainer(ABC):
         val_dataloader: Iterable[BatchData],
         epoch: int,
         val_steps: int = 50,
+        step_shift: float | None = None,
         guidance_scale: float = 0,
     ) -> None:
         """
@@ -206,16 +207,39 @@ class Trainer(ABC):
         """
         batch: ModelInput = next(iter(val_dataloader))["model_inputs"]
         x: Tensor = batch.pop("x")  # type: ignore
-        original_steps = diffuser.n_steps
-        diffuser.set_steps(val_steps)
-        images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)["x"]
-        images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
 
-        grid = make_grid(images, nrow=int(ceil(sqrt(images.shape[0]))), padding=2)
-        np_grid: NDArray[np.uint8] = (grid * 255).round().byte().permute(1, 2, 0).numpy()  # type: ignore
-        to_log = wandb.Image(np_grid, caption="Validation Images")
-        self.accelerator.log({"val/images": to_log}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
-        diffuser.set_steps(original_steps)
+        original_steps = diffuser.n_steps
+        train_shift = None
+        if step_shift is not None:
+            train_shift = diffuser.diffusion.shift  # type: ignore
+            diffuser.set_steps(val_steps, shift=step_shift)
+        else:
+            diffuser.set_steps(val_steps)
+
+        images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)["x"]
+        images = (images * 0.5 + 0.5).clamp(0, 1).cpu().float()
+
+        captions: list[str] = []
+        if "initial_context" in batch and isinstance(batch["initial_context"], list) and batch["initial_context"]:
+            if isinstance(batch["initial_context"][0], str):
+                captions = cast(list[str], batch["initial_context"])
+
+        if captions:
+            to_log_samples = [wandb.Image(img, caption=cap) for img, cap in zip(images, captions)]
+            self.accelerator.log(  # type: ignore
+                {"val/samples": to_log_samples}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}}
+            )
+
+        else:
+            grid = make_grid(images, nrow=int(ceil(sqrt(images.shape[0]))), padding=2)
+            np_grid: NDArray[np.uint8] = (grid * 255).round().byte().permute(1, 2, 0).numpy()  # type: ignore
+            to_log_grid = wandb.Image(np_grid, caption="Validation Images")
+            self.accelerator.log({"val/images": to_log_grid}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
+
+        if step_shift is not None:
+            diffuser.set_steps(original_steps, shift=train_shift)
+        else:
+            diffuser.set_steps(original_steps)
 
     @abstractmethod
     def training_step(self, *args: Any, **kwargs: Any) -> None:
