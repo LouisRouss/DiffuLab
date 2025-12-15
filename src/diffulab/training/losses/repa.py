@@ -199,6 +199,8 @@ class RepaLoss(LossFunction):
         assert dst_features is not None, "Destination features must be provided or computed."
 
         src_features = self._features[self._active_model]
+        if isinstance(src_features, tuple):
+            src_features = src_features[0]
         projected_src_features: Tensor = self.proj(src_features)
 
         if self.resampler is not None:

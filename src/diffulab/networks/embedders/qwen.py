@@ -45,6 +45,7 @@ class QwenTextEmbedder(ContextEmbedder):
         """
         return ["" if random.random() < p else c for c in context]
 
+    @torch._dynamo.disable  # type: ignore[reportUnknownMemberType]
     def forward(self, context: list[str], p: float = 0) -> ContextEmbedderOutput:
         """Compute Qwen text embeddings.
 
@@ -79,8 +80,9 @@ class QwenTextEmbedder(ContextEmbedder):
         )
 
         embeddings = embeddings[:, self.prompt_template_encoder_start_idx :, :]
+        attn_mask = tokens.attention_mask[:, self.prompt_template_encoder_start_idx :]  # type: ignore
 
         return ContextEmbedderOutput(
-            sequence_embeddings=embeddings,
-            attention_mask=tokens.attention_mask.bool(),  # type: ignore
+            embeddings=embeddings,
+            attn_mask=attn_mask,  # type: ignore
         )

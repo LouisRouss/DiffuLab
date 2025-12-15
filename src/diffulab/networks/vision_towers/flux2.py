@@ -19,8 +19,8 @@ class Flux2VAE(VisionTower):
             latent_bias=model.bn.running_mean.view(1, -1, 1, 1),  # type: ignore
         )
         self.model = model
-        self._compression_factor = 2 ** (len(self.model.encoder.down_blocks) - 1)
-        self._latent_channels: int = self.model.config.latent_channels  # type: ignore
+        self._compression_factor = 2 ** (len(self.model.encoder.down_blocks))  # see encode function for details
+        self._latent_channels: int = self.model.config.latent_channels * 4  # type: ignore
 
     @property
     def compression_factor(self) -> int:
@@ -61,8 +61,13 @@ class Flux2VAE(VisionTower):
 
         x = (x - 0.5) * 2.0
         posterior = cast(DiagonalGaussianDistribution, self.model.encode(x).latent_dist)  # type: ignore
+        latents = posterior.sample()
 
-        return posterior.sample()
+        batch_size, num_channels_latents, height, width = latents.shape
+        latents = latents.view(batch_size, num_channels_latents, height // 2, 2, width // 2, 2)
+        latents = latents.permute(0, 1, 3, 5, 2, 4)
+        latents = latents.reshape(batch_size, num_channels_latents * 4, height // 2, width // 2)
+        return latents
 
     def decode(self, z: Float[Tensor, "batchsize latent_channels H' W'"]) -> Float[Tensor, "batchsize 3 H W"]:
         """
@@ -74,7 +79,11 @@ class Flux2VAE(VisionTower):
         Returns:
             Tensor: Decoded tensor in the original input space. Normalized to [-1, 1].
         """
-        return self.model.decode(z).sample  # type: ignore
+        batch_size, num_channels_latents, height, width = z.shape
+        latents = z.reshape(batch_size, num_channels_latents // (2 * 2), 2, 2, height, width)
+        latents = latents.permute(0, 1, 4, 2, 5, 3)
+        latents = latents.reshape(batch_size, num_channels_latents // (2 * 2), height * 2, width * 2)
+        return self.model.decode(latents).sample  # type: ignore
 
     def forward(self, x: Float[Tensor, "batchsize 3 H W"]) -> Float[Tensor, "batchsize latent_channels H W"]:
         """
