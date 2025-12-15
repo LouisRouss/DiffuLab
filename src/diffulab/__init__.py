@@ -1,7 +1,8 @@
-from .datasets import BaseDataset, CIFAR10Dataset, ImageNetLatentREPA, MNISTDataset
+from .datasets import BaseDataset, CIFAR10Dataset, ImageNetLatentREPA, ImageNetmultiAR, MNISTDataset
 from .diffuse import Diffuser, Flow, GaussianDiffusion
 from .networks import (
     DCAE,
+    DDT,
     REPA,
     Denoiser,
     DinoV2,
@@ -19,6 +20,7 @@ __all__ = [
     "BaseDataset",
     "CIFAR10Dataset",
     "ImageNetLatentREPA",
+    "ImageNetmultiAR",
     "MNISTDataset",
     "Diffuser",
     "Flow",
@@ -29,6 +31,7 @@ __all__ = [
     "DinoV2",
     "Flux2VAE",
     "MMDiT",
+    "DDT",
     "PerceiverResampler",
     "QwenTextEmbedder",
     "SD3TextEmbedder",
