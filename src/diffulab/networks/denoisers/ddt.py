@@ -15,10 +15,12 @@ from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock
 from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
+    Modulation,
     get_cos_sin_ndim_grid,
     modulate,
     timestep_embedding,
 )
+from diffulab.networks.utils.utils import zero_module
 
 
 class ModulatedLastLayerDDT(nn.Module):
@@ -230,6 +232,10 @@ class DDT(Denoiser):
             nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:  # type: ignore
                 nn.init.constant_(module.bias, 0)
+        if isinstance(module, Modulation):
+            zero_module(module)
+        if isinstance(module, ModulatedLastLayerDDT):
+            zero_module(module.adaLN_modulation)
 
     def patchify(
         self, x: Float[Tensor, "batch_size channels height width"], encoder: bool = True
@@ -312,7 +318,7 @@ class DDT(Denoiser):
         # text: (t>0, 0, 0)
         text_pos_ids = torch.stack(
             [
-                torch.arange(1, context.shape[1], device=x.device),
+                torch.arange(1, context.shape[1] + 1, device=x.device),
                 torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
                 torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
             ],
@@ -416,13 +422,28 @@ class DDT(Denoiser):
         encoder_output = nn.functional.silu(encoder_output + emb)
 
         # pos_ids: [S, n_axes] positional IDs along each axis for rope
-        pos_ids = torch.stack(
-            torch.meshgrid(
-                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
-                indexing="ij",
-            ),
-            dim=-1,
-        ).view(-1, 2)
+        pos_ids = (
+            torch.stack(
+                torch.meshgrid(
+                    [
+                        torch.arange(self.grid_size[0], device=x.device),
+                        torch.arange(self.grid_size[1], device=x.device),
+                    ],
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).view(-1, 2)
+            if self.simple_ddt
+            else torch.stack(
+                torch.meshgrid(
+                    torch.zeros(1, device=x.device, dtype=torch.long),
+                    torch.arange(self.grid_size[0], device=x.device),
+                    torch.arange(self.grid_size[1], device=x.device),
+                    indexing="ij",
+                ),
+                dim=-1,
+            ).view(-1, 3)
+        )
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         features: list[Tensor] | None = [] if intermediate_features else None

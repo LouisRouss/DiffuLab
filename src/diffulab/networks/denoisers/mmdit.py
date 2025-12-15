@@ -22,6 +22,7 @@ from diffulab.networks.utils.nn import (
     modulate,
     timestep_embedding,
 )
+from diffulab.networks.utils.utils import zero_module
 
 
 class DiTAttention(nn.Module):
@@ -198,8 +199,7 @@ class MMDiTAttention(nn.Module):
                 ],
                 dim=1,
             )
-            b, n = attn_mask.shape
-            attn_mask = attn_mask[:, None, None, :].expand(b, 1, n, n)
+            attn_mask = attn_mask[:, None, None, :]
 
         attn_output = nn.functional.scaled_dot_product_attention(
             query=q, key=k, value=v, scale=self.scale, attn_mask=attn_mask
@@ -658,6 +658,10 @@ class MMDiT(Denoiser):
             nn.init.xavier_uniform_(module.weight)
             if module.bias is not None:  # type: ignore
                 nn.init.constant_(module.bias, 0)
+        if isinstance(module, Modulation):
+            zero_module(module)
+        if isinstance(module, ModulatedLastLayer):
+            zero_module(module.adaLN_modulation)
 
     def patchify(
         self, x: Float[Tensor, "batch_size channels height width"]
@@ -729,7 +733,7 @@ class MMDiT(Denoiser):
         # text: (t>0, 0, 0)
         text_pos_ids = torch.stack(
             [
-                torch.arange(1, context.shape[1], device=x.device),
+                torch.arange(1, context.shape[1] + 1, device=x.device),
                 torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
                 torch.zeros(context.shape[1], device=x.device, dtype=torch.long),
             ],
