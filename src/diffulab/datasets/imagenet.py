@@ -105,7 +105,7 @@ class ImageNetmultiAR(Dataset[BatchData]):
             split=split,
         )
 
-        if not (Path().home() / ".cache" / "diffulab" / "buckets_cache_imagenet.pickle").exists():
+        if not (Path().home() / ".cache" / "diffulab" / f"buckets_cache_imagenet_{split}.pickle").exists():
             logging.info("No buckets cache found, constructing buckets...")
 
             self.buckets: dict[tuple[int, int], list[int]] = {}
