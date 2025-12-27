@@ -1,3 +1,5 @@
+from typing import NotRequired, Required, TypedDict
+
 from torch import Tensor
 
 
@@ -15,3 +17,12 @@ def extract_into_tensor(arr: Tensor, timesteps: Tensor, broadcast_shape: tuple[i
     while len(res.shape) < len(broadcast_shape):
         res = res[..., None]
     return res.expand(broadcast_shape)
+
+
+class SamplingOutput(TypedDict, total=False):
+    x: Required[Tensor]  # final sample
+    estimated_x0: NotRequired[Tensor]  # estimated x0 at each step
+    xt: NotRequired[Tensor]  # samples at each step
+    xt_mean: NotRequired[Tensor]  # mean of samples at each step for SDE based methods
+    xt_std: NotRequired[Tensor]  # std of samples at each step for SDE based methods
+    logprob: NotRequired[Tensor]  # logprob at each step for flow based methods

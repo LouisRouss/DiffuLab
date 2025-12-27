@@ -5,6 +5,7 @@ from torch import Tensor
 from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.flow import Flow
 from diffulab.diffuse.modelizations.gaussian_diffusion import GaussianDiffusion
+from diffulab.diffuse.utils import SamplingOutput
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.networks.vision_towers.common import VisionTower
 from diffulab.training.losses import LossFunction
@@ -23,12 +24,20 @@ class Diffuser:
                 - "rectified_flow": Flow-based diffusion model.
                 - "gaussian_diffusion": Gaussian diffusion model.
         n_steps (int, optional): Number of diffusion steps. Defaults to 1000.
+        vision_tower (VisionTower | None, optional): Vision tower for latent diffusion.
+            If provided, the diffuser will operate in the latent space defined by the vision tower.
+            Defaults to None.
         extra_args (dict[str, Any], optional): Additional arguments to pass to the diffusion model. Defaults to {}.
+        extra_losses (list[LossFunction], optional): Additional loss functions to compute during training.
+            Defaults to [].
 
     Attributes:
         model_type (str): Type of diffusion model used.
         denoiser (Denoiser): The neural network model used for denoising.
         n_steps (int): Number of diffusion steps.
+        vision_tower (VisionTower | None): Vision tower for latent diffusion.
+        extra_losses (list[LossFunction]): Additional loss functions for training.
+        latent_scale (float): Scale factor for the latent space when using a vision tower.
         diffusion (Diffusion): The diffusion model implementation.
 
     Methods:
@@ -60,6 +69,7 @@ class Diffuser:
         self.extra_losses = extra_losses
         if self.vision_tower:
             self.latent_scale = self.vision_tower.latent_scale
+            self.latent_bias = self.vision_tower.latent_bias
 
         if self.model_type in self.model_registry:
             self.diffusion = self.model_registry[self.model_type](
@@ -96,9 +106,11 @@ class Diffuser:
     def compute_loss(
         self,
         model_inputs: ModelInput,
-        timesteps: Tensor,
+        timesteps: Tensor | None = None,
         noise: Tensor | None = None,
         extra_args: dict[str, Any] = {},
+        grpo: bool = False,
+        grpo_args: dict[str, Any] = {},
     ) -> dict[str, Tensor]:
         """
         Compute the loss for the diffusion model using the denoiser and diffusion process.
@@ -106,17 +118,28 @@ class Diffuser:
         diffusion implementation by forwarding the loss computation to the diffusion model.
         Args:
             model_inputs (ModelInput): A dictionary containing the model inputs,
-              including the data tensor keyed as 'x' and any conditional information.
+              including the data tensor keyed as 'x' and any conditional information. For GRPO,
+              x is not needed in the model inputs.
             timesteps (Tensor): A tensor of timesteps for the batch.
             noise (Tensor | None, optional): Pre-defined noise to add to the input.
               If None, random noise will be generated. Defaults to None.
             extra_args (dict[str, Any], optional): Additional arguments for the additional losses computation.
+            grpo (bool, optional): Whether to compute the GRPO loss. Defaults to False.
+            grpo_args (dict[str, Any], optional): Additional arguments for GRPO loss computation
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         """
+        if grpo:
+            assert isinstance(self.diffusion, Flow), "GRPO loss computation is only available for Flow-based models"
+            return self.diffusion.compute_loss_grpo(
+                self.denoiser,
+                model_inputs,
+                **grpo_args,
+            )
+        assert timesteps is not None, "timesteps must be provided for loss computation"
         return self.diffusion.compute_loss(self.denoiser, model_inputs, timesteps, noise, self.extra_losses, extra_args)
 
-    def set_steps(self, n_steps: int, **extra_args: dict[str, Any]) -> None:
+    def set_steps(self, n_steps: int, schedule: str = "linear", *args: Any, **kwargs: Any) -> None:
         """
         Update the number of diffusion steps and related parameters.
         This method allows changing the number of steps used in the diffusion process
@@ -124,43 +147,50 @@ class Diffuser:
         model's set_steps method.
         Args:
             n_steps (int): The new number of diffusion steps to use.
-            **extra_args (dict[str, Any]): Additional arguments to pass to the diffusion
-                model's set_steps method. These may include parameters like 'schedule'
-                or 'section_counts' depending on the diffusion model implementation.
+            schedule (str, optional): The schedule to use for the timesteps. Defaults to "linear".
+            args: Additional positional arguments to pass to the diffusion model's set_steps method.
+            kwargs: Additional keyword arguments to pass to the diffusion model's set_steps method.
         Example:
             ```
             diffuser = Diffuser(denoiser, sampling_method="ddpm", n_steps=1000)
             # Later, change to use fewer steps for faster sampling
-            diffuser.set_steps(100, schedule="ddim")
+            diffuser.set_steps(100, schedule="linear")
             ```
         """
-        self.diffusion.set_steps(n_steps, **extra_args)  # type: ignore
+        self.diffusion.set_steps(n_steps, schedule=schedule, *args, **kwargs)
 
     def generate(
         self,
-        data_shape: tuple[int, ...],
         model_inputs: ModelInput,
+        data_shape: tuple[int, ...] | None = None,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
-        **kwargs: dict[str, Any],
-    ) -> Tensor:
+        sampler_args: dict[str, Any] = {},
+        return_intermediates: bool = False,
+        return_latents: bool = False,
+    ) -> SamplingOutput:
         """
         Generates a new sample using the diffusion model.
         This method delegates to the underlying diffusion model's denoise method to
         generate a sample from the diffusion process. It can handle conditional generation
         with guidance when appropriate settings are provided.
         Args:
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
-                If a vision tower is used, this should be the shape of the latent space.
             model_inputs (ModelInput): A dictionary containing inputs for the model, such as initial noise,
                 conditional information, or labels. If 'x' is not provided, random noise will be generated.
+            data_shape (tuple[int, ...], optional): The shape of the data to generate. If a vision tower is used,
+                this shape should correspond to the latent space shape.
+                Required if 'x' is not in model_inputs. Defaults to None.
             use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            clamp_x (bool, optional): Whether to clamp the generated values to [-1, 1] range. Defaults to False.
+            clamp_x (bool, optional): Whether to clamp the tensor generated to [-1, 1] range (before eventual decoding).
+                Defaults to False.
             guidance_scale (float, optional): Scale for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
-            **kwargs (dict[str, Any]): Additional arguments to pass to the diffusion model's denoise method.
-                These may include parameters like 'classifier', 'classifier_free', etc.
+            sampler_args (dict[str, Any], optional): Additional arguments to pass to the sampler. Defaults to {}.
+            return_intermediates (bool, optional): Whether to return intermediate samples and extra sampler output
+                during the denoising process (mean, std etc...). Defaults to False.
+            return_latents (bool, optional): Whether to return the latent representation when using a
+                vision tower instead of decoded data. Defaults to False.
         Returns:
             Tensor: The generated data tensor.
         Example:
@@ -177,24 +207,33 @@ class Diffuser:
             ```
         """
         if self.vision_tower:
-            z = self.diffusion.denoise(
+            sampling_output = self.diffusion.denoise(
                 self.denoiser,
-                data_shape,
-                model_inputs,
+                model_inputs=model_inputs,
+                data_shape=data_shape,
                 use_tqdm=use_tqdm,
                 clamp_x=clamp_x,
                 guidance_scale=guidance_scale,
-                **kwargs,
+                sampler_args=sampler_args,
+                return_intermediates=return_intermediates,
             )
-            z = z / self.latent_scale
-            return self.vision_tower.decode(z)
+            if not return_latents:
+                latent_scale = self.latent_scale
+                latent_bias = self.latent_bias
+                if isinstance(latent_scale, Tensor):
+                    latent_scale = latent_scale.to(sampling_output["x"].device)
+                if isinstance(latent_bias, Tensor):
+                    latent_bias = latent_bias.to(sampling_output["x"].device)
+                sampling_output["x"] = self.vision_tower.decode(sampling_output["x"] / latent_scale + latent_bias)
+            return sampling_output
 
         return self.diffusion.denoise(
             self.denoiser,
-            data_shape,
-            model_inputs,
+            model_inputs=model_inputs,
+            data_shape=data_shape,
             use_tqdm=use_tqdm,
             clamp_x=clamp_x,
             guidance_scale=guidance_scale,
-            **kwargs,
+            sampler_args=sampler_args,
+            return_intermediates=return_intermediates,
         )

@@ -52,4 +52,4 @@ jobs:
 
       - name: typecheck
         if: steps.changes.outputs.sources == 'true'
-        run: uv run pyright
+        run: uv run basedpyright

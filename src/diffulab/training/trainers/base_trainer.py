@@ -1,14 +1,10 @@
 import logging
-import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable, cast
+from typing import TYPE_CHECKING, Any, Iterable
 
 import torch
-import wandb
-from accelerate import Accelerator  # type: ignore [stub file not found]
-from accelerate.utils import TorchDynamoPlugin  # type: ignore [stub file not found]
-from ema_pytorch import EMA  # type: ignore [stub file not found]
+from ema_pytorch import EMA  # type: ignore[reportMissingTypeStubs]
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
@@ -16,17 +12,17 @@ from tqdm import tqdm
 
 from diffulab.datasets.base import BatchData
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
+from diffulab.training.trainers.common import Trainer
 from diffulab.training.utils import AverageMeter
 
 if TYPE_CHECKING:
     from diffulab.diffuse import Diffuser
-HOME_PATH = Path.home()
 
 
-class Trainer:
+class BaseTrainer(Trainer):
     """
-    A training class that handles the training loop for diffusion models with support for distributed training,
-    mixed precision, gradient accumulation, and EMA model averaging.
+    A training class that handles the supervised training loop for diffusion models with support
+    for distributed training, mixed precision, gradient accumulation, and EMA model averaging.
     This class provides a complete training pipeline including validation, logging, and model checkpointing.
     It uses the Hugging Face Accelerate library for distributed training and handles both conditional and
     unconditional diffusion model training.
@@ -89,42 +85,21 @@ class Trainer:
             "dynamic": True,
         },
     ):
-        assert (HOME_PATH / ".cache" / "huggingface" / "accelerate" / "default_config.yaml").exists(), (
-            "please run `accelerate config` first in the CLI and save the config at the default location"
+        super().__init__(
+            n_epoch=n_epoch,
+            gradient_accumulation_step=gradient_accumulation_step,
+            precision_type=precision_type,
+            save_path=save_path,
+            project_name=project_name,
+            run_config=run_config,
+            init_kwargs=init_kwargs,
+            use_ema=use_ema,
+            ema_rate=ema_rate,
+            ema_update_after_step=ema_update_after_step,
+            ema_update_every=ema_update_every,
+            compile=compile,
+            dynamo_plugin_kwargs=dynamo_plugin_kwargs,
         )
-        self.n_epoch = n_epoch
-        self.use_ema = use_ema
-        self.ema_rate = ema_rate
-        self.ema_update_after_step = ema_update_after_step * gradient_accumulation_step
-        self.ema_update_every = ema_update_every * gradient_accumulation_step
-        dynamo_plugin = TorchDynamoPlugin(**dynamo_plugin_kwargs) if compile else None
-        self.compile = compile
-        self.accelerator = Accelerator(
-            split_batches=True,
-            mixed_precision=precision_type,
-            gradient_accumulation_steps=gradient_accumulation_step,
-            log_with="wandb",
-            dynamo_plugin=dynamo_plugin,
-        )
-        self.save_path = Path(save_path) / project_name
-        Path(self.save_path).mkdir(parents=True, exist_ok=True)
-        os.environ["WANDB_DIR"] = str(self.save_path / "wandb")
-        Path(os.environ["WANDB_DIR"]).mkdir(parents=True, exist_ok=True)
-        self.accelerator.init_trackers(project_name=project_name, config=run_config, init_kwargs=init_kwargs)  # type: ignore
-
-    def move_dict_to_device(self, batch: dict[str, Any]) -> dict[str, Any]:
-        """
-        Moves all tensor values in a dictionary to the appropriate device.
-        This method recursively traverses a dictionary and moves any tensor values to the
-        device specified by the accelerator, while leaving non-tensor values unchanged.
-        Args:
-            batch (dict[str, Any]): A dictionary where values may be tensors
-                that need to be moved to the appropriate device.
-        Returns:
-            dict[str, Any]: A new dictionary with the same structure as the input, but with all
-                tensor values moved to the accelerator's device.
-        """
-        return {k: v.to(self.accelerator.device) if isinstance(v, Tensor) else v for k, v in batch.items()}
 
     def training_step(
         self,
@@ -200,99 +175,12 @@ class Trainer:
         """
         model_inputs: ModelInput = val_batch["model_inputs"]
         timesteps = diffuser.draw_timesteps(model_inputs["x"].shape[0]).to(self.accelerator.device)
-        model_inputs: ModelInput = self.move_dict_to_device(model_inputs)  # type: ignore
+        model_inputs = self.move_dict_to_device(model_inputs)  # type: ignore
         extra_args = val_batch.get("extra", {})
         extra_args = self.move_dict_to_device(extra_args)
         val_losses = diffuser.compute_loss(model_inputs=model_inputs, timesteps=timesteps, extra_args=extra_args)
         for key, val_loss in val_losses.items():
             tracker.update(val_loss.item(), key=f"val/{key}")
-
-    def save_model(
-        self,
-        optimizer: Optimizer,
-        diffuser: "Diffuser",
-        ema_denoiser: EMA | None = None,
-        scheduler: LRScheduler | None = None,
-    ) -> None:
-        """
-        Saves model checkpoints and training state.
-        This method saves the current state of the model, optimizer, EMA model (if used), and
-        scheduler (if used) to the specified save path. It handles distributed training states
-        by properly unwrapping models before saving.
-        Args:
-            optimizer (Optimizer): The optimizer used for training.
-            diffuser (Diffuser): The diffusion model wrapper containing the denoiser model.
-            ema_denoiser (Denoiser | None, optional): EMA version of the denoiser model.
-                If provided, its state will be saved. Defaults to None.
-            scheduler (LRScheduler | None, optional): Learning rate scheduler.
-                If provided, its state will be saved. Defaults to None.
-        Note:
-            The following files are created in self.save_path:
-            - denoiser.pt: Main model state dict
-            - optimizer.pt: Optimizer state dict
-            - ema.pt: EMA model state dict (if EMA is used)
-            - scheduler.pt: Scheduler state dict (if scheduler is used)
-        """
-        unwrapped_denoiser: Denoiser = self.accelerator.unwrap_model(diffuser.denoiser)  # type: ignore
-        state_dict = cast(dict[str, Tensor], unwrapped_denoiser.state_dict())  # type: ignore
-        if self.compile:
-            state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-        self.accelerator.save(state_dict, self.save_path / "denoiser.pt")  # type: ignore
-
-        self.accelerator.save(optimizer.optimizer.state_dict(), self.save_path / "optimizer.pt")  # type: ignore
-
-        if ema_denoiser is not None:
-            unwrapped_ema = self.accelerator.unwrap_model(ema_denoiser)  # type: ignore
-            self.accelerator.save(unwrapped_ema.ema_model.state_dict(), self.save_path / "ema.pt")  # type: ignore
-
-        if scheduler is not None:
-            self.accelerator.save(scheduler.scheduler.state_dict(), self.save_path / "scheduler.pt")  # type: ignore
-
-        for extra_loss in diffuser.extra_losses:
-            unwrapped_loss = self.accelerator.unwrap_model(extra_loss)  # type: ignore
-            state_dict = cast(dict[str, Tensor], unwrapped_loss.state_dict())  # type: ignore
-            if self.compile:
-                state_dict = {k.replace("_orig_mod.", ""): v for k, v in state_dict.items()}
-            self.accelerator.save(state_dict, self.save_path / f"{unwrapped_loss.name}.pt")  # type: ignore
-
-    @torch.no_grad()  # type: ignore
-    def log_images(
-        self,
-        diffuser: "Diffuser",
-        val_dataloader: Iterable[BatchData],
-        epoch: int,
-        val_steps: int = 50,
-        guidance_scale: float = 0,
-    ) -> None:
-        """
-        Logs generated images during the validation phase.
-        This method generates and logs sample images using the current state of the diffusion model.
-        It temporarily adjusts the number of diffusion steps for faster validation image generation,
-        generates samples, and logs them using wandb (Weights & Biases).
-        Args:
-            diffuser (Diffuser): The diffusion model wrapper used for generating samples.
-            val_dataloader (Iterable[BatchData]): An iterator providing validation batches.
-                Each batch should contain at least an 'x' key with the input data.
-            epoch (int): Current training epoch number, used for logging.
-            val_steps (int, optional): Number of diffusion steps to use for validation
-                image generation. Using fewer steps speeds up generation. Defaults to 50.
-            guidance_scale (float, optional): Guidance scale for classifier-free guidance.
-                Defaults to 0.
-        Note:
-            - The method temporarily changes the number of diffusion steps to val_steps
-              for faster generation, then restores the original number of steps.
-            - Generated images are normalized from [-1, 1] to [0, 1] range before logging.
-            - Images are logged to wandb with the key 'val/images'.
-        """
-        batch: ModelInput = next(iter(val_dataloader))["model_inputs"]
-        x: Tensor = batch.pop("x")  # type: ignore
-        original_steps = diffuser.n_steps
-        diffuser.set_steps(val_steps)
-        images = diffuser.generate(data_shape=x.shape, model_inputs=batch, guidance_scale=guidance_scale)
-        images = (images * 0.5 + 0.5).clamp(0, 1).cpu()
-        images = wandb.Image(images, caption="Validation Images")
-        self.accelerator.log({"val/images": images}, step=epoch + 1, log_kwargs={"wandb": {"commit": True}})  # type: ignore
-        diffuser.set_steps(original_steps)
 
     def train(
         self,
@@ -302,10 +190,11 @@ class Trainer:
         val_dataloader: Iterable[BatchData] | None = None,
         scheduler: LRScheduler | None = None,
         per_batch_scheduler: bool = False,
-        log_validation_images: bool = False,
+        log_validation_images: bool = True,
         train_embedder: bool = False,
         p_classifier_free_guidance: float = 0.2,
         val_steps: int = 50,
+        val_step_shift: float | None = None,
         optimizer_ckpt: str | None = None,
         denoiser_ckpt: str | None = None,
         ema_ckpt: str | None = None,
@@ -327,13 +216,15 @@ class Trainer:
             per_batch_scheduler (bool, optional): Whether to step scheduler after each batch
                 instead of each epoch. Defaults to False.
             log_validation_images (bool, optional): Whether to generate and log sample images
-                during validation. Defaults to False.
+                during validation. Defaults to True.
             train_embedder (bool, optional): Whether to train the context embedder if present.
                 Defaults to False.
             p_classifier_free_guidance (float, optional): Probability of using classifier-free
                 guidance during training. Defaults to 0.2
             val_steps (int, optional): Number of steps to use for validation image generation.
                 Defaults to 50.
+            val_step_shift (float | None, optional): If provided, applies time-shifting during
+                validation image generation. Defaults to None. (only supported for flow-based models)
             ema_ckpt (str | None, optional): Path to EMA model checkpoint for loading pretrained
                 weights. Defaults to None.
             epoch_start (int, optional): Starting epoch number, useful for resuming training.
@@ -345,6 +236,11 @@ class Trainer:
             - Model checkpoints are saved when validation loss improves.
             - EMA model is used for validation if enabled.
         """
+        if val_step_shift is not None:
+            assert diffuser.model_type == "rectified_flow", (
+                "Time-shifting during validation is only supported for flow-based models."
+            )
+
         if not diffuser.denoiser.classifier_free:
             p_classifier_free_guidance = 0
 
@@ -391,11 +287,12 @@ class Trainer:
 
         if scheduler is not None:
             scheduler = self.accelerator.prepare_scheduler(scheduler)  # type: ignore
-        best_val_loss = float("inf")
 
         if diffuser.denoiser.context_embedder is not None and not train_embedder:  # type: ignore
             for param in diffuser.denoiser.context_embedder.parameters():  # type: ignore
                 param.requires_grad = False
+
+        best_val_loss = float("inf")
 
         tracker = AverageMeter()
         tq_epoch = tqdm(
@@ -407,7 +304,7 @@ class Trainer:
             tq_epoch.set_description(f"Epoch {epoch + 1}/{self.n_epoch}")
 
             tq_batch = tqdm(train_dataloader, disable=not self.accelerator.is_main_process, leave=False)  # type: ignore
-            for i, batch in enumerate(tq_batch):
+            for batch in tq_batch:
                 with self.accelerator.accumulate(diffuser.denoiser, *diffuser.extra_losses):  # type: ignore
                     with self.accelerator.autocast():
                         self.training_step(
@@ -423,6 +320,8 @@ class Trainer:
                         tq_batch.set_description(
                             f"Loss: {sum(v for k, v in tracker.avg.items() if k.startswith('train/')):.4f}"
                         )
+            if scheduler is not None and not per_batch_scheduler:
+                scheduler.step()
 
             for key, value in tracker.avg.items():
                 if key.startswith("train/"):
@@ -479,6 +378,7 @@ class Trainer:
                                 val_dataloader,  # type: ignore
                                 epoch,
                                 val_steps,
+                                step_shift=val_step_shift,
                                 guidance_scale=4 if original_model.classifier_free else 0,  # type: ignore
                             )
 
@@ -488,7 +388,7 @@ class Trainer:
                     for loss in diffuser.extra_losses:
                         loss.set_model(original_model)  # type: ignore
 
-                if total_loss < best_val_loss:  # type: ignore
+                if total_loss < best_val_loss:
                     best_val_loss = total_loss
                     self.save_model(optimizer, diffuser, ema_denoiser, scheduler)  # type: ignore
                 tracker.reset()

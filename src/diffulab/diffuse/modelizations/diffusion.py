@@ -3,6 +3,9 @@ from typing import Any
 
 from torch import Tensor
 
+from diffulab.diffuse.samplers import StepResult
+from diffulab.diffuse.samplers.common import Sampler
+from diffulab.diffuse.utils import SamplingOutput
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.losses import LossFunction
 
@@ -19,11 +22,17 @@ class Diffusion(ABC):
             Defaults to "euler".
         schedule (str, optional): Schedule for time discretization in the diffusion process.
             Defaults to "linear".
+        latent_diffusion (bool, optional): Whether the diffusion operates in a latent space.
+            Defaults to False.
+        sampler_parameters (dict[str, Any], optional): Additional parameters for the sampler.
+            Defaults to an empty dictionary.
     Attributes:
         timesteps (list[float]): List of timestep values for the diffusion process.
         steps (int): Number of steps in the diffusion process.
         sampling_method (str): Method used for sampling/reverse process.
         schedule (str): Schedule type used for timestep spacing.
+        latent_diffusion (bool): Whether the diffusion operates in a latent space.
+        sampler (Sampler): The sampler instance used for the reverse diffusion process.
     Methods:
         set_steps: Configure the timestep sequence for the diffusion process.
         one_step_denoise: Perform a single step of the reverse diffusion process.
@@ -33,20 +42,26 @@ class Diffusion(ABC):
         draw_timesteps: Sample random timesteps for training.
     """
 
+    sampler_registry: dict[str, type[Sampler]]
+
     def __init__(
         self,
         n_steps: int,
         sampling_method: str = "euler",
         schedule: str = "linear",
         latent_diffusion: bool = False,
-        **kwargs: Any,
+        sampler_parameters: dict[str, Any] = {},
     ):
+        assert sampling_method in self.sampler_registry, (
+            f"Unknown sampling method '{sampling_method}'. Available methods: {list(self.sampler_registry.keys())}"
+        )
+        self.sampler = self.sampler_registry[sampling_method](**sampler_parameters)
         self.timesteps: list[float] = []
         self.steps: int = n_steps
         self.sampling_method = sampling_method
         self.schedule = schedule
         self.latent_diffusion = latent_diffusion
-        self.set_steps(n_steps, schedule=schedule, **kwargs)
+        self.set_steps(n_steps, schedule=schedule)
 
     @abstractmethod
     def set_steps(self, n_steps: int, schedule: str) -> None:
@@ -70,7 +85,7 @@ class Diffusion(ABC):
         guidance_scale: float,
         *args: Any,
         **kwargs: Any,
-    ) -> Tensor:
+    ) -> StepResult:
         """
         Perform a single step of the reverse diffusion process.
         This method implements a single step of denoising in the reverse diffusion process,
@@ -85,7 +100,8 @@ class Diffusion(ABC):
             *args (Any): Additional positional arguments specific to the diffusion implementation.
             **kwargs (Any): Additional keyword arguments specific to the diffusion implementation.
         Returns:
-            Tensor: The updated data tensor after one step of denoising.
+            StepResult: An object containing the results of the denoising step, which may
+            include the updated data tensor and any intermediate values.
         Note:
             The specific implementation details, such as how the model prediction is used to
             update the state, depend on the concrete diffusion model subclass.
@@ -152,29 +168,56 @@ class Diffusion(ABC):
     def denoise(
         self,
         model: Denoiser,
-        data_shape: tuple[int, ...],
         model_inputs: ModelInput,
+        data_shape: tuple[int, ...] | None = None,
         use_tqdm: bool = True,
         clamp_x: bool = False,
         guidance_scale: float = 0,
-    ) -> Tensor:
+        sampler_args: dict[str, Any] = {},
+        return_intermediates: bool = False,
+    ) -> SamplingOutput:
         """
         Generate samples by running the reverse diffusion process.
         This method implements the complete reverse diffusion process to generate new samples,
         starting from random noise and iteratively denoising until reaching the final output.
         Args:
             model (Denoiser): The neural network model used for denoising.
-            data_shape (tuple[int, ...]): Shape of data to generate (batch_size, channels, height, width).
             model_inputs (ModelInput): A dictionary containing model inputs, such as initial noise
                 or conditional information. If 'x' is not provided, random noise will be generated.
+            data_shape (tuple[int, ...] | None): Shape of data to generate (batch_size, channels, height, width).
+                if x is provided in model_inputs, data_shape can be set to None.
+                Defaults to None.
             use_tqdm (bool, optional): Whether to show a progress bar during generation.
                 Defaults to True.
             clamp_x (bool, optional): Whether to clamp output values to [-1, 1] range.
                 Defaults to False.
             guidance_scale (float, optional): Scale factor for classifier or classifier-free guidance.
                 Values greater than 0 enable guidance. Defaults to 0.
+            sampler_args (dict[str, Any], optional): Additional arguments specific to the sampling method.
+                Defaults to an empty dictionary.
+            return_intermediates (bool, optional): Whether to return intermediate results at each step.
+                Defaults to False.
         Returns:
-            Tensor: The generated data tensor after completing the reverse diffusion process.
+            SamplingOutput: A dictionary that may contain (depending on sampler and return_intermediates option)
+            the following keys:
+                - x (Tensor): The final generated sample tensor.
+                - xt (Tensor, optional): If `return_intermediates` is True, a tensor of shape
+                  (batch_size, steps+1, ...) containing the sample at each timestep.
+                - estimated_x0 (Tensor, optional): If `return_intermediates` is True, a tensor
+                  of shape (batch_size, steps, ...) containing the estimated original data at
+                  each timestep.
+                - xt_mean (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides mean estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the mean at each timestep.
+                - xt_std (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides std estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the standard deviation at each timestep.
+                - logprob (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides log probabilities, a tensor of shape (batch_size, steps, ...) containing
+                  the log probabilities at each timestep.
+        Note:
+            The specific implementation details depend on the concrete diffusion model subclass.
+            Different samplers may provide different intermediate outputs.
         """
         pass
 
@@ -195,8 +238,7 @@ class Diffusion(ABC):
         Note:
             Different diffusion model implementations may use different distributions
             for sampling timesteps. For example:
-            - Gaussian diffusion typically samples integers from [0, num_diffusion_steps-1]
+            - Discrete gaussian diffusion typically samples integers from [0, num_diffusion_steps-1]
             - Flow-based diffusion typically samples continuous values from [0, 1]
         """
-
         pass

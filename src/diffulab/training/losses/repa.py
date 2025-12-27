@@ -121,7 +121,7 @@ class RepaLoss(LossFunction):
         self._handles: "WeakKeyDictionary[nn.Module, RemovableHandle]" = WeakKeyDictionary()
         self._features: "WeakKeyDictionary[nn.Module, torch.Tensor]" = WeakKeyDictionary()
         self._active_model: nn.Module | None = None
-        self._hook_layer_idx = self.alignment_layer - 1  # as before
+        self._hook_layer_idx = self.alignment_layer - 1
         self.coeff = coeff
 
     @_dynamo_disable
@@ -199,11 +199,13 @@ class RepaLoss(LossFunction):
         assert dst_features is not None, "Destination features must be provided or computed."
 
         src_features = self._features[self._active_model]
+        if isinstance(src_features, tuple):
+            src_features = src_features[0]
         projected_src_features: Tensor = self.proj(src_features)
 
         if self.resampler is not None:
             projected_src_features = self.resampler(projected_src_features)
 
         cos_sim = torch.nn.functional.cosine_similarity(projected_src_features, dst_features, dim=-1)  # type: ignore
-        loss = 1 - cos_sim.mean()
-        return self.coeff * loss
+        loss = 1 - cos_sim.mean()  # type: ignore
+        return self.coeff * loss  # type: ignore

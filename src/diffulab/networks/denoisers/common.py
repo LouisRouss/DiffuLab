@@ -9,13 +9,24 @@ class ModelInput(TypedDict, total=False):
     x: Required[Tensor]  # input tensor
     p: NotRequired[float]  # probabilily of label dropping
     y: NotRequired[Tensor]  # class labels
-    context: NotRequired[Tensor]  # context information, can be text image etc
+    initial_context: NotRequired[Any]  # context information, can be text image etc
+    x_context: NotRequired[Tensor]  # additional image context, will be concatenated to x
 
 
 class ModelOutput(TypedDict, total=False):
     x: Required[Tensor]  # output tensor
     features: NotRequired[list[Tensor]]  # list of features from intermediate layers
     repa_features: NotRequired[list[Tensor]]  # list of features after projection for REPA alignment
+
+
+class ModelInputGRPO(TypedDict, total=False):
+    x: NotRequired[Tensor]  # noisy input tensor
+    p: NotRequired[float]  # probabilily of label dropping
+    context: Required[Tensor]  # context information, for GRPO it's text embedding
+
+
+class ExtraInputGRPO(TypedDict, total=False):
+    captions: Required[list[str]]  # list of captions for the batch
 
 
 class Denoiser(nn.Module, ABC):

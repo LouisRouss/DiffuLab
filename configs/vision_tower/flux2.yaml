@@ -1,0 +1,2 @@
+_target_: diffulab.networks.vision_towers.Flux2VAE
+model_name: "black-forest-labs/FLUX.2-dev"

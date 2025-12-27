@@ -57,16 +57,14 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 - [x] add gradient checkpointing to DiT
 - [x] add torch compile support
 - [x] use flash attn
-- [ ] fix UNet attn
+- [x] fix UNet attn
 - [ ] create unit tests and add them to the CI
 - [ ] add the different possible parametrization for the loss (eps, xo, v etc... + learn variance) to ddpm
-- [ ] add some more context embedders
+- [x] add some more context embedders
 - [ ] add reflow algorithm
 - [ ] add EDM
-- [ ] think about how to add a sampler abstraction and use it in the different Diffusion classes (generalist class with euler, heuns etc)
+- [x] think about how to add a sampler abstraction and use it in the different Diffusion classes (generalist class with euler, heuns etc)
 - [ ] Train our models on toy datasets for different tasks (conditional generation, Image to Image ...)
 - [ ] Add possibility to train LORA/DORA
-- [ ] add different sampler
-- [ ] Try out Differential Transformers
-- [ ] Check to add https://arxiv.org/pdf/2406.02507
-- [ ] inject lessons learned from nvidia https://developer.nvidia.com/blog/rethinking-how-to-train-diffusion-models/
+- [x] add different sampler
+- [ ] Add SPRINT (https://arxiv.org/pdf/2510.21986)

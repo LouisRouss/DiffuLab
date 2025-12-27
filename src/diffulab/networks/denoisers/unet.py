@@ -3,12 +3,13 @@ from typing import Any, Callable
 
 import torch
 import torch.nn as nn
-from jaxtyping import Float, Int
+from einops import rearrange
+from jaxtyping import Bool, Float, Int
 from torch import Tensor
 from torch.utils.checkpoint import checkpoint  # type: ignore
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
-from diffulab.networks.embedders.common import ContextEmbedder
+from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     Downsample,
     LabelEmbed,
@@ -35,7 +36,8 @@ class TimestepBlock(nn.Module):
 
 class ContextBlock(nn.Module):
     """
-    Any module where forward() takes context embeddings as a second argument.
+    Any module where forward() takes context embeddings as a second argument and
+    attnention mask as an optional third argument.
     """
 
     @abstractmethod
@@ -43,6 +45,7 @@ class ContextBlock(nn.Module):
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         """
         Apply the module to `x` given `context` embeddings.
@@ -60,14 +63,15 @@ class EmbedSequential(nn.Sequential, TimestepBlock, ContextBlock):  # type: igno
         x: Float[Tensor, "batch_size channels height width"],
         emb: Float[Tensor, "batch_size emb_channels"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         for layer in self:
             if isinstance(layer, TimestepBlock) and isinstance(layer, ContextBlock):
-                x = layer(x, emb, context)
+                x = layer(x, emb, context, attn_mask=attn_mask)
             elif isinstance(layer, TimestepBlock):
                 x = layer(x, emb)
             elif isinstance(layer, ContextBlock):
-                x = layer(x, context)
+                x = layer(x, context, attn_mask=attn_mask)
             else:
                 x = layer(x)
         return x
@@ -271,21 +275,23 @@ class AttentionBlock(ContextBlock):
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         return (
             checkpoint(
                 self._forward,
-                *(x, context),
+                *(x, context, attn_mask),
                 use_reentrant=False,
             )
             if self.use_checkpoint
-            else self._forward(x, context)
+            else self._forward(x, context, attn_mask)
         )  # type: ignore
 
     def _forward(
         self,
         x: Float[Tensor, "batch_size channels height width"],
         context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> Float[Tensor, "batch_size channels height width"]:
         b, c, *spatial = x.shape
         x = x.reshape(b, c, -1)
@@ -293,149 +299,233 @@ class AttentionBlock(ContextBlock):
 
         q = self.to_q(self.norm_x(x))  # (b, inner_channels, x_len)
         k, v = self.to_kv(self.norm_context(context)).chunk(2, dim=1)  # (b, inner_channels, context_len) each
-        x_len = x.shape[-1]
-        context_len = k.shape[-1]
 
-        # reshape for multi-head attention
-        q = q.view(b * self.num_heads, self.dim_head, x_len)
-        k = k.view(b * self.num_heads, self.dim_head, context_len)
-        v = v.view(b * self.num_heads, self.dim_head, context_len)
+        q, k, v = (
+            rearrange(q, "b (h d) n -> b h n d", h=self.num_heads),
+            rearrange(k, "b (h d) n  -> b h n d", h=self.num_heads),
+            rearrange(v, "b (h d) n  -> b h n d", h=self.num_heads),
+        )
 
-        dots = torch.einsum("bct,bcs->bts", q * self.scale, k * self.scale)  # (b*h, x_len, context_len)
-        attn = self.attend(dots.float()).type(dots.dtype)
-        attn = self.dropout(attn)
+        if attn_mask is not None:
+            b, n = attn_mask.shape
+            attn_mask = attn_mask[:, None, None, :].expand(b, 1, x.shape[2], n)
 
-        out = torch.einsum("bts,bcs->bct", attn, v)
-        out = out.reshape(b, -1, x_len)  # (b, inner_channels, x_len)
+        out = nn.functional.scaled_dot_product_attention(
+            query=q,
+            key=k,
+            value=v,
+            scale=self.scale,
+            attn_mask=attn_mask,
+        )
+        out = rearrange(out, "b h n d -> b (h d) n")
         out = self.to_out(out)
         return (x + out).reshape(b, c, *spatial)
 
 
+class GEGLU(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.proj = nn.Conv1d(in_channels, out_channels * 2, kernel_size=1)
+
+    def forward(
+        self, x: Float[Tensor, "batch_size in_channels seq_len"]
+    ) -> Float[Tensor, "batch_size out_channels seq_len"]:
+        x_proj = self.proj(x)
+        x, gate = x_proj.chunk(2, dim=1)
+        return x * torch.nn.functional.gelu(gate)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, in_channels: int, inner_channels: int, dropout: float = 0.0):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.net = nn.Sequential(
+            GEGLU(in_channels, inner_channels),
+            nn.Dropout(dropout),
+            nn.Conv1d(inner_channels, in_channels, kernel_size=1),
+        )
+        self.norm = normalization(in_channels)
+
+    def forward(
+        self, x: Float[Tensor, "batch_size channels height width"]
+    ) -> Float[Tensor, "batch_size channels height width"]:
+        b, c, *spatial = x.shape
+        x = x.reshape(b, c, -1)
+        h = self.norm(x)
+        h = self.net(h)
+        return (x + h).reshape(b, c, *spatial)
+
+
+class TransformerAttentionBlock(ContextBlock):
+    def __init__(
+        self,
+        channels: int,
+        context_channels: int | None = None,
+        num_heads: int = 8,
+        inner_channels: int = -1,
+        dropout: float = 0.0,
+        norm: Callable[..., nn.Module] = normalization,
+        use_checkpoint: bool = False,
+        q_bias: bool = True,
+        kv_bias: bool = True,
+        mlp_ratio: int = 4,
+    ):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.self_attn = AttentionBlock(
+            channels,
+            context_channels=None,
+            num_heads=num_heads,
+            inner_channels=inner_channels,
+            dropout=dropout,
+            norm=norm,
+            use_checkpoint=use_checkpoint,
+            q_bias=q_bias,
+            kv_bias=kv_bias,
+        )
+        self.cross_attn = AttentionBlock(
+            channels,
+            context_channels=context_channels,
+            num_heads=num_heads,
+            inner_channels=inner_channels,
+            dropout=dropout,
+            norm=norm,
+            use_checkpoint=use_checkpoint,
+            q_bias=q_bias,
+            kv_bias=kv_bias,
+        )
+        self.ff = FeedForward(channels, channels * mlp_ratio, dropout)
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch_size channels height width"],
+        context: Float[Tensor, "batch_size context_channels context_length"] | None = None,
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+    ) -> Float[Tensor, "batch_size channels height width"]:
+        # residuals are handled in the submodules
+        h = self.self_attn(x)
+        h = self.cross_attn(h, context=context, attn_mask=attn_mask)
+        return self.ff(h)
+
+
+class TransformerBlock(ContextBlock):
+    def __init__(
+        self,
+        channels: int,
+        context_channels: int | None = None,
+        num_heads: int = 8,
+        inner_channels: int = -1,
+        dropout: float = 0.0,
+        norm: Callable[..., nn.Module] = normalization,
+        use_checkpoint: bool = False,
+        q_bias: bool = True,
+        kv_bias: bool = True,
+        mlp_ratio: int = 4,
+        depth: int = 1,
+    ):
+        super().__init__()  # type: ignore[reportUnknownMemberType]
+        self.channels = channels
+        self.context_channels = context_channels or channels
+        self.inner_channels = channels if inner_channels == -1 else inner_channels
+        self.num_heads = num_heads
+        assert self.inner_channels % self.num_heads == 0, "inner_channels must be divisible by num_heads"
+        self.dim_head = self.inner_channels // num_heads
+
+        self.norm_x = norm(self.channels)
+        self.proj_in = nn.Conv2d(self.channels, self.inner_channels, kernel_size=1, stride=1, padding=0)
+        self.attn_blocks = nn.ModuleList(
+            [
+                TransformerAttentionBlock(
+                    channels=self.inner_channels,
+                    context_channels=self.context_channels,
+                    num_heads=num_heads,
+                    dropout=dropout,
+                    norm=norm,
+                    use_checkpoint=use_checkpoint,
+                    q_bias=q_bias,
+                    kv_bias=kv_bias,
+                    mlp_ratio=mlp_ratio,
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.proj_out = nn.Conv2d(self.inner_channels, self.channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(
+        self,
+        x: Float[Tensor, "batch_size channels height width"],
+        context: Float[Tensor, "batch_size context_channels context_length"],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+    ) -> Float[Tensor, "batch_size channels height width"]:
+        assert context is not None, "TransformerBlock requires context input"
+        h = self.norm_x(x)
+        h = self.proj_in(h)
+        for attn_block in self.attn_blocks:
+            h = attn_block(h, context=context, attn_mask=attn_mask)
+        h = self.proj_out(h)
+        return x + h
+
+
 class UNetModel(Denoiser):
     """
-    A UNet-based denoising network with residual, attention, and optional class/context conditioning,
-    inspired by OpenAI's guided-diffusion implementation (MIT license, referenced 2024-08-18).
+    U-Net denoiser with optional class-label and/or multimodal context conditioning.
 
-    The architecture consists of:
-    - Input convolution followed by a sequence of residual blocks (with optional attention) and
-        downsampling operations.
-    - A middle block combining residual + attention + residual structure.
-    - A symmetric decoding path with skip connections, residual blocks (with optional attention),
-        and upsampling.
-    - Final normalization + SiLU + zero-initialized convolution for stable training.
+    This model is a configurable U-Net backbone with:
+      - timestep embeddings added via ResBlocks (FiLM-style optional scale/shift),
+      - optional class-label conditioning for classifier-free guidance,
+      - optional cross-attention conditioning via a ContextEmbedder (Transformer blocks),
+      - optional gradient checkpointing for reduced memory usage.
 
-    Supports:
-    - Class conditioning via learned label embeddings (optional classifier-free guidance).
-    - Arbitrary external context (e.g. text/image) via a user-provided ContextEmbedder.
-    - Optional concatenation of auxiliary image-like conditioning input (x_context).
-    - Attention at user-specified resolutions.
-    - Optional scale–shift normalization (FiLM-like).
-    - Optional residual up/downsampling blocks instead of plain (up/down)sample layers.
-    - Mixed precision (bfloat16) compute path.
+    The spatial encoder-decoder is organized into stages specified by `channel_mult` and
+    `num_res_blocks`, with attention (self-attn or cross-attn) inserted at resolutions
+    defined in `attention_resolutions`. If a `context_embedder` is provided (n_output=1),
+    cross-attention is used; otherwise, self-attention is used.
 
     Args:
-        image_size (list[int]): Spatial size [H, W] expected for all inputs. Enforced at runtime.
-        in_channels (int): Number of channels in the noisy input tensor x. (If x_context is used,
-                the effective input channels become in_channels + x_context.channels.)
-        model_channels (int): Base channel width; channel multipliers expand from this.
-        out_channels (int): Number of channels in the model output (e.g., predicted noise or image).
-        num_res_blocks (int): Number of residual blocks at each resolution level (encoder side).
-        attention_resolutions (list[int]): Downsample factors (relative to input) at which to apply
-                self-attention (e.g., [4, 8]).
-        dropout (float, optional): Dropout probability inside residual blocks. Defaults to 0.
-        channel_mult (str, optional): Comma-separated multipliers per level (parsed via eval into
-                a list of ints). Defaults to "1, 2, 4, 8".
-        conv_resample (bool, optional): If True, learnable convolutional (up/down)sampling;
-                otherwise use nearest + conv or similar lightweight ops. Defaults to True.
-        use_checkpoint (bool, optional): Enables gradient checkpointing for memory efficiency
-                (slower compute). Defaults to False.
-        use_fp16 (bool, optional): If True, internal activations use torch.bfloat16; otherwise float32.
-                (Name reflects legacy; bfloat16 is used if True.) Defaults to False.
-        num_heads (int, optional): Number of attention heads in each AttentionBlock. Defaults to 1.
-        use_scale_shift_norm (bool, optional): Enables scale–shift (FiLM-like) conditioning inside
-                residual blocks. Defaults to False.
-        resblock_updown (bool, optional): If True, use residual blocks with internal (up/down)sampling
-                instead of dedicated (Up/Down)sample modules. Defaults to False.
-        n_classes (int | None, optional): If provided, enables class-conditioning via LabelEmbed.
-                Mutually exclusive with context_embedder. Defaults to None.
-        classifier_free (bool, optional): If True and n_classes is set, label embeddings can be
-                probabilistically dropped during training for classifier-free guidance. Defaults to False.
-        context_embedder (ContextEmbedder | None, optional): Module that embeds arbitrary context
-                (e.g., text tokens, images). Mutually exclusive with n_classes. Defaults to None.
-
-    Attributes:
-        image_size (list[int]): Expected spatial shape of inputs.
-        in_channels (int): Base number of channels for the primary input tensor.
-        out_channels (int): Output channel count (predicted target).
-        model_channels (int): Base feature width before multipliers.
-        channel_mult (list[int]): Parsed channel multipliers per resolution stage.
-        time_embed_dim (int): Dimensionality of the sinusoidal + MLP time embedding.
-        time_embed (nn.Sequential): Two-layer MLP mapping time features to conditioning embedding.
-        label_embed (LabelEmbed | None): Label embedding module (if class-conditional).
-        context_embedder (ContextEmbedder | None): External context conditioning module.
-        classifier_free (bool): Whether classifier-free guidance is enabled for labels.
-        dtype (torch.dtype): Chosen compute dtype (bfloat16 or float32).
-        input_blocks (nn.ModuleList): Encoder path (with optional attention + downsampling).
-        middle_block (EmbedSequential): Bottleneck block (res-attn-res).
-        output_blocks (nn.ModuleList): Decoder path (skip connections + optional attention + upsampling).
-        out (nn.Sequential): Final projection layer producing the model output tensor.
-
-    Forward Args:
-        x (Tensor): Noisy input image tensor of shape (N, C, H, W); H, W must match image_size.
-        timesteps (Tensor): 1-D tensor of length N with integer or float diffusion timesteps.
-        y (Tensor | None, optional): Class label indices (N,) if class conditioning is enabled.
-                Required iff n_classes is not None.
-        context (Any | None, optional): Raw context data passed to context_embedder if present.
-                Required iff context_embedder is not None.
-        p (float, optional): Probability of dropping labels (classifier-free guidance). Only valid
-                if classifier_free is True and n_classes is set. Defaults to 0.0.
-        x_context (Tensor | None, optional): Additional image-like conditioning tensor concatenated
-                channel-wise with x (shape must be (N, C_ctx, H, W)). Defaults to None.
-
-    Forward Returns:
-        ModelOutput: A dictionary-like object with:
-                x (Tensor): The predicted output tensor of shape (N, out_channels, H, W).
-
-    Behavior:
-        - Timestep embeddings are generated via a sinusoidal embedding followed by an MLP.
-        - If class-conditional, label embeddings are added to the time embedding (with optional
-            dropout for classifier-free guidance).
-        - If context-conditional, the provided context is embedded and supplied to attention layers.
-        - The encoder stores intermediate feature maps for skip connections used in the decoder.
-        - Attention is selectively applied at resolutions whose downsample factors are in
-            attention_resolutions.
-        - The final conv is zero-initialized, encouraging the network to initially predict zeros
-            and stabilize training.
-
-    Raises:
-        AssertionError: If input spatial size mismatches image_size.
-        AssertionError: If label presence mismatches class-conditional configuration.
-        AssertionError: If context presence mismatches context-conditional configuration.
-        AssertionError: If p > 0 but classifier-free guidance is not properly enabled.
+        image_size (list[int]): Spatial size [H, W] the model expects. Inputs must match this
+            size at training/inference.
+        in_channels (int): Number of input channels consumed by the first convolution. If you
+            plan to provide `x_context` to forward (concatenated to x), set this to the
+            combined channel count (C + C_ctx) to avoid shape mismatch.
+        model_channels (int): Base channel width. Each level scales this by the factors in
+            `channel_mult`.
+        out_channels (int): Number of output channels predicted by the final conv head.
+        num_res_blocks (int): Number of residual blocks per resolution level (encoder and decoder).
+        attention_resolutions (list[int]): Downsampling factors at which to insert attention
+            blocks. The running downsample factor starts at 1 at the highest resolution,
+            doubles at each downsample, and halves on upsample. If the current factor `ds`
+            is in this list, an attention (or transformer) block is added at that stage.
+        dropout (float, default=0.0): Dropout probability used inside ResBlocks and attention FFNs.
+        channel_mult (str, default="1, 2, 4, 8"): Comma-separated multipliers determining the
+            channel width at each level: channels[level] = model_channels * channel_mult[level].
+        conv_resample (bool, default=True): If True, use convolutional up/downsampling ops
+            in the simple Upsample/Downsample paths.
+        use_checkpoint (bool, default=False): Enable torch.utils.checkpoint to trade compute
+            for reduced activation memory in supported blocks.
+        num_heads (int, default=1): Number of heads used by attention blocks.
+        use_scale_shift_norm (bool, default=False): If True, ResBlocks interpret the embedding MLP
+            output as (scale, shift) for FiLM-like modulation; otherwise the embedding is added.
+        resblock_updown (bool, default=False): If True, perform up/down sampling within ResBlocks
+            (learned, anti-aliased). If False, use separate Upsample/Downsample modules.
+        n_classes (int | None, default=None): Number of classes for class-conditional training. If
+            set, a label embedding is added to the timestep embedding in forward.
+        classifier_free (bool, default=False): Enable classifier-free guidance. When True, labels
+            can be randomly dropped with probability `p` during forward. Requires `n_classes` set.
+        context_embedder (ContextEmbedder | None, default=None): Optional embedder for external
+            conditioning (e.g., text). Must have `n_output == 1` and returns:
+              - embeddings: [B, C_ctx, L_ctx]
+              - attn_mask (optional): [B, L_ctx]
+            When provided, cross-attention Transformer blocks are used at attention stages.
+        transformer_depth (int, default=1): Number of stacked attention+MLP sub-blocks inside each
+            TransformerBlock inserted at attention resolutions.
 
     Notes:
-        - channel_mult is evaluated via Python eval; ensure trusted input.
-        - When both n_classes and context_embedder are provided (invalid), initialization fails.
-
-    Example:
-        ```python
-            model = UNetModel(
-                    image_size=[64, 64],
-                    in_channels=3,
-                    model_channels=128,
-                    out_channels=3,
-                    num_res_blocks=2,
-                    attention_resolutions=[4, 8],
-                    dropout=0.1,
-                    channel_mult="1, 2, 4",
-                    n_classes=10,
-                    classifier_free=True,
-            x = torch.randn(8, 3, 64, 64)
-            t = torch.randint(0, 1000, (8,))
-            labels = torch.randint(0, 10, (8,))
-            out = model(x, t, y=labels, p=0.1)
-            pred = out["x"]
-        ```
+        - Timestep embeddings are produced by `timestep_embedding(t, model_channels)` and
+          projected to `time_embed_dim = 4 * model_channels`.
+        - If `n_classes` is set, a LabelEmbed module adds label conditioning to the time embedding.
+        - With classifier-free guidance enabled, labels may be dropped in forward with probability `p`.
+        - If `context_embedder` is provided, it must have `n_output == 1`; its embeddings and
+          optional mask are fed to cross-attention Transformer blocks at configured resolutions.
+        - If you pass `x_context` to forward, ensure `in_channels` already accounts for those
+          extra channels (i.e., set `in_channels = C + C_ctx`).
     """
 
     def __init__(
@@ -450,13 +540,13 @@ class UNetModel(Denoiser):
         channel_mult: str = "1, 2, 4, 8",
         conv_resample: bool = True,
         use_checkpoint: bool = False,
-        use_fp16: bool = False,
         num_heads: int = 1,
         use_scale_shift_norm: bool = False,
         resblock_updown: bool = False,
         n_classes: int | None = None,
         classifier_free: bool = False,
         context_embedder: ContextEmbedder | None = None,
+        transformer_depth: int = 1,
     ):
         super().__init__()  # type: ignore
         assert not (n_classes is not None and context_embedder is not None), (
@@ -464,8 +554,13 @@ class UNetModel(Denoiser):
         )
 
         if context_embedder:
-            assert context_embedder.n_output == 1
+            assert context_embedder.n_output == 1, (
+                "For UNet please provide a context embedder with n_output=1 (context and attention mask)"
+            )  # context and attention mask
+
         self.context_channels = None if context_embedder is None else context_embedder.output_size[0]
+        self.transformer_depth = transformer_depth
+        self.use_context = self.context_channels is not None
 
         self.image_size = image_size
         self.in_channels = in_channels
@@ -477,7 +572,6 @@ class UNetModel(Denoiser):
         self.channel_mult: list[int] = eval(f"[{channel_mult}]")
         self.conv_resample = conv_resample
         self.use_checkpoint = use_checkpoint
-        self.dtype = torch.bfloat16 if use_fp16 else torch.float32
         self.num_heads = num_heads
         self.context_embedder = context_embedder
         self.classifier_free = classifier_free
@@ -518,10 +612,18 @@ class UNetModel(Denoiser):
                     layers.append(
                         AttentionBlock(
                             ch,
+                            num_heads=num_heads,
+                            dropout=dropout,
+                            use_checkpoint=use_checkpoint,
+                        )
+                        if not self.use_context
+                        else TransformerBlock(
+                            ch,
                             context_channels=self.context_channels,
                             num_heads=num_heads,
                             dropout=dropout,
                             use_checkpoint=use_checkpoint,
+                            depth=self.transformer_depth,
                         )
                     )
                 self.input_blocks.append(EmbedSequential(*layers))
@@ -563,6 +665,15 @@ class UNetModel(Denoiser):
                 num_heads=num_heads,
                 dropout=dropout,
                 use_checkpoint=use_checkpoint,
+            )
+            if not self.use_context
+            else TransformerBlock(
+                ch,
+                context_channels=self.context_channels,
+                num_heads=num_heads,
+                dropout=dropout,
+                use_checkpoint=use_checkpoint,
+                depth=self.transformer_depth,
             ),
             ResBlock(
                 ch,
@@ -597,6 +708,15 @@ class UNetModel(Denoiser):
                             num_heads=num_heads,
                             dropout=dropout,
                             use_checkpoint=use_checkpoint,
+                        )
+                        if not self.use_context
+                        else TransformerBlock(
+                            ch,
+                            context_channels=self.context_channels,
+                            num_heads=num_heads,
+                            dropout=dropout,
+                            use_checkpoint=use_checkpoint,
+                            depth=self.transformer_depth,
                         ),
                     )
                 if level and i == num_res_blocks:
@@ -713,16 +833,21 @@ class UNetModel(Denoiser):
         emb = self.time_embed(timestep_embedding(timesteps, self.model_channels))
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
+
+        attn_mask = None
         if self.context_embedder is not None:
-            context = self.context_embedder(context, p)
+            context_output: ContextEmbedderOutput = self.context_embedder(context, p)
+            context = context_output["embeddings"]
+            attn_mask = context_output.get("attn_mask")
+
         if x_context is not None:
             x = torch.cat([x, x_context], dim=1)
-        h = x.type(self.dtype)
+        h = x
         for module in self.input_blocks:
-            h: Tensor = module(h, emb=emb, context=context)
+            h: Tensor = module(h, emb=emb, context=context, attn_mask=attn_mask)
             hs.append(h)
-        h = self.middle_block(h, emb=emb, context=context)
+        h = self.middle_block(h, emb=emb, context=context, attn_mask=attn_mask)
         for module in self.output_blocks:
             h = torch.cat([h, hs.pop()], dim=1)
-            h = module(h, emb=emb, context=context)
+            h = module(h, emb=emb, context=context, attn_mask=attn_mask)
         return {"x": self.out(h)}

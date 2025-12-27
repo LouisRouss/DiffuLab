@@ -1,29 +1,36 @@
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, NotRequired, Required, TypedDict
 
 import torch.nn as nn
 from torch import Tensor
 
 
+class ContextEmbedderOutput(TypedDict):
+    embeddings: Required[Tensor]
+    pooled_embeddings: NotRequired[Tensor]
+    attn_mask: NotRequired[Tensor]
+
+
 class ContextEmbedder(nn.Module, ABC):
+    _n_output: int
+    _output_size: tuple[int, ...]
+
     def __init__(self):
         super().__init__()  # type: ignore
 
     @property
-    @abstractmethod
     def n_output(self) -> int:
         """
         Represents the number of output embedding the embedder is returning.
         """
-        pass
+        return self._n_output
 
     @property
-    @abstractmethod
     def output_size(self) -> tuple[int, ...]:
         """
         Represents the dimension of each output embedding.
         """
-        pass
+        return self._output_size
 
     @abstractmethod
     def drop_conditions(
@@ -43,7 +50,7 @@ class ContextEmbedder(nn.Module, ABC):
         pass
 
     @abstractmethod
-    def forward(self, context: Any, p: float) -> tuple[Tensor, ...]:
+    def forward(self, context: Any, p: float = 0) -> ContextEmbedderOutput:
         """
         Apply the model to an input batch.
 
@@ -51,6 +58,7 @@ class ContextEmbedder(nn.Module, ABC):
             context (Any): the input batch, can be a tensor or a list of str for example.
             p (float): the probability of dropping the context.
         Returns:
-            tuple[Tensor, ...]: a tuple of tensors representing the embeddings.
+            ContextEmbedderOutput: a dictionary containing the output embeddings and
+            optionally pooled embeddings and mask.
         """
         pass

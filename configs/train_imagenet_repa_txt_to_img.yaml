@@ -1,0 +1,62 @@
+# configs/train_cifar10_flow_matching.yaml
+# @package _global_
+defaults:
+  - model: ddt
+  - diffuser: rectified_flow
+  - trainer: default
+  - dataset: imagenet_repa
+  - dataloader: default
+  - optimizer: adamw
+  - vision_tower: flux2
+  - embedder: qwen
+  - _self_
+
+# Override specific settings
+trainer:
+  project_name: txt_to_img_imagenet_repa_flux2
+  n_epoch: 50
+  precision_type: "bf16"
+  p_classifier_free_guidance: 0.2
+  gradient_accumulation_step: 16
+  val_step_shift: 6.93
+  compile: false
+  ema_update_after_step: 0
+  ema_update_every: 1
+  ema_rate: 0.9999
+
+
+model:
+  input_channels: 128
+  output_channels: 128
+  input_dim: 640
+  hidden_dim: 640
+  context_dim: 640
+  num_heads: 10
+  mlp_ratio: 4
+  patch_size: 1
+  encoder_depth: 8
+  decoder_depth: 4
+  classifier_free: true
+  rope_base: 1000
+  rope_axes_dim: [20, 22, 22]
+  n_classes: null
+  simple_ddt: false
+
+diffuser:
+  extra_args:
+    logits_normal: true
+    shift: 4.63
+
+dataloader:
+  batch_size: 16
+
+# Hydra configuration
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+perceiver_resampler:
+  use_resampler: false

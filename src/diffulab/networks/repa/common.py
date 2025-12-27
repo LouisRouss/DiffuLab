@@ -35,9 +35,7 @@ class REPA(nn.Module, ABC):
         """
 
     @abstractmethod
-    def preprocess(
-        self, x: Float[Tensor, "batch_size channels height width"]
-    ) -> Float[Tensor, "batch_size channels height width"]:
+    def preprocess(self, x: Float[Tensor, "batch_size channels height width"]) -> Any:
         """
         Preprocess the input tensor before encoding.
 
@@ -46,7 +44,7 @@ class REPA(nn.Module, ABC):
             Assumed to be an image tensor with shape [N, C, H, W].
 
         Returns:
-            Tensor: Preprocessed input tensor.
+            Any: Preprocessed input tensor or format expected by the encoder.
         """
 
     @abstractmethod
@@ -61,6 +59,7 @@ class REPA(nn.Module, ABC):
             Tensor: Encoded representation of the input tensor.
         """
 
+    @torch.inference_mode()
     def compute_on_dataset(
         self,
         dataset_path: str,
@@ -119,7 +118,7 @@ class REPA(nn.Module, ABC):
                 # Move to correct device and dtype
                 images = images.to(dtype=dtype, device=device)
                 # Compute embeddings
-                embeddings = self.forward(images)
+                embeddings = self.forward(images).float()
                 embeddings_numpy = embeddings.cpu().numpy()  # type: ignore[reportUnknownMemberType]
 
                 if target_type == "float32":

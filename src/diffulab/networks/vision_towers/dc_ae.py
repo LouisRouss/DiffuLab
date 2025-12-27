@@ -43,11 +43,19 @@ class DCAE(VisionTower):
         Returns:
             Tensor: Encoded representation of the input tensor.
         """
-        if x.min() >= 0 and x.max() <= 1:  # Case: 0-1
-            x = (x - 0.5) * 2.0
-        elif x.min() >= 0 and x.max() <= 255:  # Case: 0-255
-            x = x.float() / 255.0
-            x = (x - 0.5) * 2.0
+        x = x.float()
+        x_min = x.min().item()
+        x_max = x.max().item()
+
+        if x_min >= 0.0 and x_max <= 1.0:
+            pass
+        elif x_min >= 0.0 and x_max <= 255.0 and x_max > 1.0:
+            x = x / 255.0
+        else:
+            raise ValueError("Input tensor range is not supported. Expected 0–255 or 0–1")
+
+        x = (x - 0.5) * 2.0
+
         return self.model.encode(x).latent  # type: ignore
 
     def decode(self, z: Float[Tensor, "batchsize latent_channels H' W'"]) -> Float[Tensor, "batchsize 3 H W"]:

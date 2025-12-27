@@ -1,6 +1,5 @@
-import enum
 import math
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 
 import torch
 import torch.nn as nn
@@ -9,22 +8,11 @@ from tqdm import tqdm
 
 from diffulab.diffuse.modelizations.diffusion import Diffusion
 from diffulab.diffuse.modelizations.utils import space_timesteps
-from diffulab.diffuse.utils import extract_into_tensor
+from diffulab.diffuse.samplers.common import StepResult
+from diffulab.diffuse.samplers.gaussian_diffusion import DDIM, DDPM
+from diffulab.diffuse.utils import SamplingOutput, extract_into_tensor
 from diffulab.networks.denoisers.common import Denoiser, ModelInput
 from diffulab.training.losses.common import LossFunction
-
-
-class MeanType(enum.Enum):
-    EPSILON = "epsilon"
-    XSTART = "xstart"
-    XPREV = "xprev"
-
-
-class ModelVarType(enum.Enum):
-    LEARNED = "learned"
-    FIXED_SMALL = "fixed_small"
-    FIXED_LARGE = "fixed_large"
-    LEARNED_RANGE = "learned_range"
 
 
 class GaussianDiffusion(Diffusion):
@@ -37,35 +25,15 @@ class GaussianDiffusion(Diffusion):
     https://github.com/openai/guided-diffusion/blob/main/guided_diffusion/gaussian_diffusion.py
     under MIT LICENSE as of 2025-03-02
     Args:
-        n_steps (int, optional): Number of diffusion steps. Default is 1000.
+        n_steps (int, optional): Number of diffusion steps. Default is 1000. Set to match training steps.
         sampling_method (str, optional): Method used for sampling. Currently supports "ddpm"
             (standard diffusion) and "ddim" (deterministic diffusion). Default is "ddpm".
         schedule (str, optional): Noise schedule to use. Options include "linear" and "cosine".
             Default is "linear".
-        mean_type (str, optional): Type of parameterization used for the model's output.
-            Options include:
-            - "epsilon": Model predicts the noise added.
-            - "xstart": Model predicts the clean data directly.
-            - "xprev": Model predicts the previous timestep.
-            Default is "epsilon".
-        variance_type (str, optional): Type of variance computation to use. Options include:
-            - "fixed_small": Use the exact posterior variance.
-            - "fixed_large": Use larger variance
-            - "learned": Model learns the variance.
-            - "learned_range": Model learns interpolation between min/max variance.
-            Default is "fixed_small".
-    Attributes:
-        mean_type (str): The selected mean parameterization type.
-        var_type (str): The selected variance type.
-        training_steps (int): Number of steps used for training.
-        timestep_map (list[int]): Mapping from sampling steps to training steps when using
-            fewer sampling steps than training steps.
-        betas (Tensor): Beta schedule for noise levels.
-        alphas (Tensor): 1 - betas.
-        alphas_bar (Tensor): Cumulative product of alphas.
-        sqrt_alphas_bar (Tensor): Square root of alphas_bar.
-        posterior_variance (Tensor): Variance of the posterior distribution.
-        posterior_log_variance_clipped (Tensor): Log of the posterior variance, clipped for numerical stability.
+        latent_diffusion (bool, optional): Whether the diffusion operates in a latent space.
+            Defaults to False.
+        sampler_parameters (dict[str, Any], optional): Additional parameters for the sampler.
+            Defaults to an empty dictionary.
     Methods:
         set_steps(n_steps, schedule, section_counts): Sets the number and spacing of diffusion steps.
         draw_timesteps(batch_size): Samples random timesteps for training.
@@ -75,55 +43,46 @@ class GaussianDiffusion(Diffusion):
         add_noise(x, timesteps, noise): Adds noise to inputs according to the forward process.
     """
 
+    sampler_registry = {
+        "ddpm": DDPM,
+        "ddim": DDIM,
+    }
+
     def __init__(
         self,
         n_steps: int = 1000,
-        sampling_method: str = "ddpm",
-        schedule: str = "linear",
+        sampling_method: Literal["ddpm", "ddim"] = "ddpm",
+        schedule: Literal["linear", "cosine"] = "linear",
         latent_diffusion: bool = False,
-        mean_type: str = "epsilon",
-        variance_type: str = "fixed_small",
+        sampler_parameters: dict[str, Any] = {},
     ):
-        if mean_type not in MeanType._value2member_map_:
-            raise ValueError(f"mean_type must be one of {[e.value for e in MeanType]}")
-        if variance_type not in ModelVarType._value2member_map_:
-            raise ValueError(f"variance_type must be one of {[e.value for e in ModelVarType]}")
         if sampling_method not in ["ddpm", "ddim"]:
             raise ValueError("sampling method must be one of ['ddpm', 'ddim']")
 
-        self.mean_type = mean_type
-        self.var_type = variance_type
         self.training_steps = n_steps
         super().__init__(
-            n_steps=n_steps, sampling_method=sampling_method, schedule=schedule, latent_diffusion=latent_diffusion
+            n_steps=self.training_steps,
+            sampling_method=sampling_method,
+            schedule=schedule,
+            latent_diffusion=latent_diffusion,
+            sampler_parameters=sampler_parameters,
         )
 
     def set_diffusion_parameters(self, betas: Tensor) -> None:
         """
-        Sets up the diffusion parameters for the Gaussian diffusion process.
-        This method computes various coefficients and parameters needed for the diffusion process
-        after the noise schedule (betas) has been defined. It calculates alpha values, their
-        cumulative products, and various coefficients needed for the forward and reverse processes.
+        Sets the diffusion parameters based on the provided beta schedule.
+        This method initializes the diffusion process parameters, including alphas and their
+        cumulative products, based on the given beta values. It also configures the sampler
+        to use this betas schedule.
         Args:
-            betas (Tensor): The noise schedule tensor defining beta values for each timestep
-                in the diffusion process.
+            betas (Tensor): A 1D tensor containing beta values for each timestep,
+                with shape (n_steps,).
         """
         self.betas = betas
-        self.alphas = 1 - self.betas
+        self.alphas = torch.ones_like(self.betas) - self.betas
         self.alphas_bar = self.alphas.cumprod(dim=0)
-        self.alphas_bar_prev = torch.cat([torch.tensor([1.0], dtype=torch.float64), self.alphas_bar[:-1]])
-        self.alphas_bar_next = torch.cat([self.alphas_bar[1:], torch.tensor([0.0], dtype=torch.float64)])
-
-        # utils for computation
         self.sqrt_alphas_bar = self.alphas_bar.sqrt()
-        self.posterior_variance = self.betas * (1.0 - self.alphas_bar_prev) / (1.0 - self.alphas_bar)
-        # log calculation clipped because the posterior variance is 0 at the
-        # beginning of the diffusion chain.
-        self.posterior_log_variance_clipped = torch.log(
-            torch.cat([self.posterior_variance[1:2], self.posterior_variance[1:]])
-        )
-        self.posterior_mean_coef1 = self.betas * (self.alphas_bar_prev).sqrt() / (1.0 - self.alphas_bar)
-        self.posterior_mean_coef2 = (1.0 - self.alphas_bar_prev) * self.alphas.sqrt() / (1.0 - self.alphas_bar)
+        self.sampler.set_steps(betas)
 
     def set_steps(
         self,
@@ -168,7 +127,7 @@ class GaussianDiffusion(Diffusion):
             new_betas: list[Tensor] = []
             for i, alpha_bar in enumerate(self.alphas_bar):
                 if i in timesteps_to_use:
-                    new_betas.append(1 - alpha_bar / last_alpha_bar)
+                    new_betas.append(torch.ones_like(alpha_bar) - alpha_bar / last_alpha_bar)
                     last_alpha_bar = alpha_bar
                     self.timestep_map.append(i)
             self.set_diffusion_parameters(torch.tensor(new_betas))
@@ -234,251 +193,6 @@ class GaussianDiffusion(Diffusion):
             betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
         return torch.tensor(betas, dtype=torch.float64, requires_grad=False)
 
-    def _get_x_start_from_x_prev(self, x_prev: Tensor, x: Tensor, t: Tensor) -> Tensor:
-        """
-        Computes the initial state (x_0) given the previous state (x_{t-1}) and current state (x_t).
-        It uses precomputed coefficients to solve for x_0 based on the Gaussian diffusion model's
-        posterior distribution parameters.
-        Args:
-            x_prev (Tensor): The state at the previous timestep (x_{t-1}).
-            x (Tensor): The state at the current timestep (x_t).
-            t (Tensor): The current timestep indices as a tensor.
-        Returns:
-            Tensor: The inferred initial clean state (x_0) based on the provided states.
-        """
-        x_start = (1.0 / extract_into_tensor(self.posterior_mean_coef1, t, x_prev.shape)) * x_prev + (
-            1.0 / extract_into_tensor(self.posterior_mean_coef2, t, x.shape)
-        ) * x
-        return x_start
-
-    def _get_x_start_from_eps(self, eps: Tensor, x: Tensor, t: Tensor) -> Tensor:
-        """
-        Computes the initial state (x_0) from the current state (x_t) and the predicted noise (epsilon).
-        This method uses the diffusion model's forward process parameters to invert the noise
-        addition and recover the original clean data, given the current noisy state and the
-        predicted noise component.
-        Args:
-            eps (Tensor): The predicted noise component (epsilon).
-            x (Tensor): The current noisy state at timestep t (x_t).
-            t (Tensor): The current timestep indices as a tensor.
-        Returns:
-            Tensor: The inferred initial clean state (x_0) based on the current state and predicted noise.
-        """
-
-        x_start = (1.0 / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)) * x - (
-            (1.0 - extract_into_tensor(self.alphas_bar, t, eps.shape)).sqrt()
-            / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)
-        ) * eps
-        return x_start
-
-    def _get_mean_from_x_start(self, x: Tensor, x_start: Tensor, t: Tensor) -> Tensor:
-        """
-        Computes the mean of the posterior distribution q(x_{t-1} | x_t, x_0) given the current state and inferred initial state.
-        This function calculates the mean of the posterior distribution using pre-computed coefficients that
-        depend on the noise schedule. The posterior mean is used during the reverse diffusion process to sample
-        from q(x_{t-1} | x_t, x_0).
-        Args:
-            x (Tensor): The current state at timestep t (x_t).
-            x_start (Tensor): The inferred or predicted initial clean state (x_0).
-            t (Tensor): The current timestep indices as a tensor.
-        Returns:
-            Tensor: The mean of the posterior distribution q(x_{t-1} | x_t, x_0).
-        """
-
-        mean = (
-            extract_into_tensor(self.posterior_mean_coef1, t, x_start.shape) * x_start
-            + extract_into_tensor(self.posterior_mean_coef2, t, x.shape) * x
-        )
-        return mean
-
-    def _get_x_prev_from_mean_var(self, mean: Tensor, log_var: Tensor, t: Tensor) -> Tensor:
-        """
-        Computes the previous state (x_{t-1}) from the posterior mean and variance.
-        This method samples the previous state from the posterior distribution p(x_{t-1}|x_t)
-        using the provided mean and variance parameters. For all timesteps except the final one (t=0),
-        it adds random Gaussian noise scaled by the square root of the variance. For the final timestep,
-        it returns the mean without adding noise.
-        Args:
-            mean (Tensor): The posterior mean of p(x_{t-1}|x_t).
-            var (Tensor): The posterior variance of p(x_{t-1}|x_t).
-            t (Tensor): The current timestep indices as a tensor.
-        Returns:
-            Tensor: The sampled previous state (x_{t-1}) from the posterior distribution.
-        """
-        # Create a mask where t > 0 is True, and t == 0 is False
-        t_mask = (t > 0).float().view(-1, *([1] * (mean.dim() - 1)))
-
-        # Generate noise with the same shape as mean
-        noise = torch.randn_like(mean)
-
-        # Apply noise only where t > 0, using the mask to conditionally add noise
-        return mean + t_mask * noise * torch.exp(0.5 * log_var)
-
-    def _get_eps_from_xstart(self, x_start: Tensor, x: Tensor, t: Tensor) -> Tensor:
-        """
-        Computes the noise component (epsilon) from the initial state and current state.
-        This method is the inverse of _get_x_start_from_eps, calculating the noise that would
-        have been added to x_start to produce the current noisy state x at timestep t.
-        Args:
-            x_start (Tensor): The inferred or known initial clean state (x_0).
-            x (Tensor): The current noisy state at timestep t (x_t).
-            t (Tensor): The current timestep indices as a tensor.
-        Returns:
-            Tensor: The noise component (epsilon) that was added to x_start to produce x.
-        """
-        eps = (1.0 / (1 - extract_into_tensor(self.alphas_bar, t, x.shape)).sqrt()) * (
-            x - extract_into_tensor(self.sqrt_alphas_bar, t, x_start.shape) * x_start
-        )
-        return eps
-
-    def _get_p_mean_var(
-        self, prediction: Tensor, x: Tensor, t: Tensor, clamp_x: bool = False
-    ) -> tuple[Tensor, Tensor, Tensor, Tensor]:
-        """
-        Computes the posterior mean and variance for the reverse diffusion step.
-        This core method calculates the parameters of the posterior distribution
-        p(x_{t-1} | x_t) used in the reverse diffusion process. It processes the model's
-        prediction and current noisy state to extract the mean, variance, log variance,
-        and the predicted clean state.
-        Args:
-            prediction (Tensor): The raw output from the denoising model. Could be noise prediction,
-                x_start prediction, or x_prev prediction depending on self.mean_type.
-            x (Tensor): The current noisy state at timestep t (x_t).
-            t (Tensor): The current timestep indices as a tensor.
-            clamp_x (bool, optional): Whether to clamp the predicted x_start to [-1, 1] range
-                for numerical stability. Defaults to False.
-        Returns:
-            tuple[Tensor, Tensor, Tensor, Tensor]: A tuple containing:
-                - mean (Tensor): The mean of the posterior distribution p(x_{t-1} | x_t).
-                - var (Tensor): The variance of the posterior distribution.
-                - log_var (Tensor): The log variance of the posterior distribution.
-                - x_start (Tensor): The predicted clean data (x_0) based on current state and prediction.
-        """
-        if self.var_type in [ModelVarType.FIXED_SMALL.value, ModelVarType.FIXED_LARGE.value]:
-            model_output = prediction
-        elif self.var_type in [ModelVarType.LEARNED.value, ModelVarType.LEARNED_RANGE.value]:
-            assert prediction.shape[1] % 2 == 0
-            model_output, log_var = torch.chunk(prediction, 2, dim=1)
-        else:
-            raise ValueError(f"Unknown model var type: {self.var_type}")
-
-        # extract mean
-        if self.mean_type == MeanType.XPREV.value:
-            x_start = self._get_x_start_from_x_prev(model_output, x, t)
-        elif self.mean_type == MeanType.XSTART.value:
-            x_start = model_output
-        elif self.mean_type == MeanType.EPSILON.value:
-            x_start = self._get_x_start_from_eps(model_output, x, t)
-        else:
-            raise ValueError(f"Unknown mean type: {self.mean_type}")
-        if clamp_x:
-            x_start = torch.clamp(x_start, -1, 1)
-        mean = self._get_mean_from_x_start(x, x_start, t)
-
-        # extract variance
-        if self.var_type == ModelVarType.FIXED_SMALL.value:
-            var, log_var = (
-                extract_into_tensor(self.posterior_variance, t, x.shape),
-                extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape),
-            )
-        elif self.var_type == ModelVarType.FIXED_LARGE.value:
-            var, log_var = (
-                torch.cat([self.posterior_variance[1:2], self.betas[1:]]),
-                torch.cat([self.posterior_log_variance_clipped[1:2], self.betas[1:]]),
-            )
-            var, log_var = extract_into_tensor(var, t, x.shape), extract_into_tensor(log_var, t, x.shape)
-        elif self.var_type == ModelVarType.LEARNED.value:
-            var = log_var.exp()  # type: ignore
-        elif self.var_type == ModelVarType.LEARNED_RANGE.value:
-            min_log = extract_into_tensor(self.posterior_log_variance_clipped, t, x.shape)
-            max_log = extract_into_tensor(self.betas, t, x.shape).log()
-            log_var = (log_var + 1) / 2  # type: ignore
-            log_var = log_var * max_log + (1 - log_var) * min_log
-            var = log_var.exp()
-        else:
-            raise ValueError(f"Unknown model var type: {self.var_type}")
-
-        return mean, var, log_var, x_start  # type: ignore
-
-    def _get_mean_for_ddim_guidance(
-        self, x: Tensor, x_start: Tensor, t: Tensor, grad: Tensor
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        """
-        Calculates the adjusted mean for DDIM with gradient guidance.
-        This method computes a modified mean for the next timestep in the reverse diffusion process
-        when using classifier guidance with DDIM sampling. It adjusts the predicted noise (epsilon)
-        based on the gradient input, then recalculates the predicted clean image and mean accordingly.
-        Args:
-            x (Tensor): The current noisy state at timestep t.
-            x_start (Tensor): The predicted initial clean state.
-            t (Tensor): The current timestep indices as a tensor.
-            grad (Tensor): The gradient used for guidance, typically from a classifier.
-        Returns:
-            tuple[Tensor, Tensor, Tensor]: A tuple containing:
-                - mean (Tensor): The adjusted mean for the next state in the reverse diffusion process.
-                - x_start (Tensor): The updated predicted clean state based on the guided noise.
-                - eps (Tensor): The adjusted noise prediction after applying the guidance.
-        """
-        eps = self._get_eps_from_xstart(x, x_start, t)
-        eps = eps - (1 - extract_into_tensor(self.alphas_bar, t, grad.shape)).sqrt() * grad
-
-        x_start = self._get_x_start_from_eps(eps, x, t)
-        mean = self._get_mean_from_x_start(x, x_start, t)
-
-        return mean, x_start, eps
-
-    def _sample_x_prev_ddim(self, x: Tensor, eps: Tensor, t: Tensor) -> Tensor:
-        """
-        Performs a deterministic DDIM update from state x_t to x_{t-1}.
-        This method implements the Denoising Diffusion Implicit Models (DDIM) update rule,
-        which allows for deterministic sampling from the diffusion model. It computes x_{t-1}
-        given x_t and the predicted noise (epsilon) using coefficients from the diffusion process.
-        Args:
-            x (Tensor): The current state x_t at timestep t.
-            eps (Tensor): The predicted noise component (epsilon) at timestep t.
-            t (Tensor): The current timestep indices as a tensor.
-        Returns:
-            Tensor: The previous state x_{t-1} after the deterministic DDIM update.
-        References:
-            Song, J. et al. "Denoising Diffusion Implicit Models" (2020)
-            https://arxiv.org/abs/2010.02502
-        """
-        x_prev = (
-            extract_into_tensor(self.alphas_bar_prev, t, x.shape).sqrt()
-            * (
-                (x - (1 - extract_into_tensor(self.alphas_bar, t, x.shape)).sqrt() * eps)
-                / extract_into_tensor(self.sqrt_alphas_bar, t, x.shape)
-            )
-            + (1 - extract_into_tensor(self.alphas_bar_prev, t, eps.shape)).sqrt() * eps
-        )
-        return x_prev
-
-    def classifier_grad(
-        self, x: Tensor, y: Tensor, t: Tensor, classifier: Callable[[Tensor, Tensor], Tensor]
-    ) -> Tensor:
-        """
-        Computes the gradient of a classifier's output with respect to its input.
-        This function calculates the gradient of the log probability of the target class
-        with respect to the input. This gradient can be used for classifier guidance in
-        diffusion models, steering the generation process toward samples that the classifier
-        associates with the target class.
-        Args:
-            x (Tensor): The input tensor for which to compute gradients. Will be detached
-                from its computation graph and have requires_grad set to True.
-            y (Tensor): The target class indices, with shape (batch_size,).
-            t (Tensor): The timestep tensor passed to the classifier.
-            classifier (Callable[[Tensor, Tensor], Tensor]): A function that takes the input x
-                and timestep t, and returns logits for each class.
-        Returns:
-            Tensor: The gradient of the log probability of the target class with respect to
-                the input x, with the same shape as x.
-        """
-        x = x.detach().requires_grad_()
-        logits = classifier(x, t)
-        logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-        logprobs_y = logprobs[torch.arange(y.size(0)), y]
-        return torch.autograd.grad(logprobs_y.sum(), x)[0]
-
     def draw_timesteps(self, batch_size: int) -> Tensor:
         """
         Draws random timesteps for training the diffusion model.
@@ -502,9 +216,8 @@ class GaussianDiffusion(Diffusion):
         t: int,
         clamp_x: bool = False,
         guidance_scale: float = 0.0,
-        classifier_free: bool = True,
-        classifier: Callable[[Tensor, Tensor], Tensor] | None = None,
-    ) -> Tensor:
+        sampler_args: dict[str, Any] = {},
+    ) -> StepResult:
         """
         Performs one step of the reverse diffusion process.
         This method denoises the input data by one timestep using the trained model.
@@ -520,17 +233,11 @@ class GaussianDiffusion(Diffusion):
             guidance_scale (float, optional): Scale factor for guidance. Values greater than 0
                 enable guidance, with higher values emphasizing the conditional prediction more.
                 Defaults to 0.0 (no guidance).
-            classifier_free (bool, optional): Whether to use classifier-free guidance (True) or
-                classifier-based guidance (False). Defaults to True.
-            classifier (Callable[[Tensor, Tensor], Tensor] | None, optional): A classifier function
-                for gradient-based guidance when classifier_free is False. Defaults to None.
+            sampler_args (dict[str, Any], optional): Additional arguments to pass to the sampler's step method.
+                Defaults to an empty dictionary.
         Returns:
             Tensor: The denoised data tensor after taking one reverse diffusion step.
         Notes:
-            - When using classifier-free guidance, the model is run twice: once with and once
-              without conditioning inputs, and the results are interpolated.
-            - When using classifier-based guidance, gradients from a classifier are used to
-              guide the sampling process toward the desired class or condition.
             - The timestep mapping is applied if a different number of sampling steps than
               training steps is being used.
         """
@@ -543,97 +250,21 @@ class GaussianDiffusion(Diffusion):
             timesteps_model = timesteps
         prediction = model(**{**model_inputs, "p": 0}, timesteps=timesteps_model)["x"]
 
-        if classifier_free and guidance_scale > 0:
+        if guidance_scale > 0:
             prediction_uncond = model(**{**model_inputs, "p": 1}, timesteps=timesteps_model)["x"]
             prediction = prediction_uncond + guidance_scale * (prediction - prediction_uncond)
 
-        mean, _, log_var, x_start = self._get_p_mean_var(prediction, model_inputs["x"], timesteps, clamp_x)
+        step_output = self.sampler.step(
+            model_prediction=prediction,
+            timesteps=timesteps,
+            xt=model_inputs["x"],
+            clamp_x=clamp_x,
+            **sampler_args,
+        )
 
-        if not classifier_free and guidance_scale > 0:
-            assert classifier is not None
-            if "y" in model_inputs:
-                grad = guidance_scale * self.classifier_grad(prediction, model_inputs["y"], timesteps_model, classifier)
-            elif "context" in model_inputs:
-                grad = guidance_scale * self.classifier_grad(
-                    prediction, model_inputs["context"], timesteps_model, classifier
-                )
-            else:
-                raise ValueError("No context or label provided for the classifier")
+        return step_output
 
-            if self.sampling_method == "ddpm":
-                mean = mean + grad
-                x_prev = self._get_x_prev_from_mean_var(mean, log_var, timesteps)
-            elif self.sampling_method == "ddim":
-                mean, x_start, eps = self._get_mean_for_ddim_guidance(model_inputs["x"], x_start, timesteps, grad)
-                x_prev = self._sample_x_prev_ddim(model_inputs["x"], eps, timesteps)
-            else:
-                raise NotImplementedError(
-                    f"Classifier guidance not implemented for sampling method: {self.sampling_method}"
-                )
-        else:
-            x_prev = self._get_x_prev_from_mean_var(mean, log_var, timesteps)
-
-        return x_prev
-
-    # maybe change it to avoid inplace change of the dict
-    def denoise(
-        self,
-        model: Denoiser,
-        data_shape: tuple[int, ...],
-        model_inputs: ModelInput,
-        use_tqdm: bool = True,
-        clamp_x: bool = False,
-        guidance_scale: float = 0,
-        classifier_free: bool = True,
-        classifier: Callable[[Tensor, Tensor], Tensor] | None = None,
-    ) -> Tensor:
-        """
-        Generates a sample by running the entire reverse diffusion process.
-        This method implements the full reverse process of the diffusion model, iteratively
-        applying the one_step_denoise function from the most noisy state to progressively
-        cleaner states. It can generate samples unconditionally or with guidance.
-        Args:
-            model (Denoiser): The neural network model used for denoising.
-            data_shape (tuple[int, ...]): Shape of the data to generate, typically (batch_size, channels, height, width).
-            model_inputs (ModelInput): A dictionary containing the model inputs, potentially including:
-                - 'x': Initial noise tensor. If not provided, random noise will be generated.
-                - conditional inputs like context embeddings, class labels, etc.
-            use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
-            clamp_x (bool, optional): Whether to clamp the generated values to a valid range (typically [-1, 1]).
-                Defaults to True.
-            guidance_scale (float, optional): Scale factor for guidance. If greater than 0, applies guidance
-                to steer the generation. Defaults to 0.
-            classifier_free (bool, optional): Whether to use classifier-free guidance. If True, uses the conditional
-                and unconditional model outputs for guidance. If False, uses a separate classifier. Defaults to True.
-            classifier (Callable[[Tensor, Tensor], Tensor] | None, optional): External classifier function to use
-                for guidance when classifier_free is False. Accepts input tensor and timesteps, returns gradients.
-                Defaults to None.
-        Notes:
-            The model_inputs dictionary is modified in place with the current sample state.
-        """
-        if "x" not in model_inputs:
-            model_inputs["x"] = torch.randn(
-                data_shape, device=next(model.parameters()).device, dtype=next(model.parameters()).dtype
-            )
-        for t in tqdm(
-            list(range(self.steps))[::-1],
-            desc="generating image",
-            total=self.steps,
-            disable=not use_tqdm,
-            leave=False,
-        ):
-            model_inputs["x"] = self.one_step_denoise(
-                model=model,
-                model_inputs=model_inputs,
-                t=t,
-                clamp_x=clamp_x,
-                guidance_scale=guidance_scale,
-                classifier_free=classifier_free,
-                classifier=classifier,
-            )
-        return model_inputs["x"]
-
-    ### Need to add compute loss for different parameterization + variance learned
+    ### TODO: Need to add compute loss for different parameterization + variance learned
     def compute_loss(
         self,
         model: Denoiser,
@@ -656,6 +287,10 @@ class GaussianDiffusion(Diffusion):
             timesteps (Tensor): A tensor of shape (batch_size,) containing timestep indices.
             noise (Tensor | None, optional): Pre-generated noise to add to the inputs.
                 If None, random noise will be generated. Defaults to None.
+            extra_losses (list[LossFunction], optional): Additional loss functions to compute.
+                Defaults to an empty list.
+            extra_args (dict[str, Any], optional): Additional arguments to pass to extra loss functions.
+                Defaults to an empty dictionary.
         Returns:
             dict[str, Tensor]: A dictionary containing the loss value and any additional losses
         Note:
@@ -702,6 +337,111 @@ class GaussianDiffusion(Diffusion):
         assert timesteps.shape[0] == x.shape[0]
         x_t = (
             extract_into_tensor(self.sqrt_alphas_bar, timesteps, x.shape) * x
-            + (1 - extract_into_tensor(self.alphas_bar, timesteps, noise.shape)).sqrt() * noise
+            + (torch.ones_like(noise) - extract_into_tensor(self.alphas_bar, timesteps, noise.shape)).sqrt() * noise
         )
         return x_t, noise
+
+    def denoise(
+        self,
+        model: Denoiser,
+        model_inputs: ModelInput,
+        data_shape: tuple[int, ...] | None = None,
+        use_tqdm: bool = True,
+        clamp_x: bool = False,
+        guidance_scale: float = 0,
+        sampler_args: dict[str, Any] = {},
+        return_intermediates: bool = False,
+    ) -> SamplingOutput:
+        """
+        Generates a sample by running the entire reverse diffusion process.
+        This method implements the full reverse process of the diffusion model, iteratively
+        applying the one_step_denoise function from the most noisy state to progressively
+        cleaner states. It can generate samples unconditionally or with guidance.
+        Args:
+            model (Denoiser): The neural network model used for denoising.
+            model_inputs (ModelInput): A dictionary containing the model inputs, potentially including:
+                - 'x': Initial noise tensor. If not provided, random noise will be generated.
+                - conditional inputs like context embeddings, class labels, etc.
+            data_shape (tuple[int, ...] | None): Shape of the data to generate, typically (batch_size, channels, height, width).
+                If 'x' is provided in model_inputs, data_shape can be set to None.
+                Defaults to None.
+            use_tqdm (bool, optional): Whether to display a progress bar during generation. Defaults to True.
+            clamp_x (bool, optional): Whether to clamp the generated values to a valid range (typically [-1, 1]).
+                Defaults to True.
+            guidance_scale (float, optional): Scale factor for guidance. If greater than 0, applies guidance
+                to steer the generation. Defaults to 0.
+            sampler_args (dict[str, Any], optional): Additional arguments to pass to the sampler's step method.
+                Defaults to an empty dictionary.
+            return_intermediates (bool, optional): Whether to return intermediate states during denoising.
+                Defaults to False.
+        Returns:
+            SamplingOutput: A dictionary containing:
+                - x (Tensor): The final generated sample tensor.
+                - xt (Tensor, optional): If `return_intermediates` is True, a tensor of shape
+                  (batch_size, steps+1, ...) containing the sample at each timestep.
+                - estimated_x0 (Tensor, optional): If `return_intermediates` is True, a tensor
+                  of shape (batch_size, steps, ...) containing the estimated original data at
+                  each timestep.
+                - xt_mean (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides mean estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the mean at each timestep.
+                - xt_std (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides std estimates, a tensor of shape (batch_size, steps, ...) containing
+                  the standard deviation at each timestep.
+                - logprob (Tensor, optional): If `return_intermediates` is True and the sampler
+                  provides log probabilities, a tensor of shape (batch_size, steps, ...) containing
+                  the log probabilities at each timestep.
+        Notes:
+            The model_inputs dictionary is modified in place with the current sample state.
+        """
+        if "x" not in model_inputs:
+            assert data_shape is not None, "'data_shape' must be provided if 'x' is not in model_inputs"
+            model_inputs["x"] = torch.randn(
+                data_shape, device=next(model.parameters()).device, dtype=next(model.parameters()).dtype
+            )
+
+        all_x0: list[Tensor] = []
+        all_xt: list[Tensor] = [model_inputs["x"]]
+        all_xt_mean: list[Tensor] = []
+        all_xt_std: list[Tensor] = []
+        all_logprobs: list[Tensor] = []
+
+        for t in tqdm(
+            list(range(self.steps))[::-1],
+            desc="generating image",
+            total=self.steps,
+            disable=not use_tqdm,
+            leave=False,
+        ):
+            step_output = self.one_step_denoise(
+                model=model,
+                model_inputs=model_inputs,
+                t=t,
+                clamp_x=clamp_x,
+                guidance_scale=guidance_scale,
+                sampler_args=sampler_args,
+            )
+
+            model_inputs["x"] = step_output["x_prev"]
+            if return_intermediates:
+                all_xt.append(step_output["x_prev"])
+                all_x0.append(step_output["estimated_x0"])
+                if "x_prev_mean" in step_output:
+                    all_xt_mean.append(step_output["x_prev_mean"])
+                if "x_prev_std" in step_output:
+                    all_xt_std.append(step_output["x_prev_std"])
+                if "logprob" in step_output:
+                    all_logprobs.append(step_output["logprob"])
+
+        out: SamplingOutput = {"x": model_inputs["x"]}
+        if return_intermediates:
+            out["xt"] = torch.stack(all_xt, dim=1)
+            out["estimated_x0"] = torch.stack(all_x0, dim=1)
+            if len(all_xt_mean) > 0:
+                out["xt_mean"] = torch.stack(all_xt_mean, dim=1)
+            if len(all_xt_std) > 0:
+                out["xt_std"] = torch.stack(all_xt_std, dim=1)
+            if len(all_logprobs) > 0:
+                out["logprob"] = torch.stack(all_logprobs, dim=1)
+
+        return out
