@@ -1,4 +1,6 @@
+import logging
 import math
+import pickle
 import random
 from pathlib import Path
 from typing import Any, Generator, cast
@@ -103,12 +105,21 @@ class ImageNetmultiAR(Dataset[BatchData]):
             split=split,
         )
 
-        self.buckets: dict[tuple[int, int], list[int]] = {}
-        for b, sample in enumerate(tqdm(self.dataset, desc="constructing buckets")):  # type: ignore
-            w, h = cast(Image.Image, sample["image"]).size
-            if (h, w) not in self.buckets:
-                self.buckets[(h, w)] = []
-            self.buckets[(h, w)].append(b)
+        if not (Path().home() / "diffulab" / "buckets_cache_imagenet.pickle").exists():
+            logging.info("No buckets cache found, constructing buckets...")
+
+            self.buckets: dict[tuple[int, int], list[int]] = {}
+            for b, sample in enumerate(tqdm(self.dataset, desc="constructing buckets")):  # type: ignore
+                w, h = cast(Image.Image, sample["image"]).size
+                if (h, w) not in self.buckets:
+                    self.buckets[(h, w)] = []
+                self.buckets[(h, w)].append(b)
+            with open(Path().home() / "diffulab" / f"buckets_cache_imagenet_{split}.pickle", "wb") as f:
+                pickle.dump(self.buckets, f)
+        else:
+            logging.info("Loading buckets from cache...")
+            with open(Path().home() / "diffulab" / f"buckets_cache_imagenet_{split}.pickle", "rb") as f:
+                self.buckets = pickle.load(f)
 
         self.transform = transforms.ToTensor()
 

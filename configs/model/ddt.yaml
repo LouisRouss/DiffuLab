@@ -1,0 +1,16 @@
+# MMDiT model configuration
+_target_: diffulab.networks.DDT
+simple_ddt: true
+input_channels: 3
+output_channels: 3
+input_dim: 512
+hidden_dim: 512
+context_dim: 512
+num_heads: 8
+mlp_ratio: 4
+patch_size: 2
+encoder_depth: 8
+decoder_depth: 4
+n_classes: 10
+classifier_free: false
+use_checkpoint: false
