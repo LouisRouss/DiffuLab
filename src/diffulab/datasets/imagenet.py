@@ -105,7 +105,7 @@ class ImageNetmultiAR(Dataset[BatchData]):
             split=split,
         )
 
-        if not (Path().home() / "diffulab" / "buckets_cache_imagenet.pickle").exists():
+        if not (Path().home() / ".cache" / "diffulab" / "buckets_cache_imagenet.pickle").exists():
             logging.info("No buckets cache found, constructing buckets...")
 
             self.buckets: dict[tuple[int, int], list[int]] = {}
@@ -114,11 +114,11 @@ class ImageNetmultiAR(Dataset[BatchData]):
                 if (h, w) not in self.buckets:
                     self.buckets[(h, w)] = []
                 self.buckets[(h, w)].append(b)
-            with open(Path().home() / "diffulab" / f"buckets_cache_imagenet_{split}.pickle", "wb") as f:
+            with open(Path().home() / ".cache" / "diffulab" / f"buckets_cache_imagenet_{split}.pickle", "wb") as f:
                 pickle.dump(self.buckets, f)
         else:
             logging.info("Loading buckets from cache...")
-            with open(Path().home() / "diffulab" / f"buckets_cache_imagenet_{split}.pickle", "rb") as f:
+            with open(Path().home() / ".cache" / "diffulab" / f"buckets_cache_imagenet_{split}.pickle", "rb") as f:
                 self.buckets = pickle.load(f)
 
         self.transform = transforms.ToTensor()
