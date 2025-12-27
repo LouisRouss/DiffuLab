@@ -396,8 +396,8 @@ class PrefGRPORewardModel(RewardModel):
             batch_data = data_to_process[batch : batch + P]
             chat_input = self.processor.apply_chat_template(  # type: ignore[reportArgumentType]
                 batch_data,  # type: ignore[reportArgumentType]
-                tokenize=False,
-                add_generation_prompt=True,
+                tokenize=False,  # type: ignore[reportCallIssue]
+                add_generation_prompt=True,  # type: ignore[reportCallIssue]
             )
             image_inputs, _ = process_vision_info(batch_data)  # type: ignore[reportArgumentType]
 
@@ -406,7 +406,7 @@ class PrefGRPORewardModel(RewardModel):
             )
 
             generated_ids = self.model.generate(**inputs)  # type: ignore[reportUnknownMemberType]
-            generated_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)]
+            generated_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs["input_ids"], generated_ids)]  # type: ignore
             outputs.extend(cast(list[str], self.processor.batch_decode(generated_trimmed, skip_special_tokens=True)))  # type: ignore[reportUnknownMemberType]
 
         # Aggregate pairwise preferences into per-image counts per prompt
