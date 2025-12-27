@@ -1,5 +1,5 @@
 import math
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 
 import torch
 import torch.nn as nn
@@ -51,8 +51,8 @@ class GaussianDiffusion(Diffusion):
     def __init__(
         self,
         n_steps: int = 1000,
-        sampling_method: str = "ddpm",
-        schedule: str = "linear",
+        sampling_method: Literal["ddpm", "ddim"] = "ddpm",
+        schedule: Literal["linear", "cosine"] = "linear",
         latent_diffusion: bool = False,
         sampler_parameters: dict[str, Any] = {},
     ):

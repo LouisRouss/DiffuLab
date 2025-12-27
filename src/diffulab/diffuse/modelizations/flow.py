@@ -59,8 +59,8 @@ class Flow(Diffusion):
     def __init__(
         self,
         n_steps: int = 50,
-        sampling_method: str = "euler",
-        schedule: str = "linear",
+        sampling_method: Literal["euler", "euler_maruyama"] = "euler",
+        schedule: Literal["linear"] = "linear",
         latent_diffusion: bool = False,
         logits_normal: bool = False,
         shift: float | None = None,
