@@ -127,6 +127,7 @@ class Flow(Diffusion):
             timesteps: list[float] = torch.linspace(1, 0, n_steps + 1).tolist()  # type: ignore
             if self.shift is not None:
                 timesteps = [self._shift_timestep(t, self.shift) for t in timesteps]  # type: ignore
+            self.timesteps = timesteps
             self.steps = n_steps
         else:
             raise NotImplementedError("Only linear schedule is supported for the moment")
