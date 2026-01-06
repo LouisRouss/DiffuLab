@@ -67,4 +67,4 @@ Here is a To-Do list, feel welcome to help to any point along this list. The alr
 - [ ] Train our models on toy datasets for different tasks (conditional generation, Image to Image ...)
 - [ ] Add possibility to train LORA/DORA
 - [x] add different sampler
-- [ ] Add SPRINT (https://arxiv.org/pdf/2510.21986)
+- [x] Add SPRINT (https://arxiv.org/pdf/2510.21986)
