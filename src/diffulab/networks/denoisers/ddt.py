@@ -313,7 +313,7 @@ class DDT(Denoiser):
         context = self.context_embed(context)
         attn_mask = context_output.get("attn_mask", None)
 
-        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        # pos_ids: [B, S, n_axes] positional IDs along each axis for rope
         # in mmdit attention we concat with context first. Context have 0,0 for h w
         # text: (t>0, 0, 0)
         text_pos_ids = torch.stack(
@@ -336,7 +336,7 @@ class DDT(Denoiser):
             dim=-1,
         ).view(-1, 3)
 
-        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0)
+        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0).unsqueeze(0).repeat(x.size(0), 1, 1)
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         features: list[Tensor] | None = [] if intermediate_features else None
@@ -379,14 +379,22 @@ class DDT(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
-        # pos_ids: [S, n_axes] positional IDs along each axis for rope
-        pos_ids = torch.stack(
-            torch.meshgrid(
-                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
-                indexing="ij",
-            ),
-            dim=-1,
-        ).view(-1, 2)
+        # pos_ids: [B, S, n_axes] positional IDs along each axis for rope
+        pos_ids = (
+            torch.stack(
+                torch.meshgrid(
+                    [
+                        torch.arange(self.grid_size[0], device=x.device),
+                        torch.arange(self.grid_size[1], device=x.device),
+                    ],
+                    indexing="ij",
+                ),
+                dim=-1,
+            )
+            .view(-1, 2)
+            .unsqueeze(0)
+            .repeat(x.size(0), 1, 1)
+        )
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         features: list[Tensor] | None = [] if intermediate_features else None
@@ -421,28 +429,32 @@ class DDT(Denoiser):
         emb = self.time_embed(timestep_embedding(timesteps, self.frequency_embedding))[:, None, :]
         encoder_output = nn.functional.silu(encoder_output + emb)
 
-        # pos_ids: [S, n_axes] positional IDs along each axis for rope
+        # pos_ids: [B, S, n_axes] positional IDs along each axis for rope
         pos_ids = (
-            torch.stack(
-                torch.meshgrid(
-                    [
+            (
+                torch.stack(
+                    torch.meshgrid(
+                        [
+                            torch.arange(self.grid_size[0], device=x.device),
+                            torch.arange(self.grid_size[1], device=x.device),
+                        ],
+                        indexing="ij",
+                    ),
+                    dim=-1,
+                ).view(-1, 2)
+                if self.simple_ddt
+                else torch.stack(
+                    torch.meshgrid(
+                        torch.zeros(1, device=x.device, dtype=torch.long),
                         torch.arange(self.grid_size[0], device=x.device),
                         torch.arange(self.grid_size[1], device=x.device),
-                    ],
-                    indexing="ij",
-                ),
-                dim=-1,
-            ).view(-1, 2)
-            if self.simple_ddt
-            else torch.stack(
-                torch.meshgrid(
-                    torch.zeros(1, device=x.device, dtype=torch.long),
-                    torch.arange(self.grid_size[0], device=x.device),
-                    torch.arange(self.grid_size[1], device=x.device),
-                    indexing="ij",
-                ),
-                dim=-1,
-            ).view(-1, 3)
+                        indexing="ij",
+                    ),
+                    dim=-1,
+                ).view(-1, 3)
+            )
+            .unsqueeze(0)
+            .repeat(x.size(0), 1, 1)
         )
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 

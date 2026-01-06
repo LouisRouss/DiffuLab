@@ -751,7 +751,7 @@ class MMDiT(Denoiser):
             dim=-1,
         ).view(-1, 3)
 
-        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0)
+        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0).unsqueeze(0).repeat(x.size(0), 1, 1)
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         features: list[Tensor] | None = [] if intermediate_features else None
@@ -786,14 +786,22 @@ class MMDiT(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
-        # pos_ids: [S, n_axes] positional IDs along each axis for rope
-        pos_ids = torch.stack(
-            torch.meshgrid(
-                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
-                indexing="ij",
-            ),
-            dim=-1,
-        ).view(-1, 2)
+        # pos_ids: [B, S, n_axes] positional IDs along each axis for rope
+        pos_ids = (
+            torch.stack(
+                torch.meshgrid(
+                    [
+                        torch.arange(self.grid_size[0], device=x.device),
+                        torch.arange(self.grid_size[1], device=x.device),
+                    ],
+                    indexing="ij",
+                ),
+                dim=-1,
+            )
+            .view(-1, 2)
+            .unsqueeze(0)
+            .repeat(x.size(0), 1, 1)
+        )
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         # Pass through each layer sequentially
