@@ -67,10 +67,10 @@ class DiTAttention(nn.Module):
         self.head_dim = inner_dim // num_heads
         self.scale = self.head_dim**-0.5
 
-        self.qkv = nn.Linear(inner_dim, 3 * inner_dim)
+        self.qkv = nn.Linear(inner_dim, 3 * inner_dim, bias=False)
         self.qk_norm = QKNorm(inner_dim)
         self.rope = RotaryPositionalEmbeddingNDim(axes_dim=rope_axes_dim)
-        self.proj_out = nn.Linear(inner_dim, inner_dim)
+        self.proj_out = nn.Linear(inner_dim, inner_dim, bias=False)
 
     def forward(
         self,
@@ -158,15 +158,15 @@ class MMDiTAttention(nn.Module):
         self.head_dim = inner_dim // num_heads
         self.scale = self.head_dim**-0.5
 
-        self.qkv_input = nn.Linear(inner_dim, 3 * inner_dim)
-        self.qkv_context = nn.Linear(inner_dim, 3 * inner_dim)
+        self.qkv_input = nn.Linear(inner_dim, 3 * inner_dim, bias=False)
+        self.qkv_context = nn.Linear(inner_dim, 3 * inner_dim, bias=False)
         self.qk_norm_input = QKNorm(inner_dim)
         self.qk_norm_context = QKNorm(inner_dim)
 
         self.rope = RotaryPositionalEmbeddingNDim(axes_dim=rope_axes_dim)
 
-        self.input_proj_out = nn.Linear(inner_dim, inner_dim)
-        self.context_proj_out = nn.Linear(inner_dim, inner_dim)
+        self.input_proj_out = nn.Linear(inner_dim, inner_dim, bias=False)
+        self.context_proj_out = nn.Linear(inner_dim, inner_dim, bias=False)
 
     def forward(
         self,
@@ -258,9 +258,9 @@ class DiTBlock(nn.Module):
         self.attention = DiTAttention(inner_dim, num_heads, rope_axes_dim=rope_axes_dim)
         self.norm_2 = nn.LayerNorm(inner_dim)
         self.mlp_input = nn.Sequential(
-            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * inner_dim, inner_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.use_checkpoint = use_checkpoint
 
@@ -367,14 +367,14 @@ class MMDiTBlock(nn.Module):
         self.input_norm_2 = nn.LayerNorm(inner_dim)
 
         self.mlp_context = nn.Sequential(
-            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * inner_dim, inner_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.mlp_input = nn.Sequential(
-            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * inner_dim, inner_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.use_checkpoint = use_checkpoint
 
@@ -471,9 +471,9 @@ class MMDiTSingleStreamBlock(nn.Module):
     ):
         super().__init__()  # type: ignore
         self.mlp = nn.Sequential(
-            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * inner_dim, inner_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.attention = DiTAttention(inner_dim, num_heads, rope_axes_dim=rope_axes_dim)
         self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(embedding_dim, 3 * inner_dim))
@@ -655,10 +655,10 @@ class MMDiT(Denoiser):
                     nn.SiLU(),
                     nn.Linear(embedding_dim * 2, embedding_dim),
                 )
-                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim, bias=False)
             else:
                 assert self.context_embedder.n_output == 1
-                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim, bias=False)
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
@@ -694,7 +694,9 @@ class MMDiT(Denoiser):
             nn.Linear(embedding_dim, embedding_dim),
         )
 
-        self.conv_proj = nn.Conv2d(self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size)
+        self.conv_proj = nn.Conv2d(
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size, bias=False
+        )
 
         self.layers = nn.ModuleList(
             [

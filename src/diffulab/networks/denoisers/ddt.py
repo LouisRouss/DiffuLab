@@ -118,10 +118,10 @@ class DDT(Denoiser):
                     nn.SiLU(),
                     nn.Linear(inner_dim * 2, inner_dim),
                 )
-                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim, bias=False)
             else:
                 assert self.context_embedder.n_output == 1
-                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim, bias=False)
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
@@ -157,10 +157,10 @@ class DDT(Denoiser):
         )
 
         self.conv_proj_encoder = nn.Conv2d(
-            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size, bias=False
         )
         self.conv_proj_decoder = nn.Conv2d(
-            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size, bias=False
         )
 
         # --------------

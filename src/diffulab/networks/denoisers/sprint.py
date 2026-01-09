@@ -125,10 +125,10 @@ class SprintDiT(Denoiser):
                     nn.SiLU(),
                     nn.Linear(embedding_dim * 2, embedding_dim),
                 )
-                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim, bias=False)
             else:
                 assert self.context_embedder.n_output == 1
-                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim, bias=False)
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
@@ -158,11 +158,13 @@ class SprintDiT(Denoiser):
             nn.Linear(embedding_dim, embedding_dim),
         )
 
-        self.conv_proj = nn.Conv2d(self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size)
+        self.conv_proj = nn.Conv2d(
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size, bias=False
+        )
 
-        self.fuse = nn.Linear(inner_dim * 2, inner_dim)
+        self.fuse = nn.Linear(inner_dim * 2, inner_dim, bias=False)
         if not self.simple_dit:
-            self.fuse_context = nn.Linear(2 * inner_dim, inner_dim)
+            self.fuse_context = nn.Linear(2 * inner_dim, inner_dim, bias=False)
         self.last_layer = ModulatedLastLayer(
             embedding_dim=embedding_dim,
             hidden_size=inner_dim,
