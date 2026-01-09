@@ -76,6 +76,7 @@ class DiTAttention(nn.Module):
         self,
         input: Float[Tensor, "batch_size seq_len dim"],
         cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+        attn_mask: Bool[Tensor, "batch_size seq_len"] | Int[Tensor, "batch_size seq_len"] | None = None,
     ) -> Float[Tensor, "batch_size seq_len dim"]:
         input_q, input_k, input_v = self.qkv(input).chunk(3, dim=-1)
         input_q, input_k = self.qk_norm(input_q, input_k, input_v)
@@ -93,6 +94,7 @@ class DiTAttention(nn.Module):
             key=k,
             value=v,
             scale=self.scale,
+            attn_mask=attn_mask.bool() if attn_mask is not None else None,
         )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
@@ -503,11 +505,22 @@ class MMDiTSingleStreamBlock(nn.Module):
         attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ):
         latents = torch.cat([context, input], dim=1)
+        if attn_mask is not None:
+            attn_mask = torch.cat(
+                [
+                    attn_mask.bool(),
+                    torch.ones(attn_mask.size(0), input.size(1), device=attn_mask.device).bool(),
+                ],
+                dim=1,
+            )
+            attn_mask = attn_mask[:, None, None, :]
+
         modulation = self.modulation(y)
         if modulation.dim() == 2:
             modulation = modulation[:, None, :]
         alpha, beta, gamma = modulation.chunk(3, dim=-1)
         modulated_latents = modulate(self.norm(latents), scale=alpha, shift=beta)
+
         latents = (
             latents
             + (
@@ -516,7 +529,7 @@ class MMDiTSingleStreamBlock(nn.Module):
             )
             * gamma
         )
-        return latents[:, : context.size(1), :], latents[:, context.size(1) :, :]
+        return latents[:, context.size(1) :, :], latents[:, : context.size(1), :]
 
 
 class ModulatedLastLayer(nn.Module):
