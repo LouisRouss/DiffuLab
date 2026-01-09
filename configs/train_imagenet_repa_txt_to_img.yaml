@@ -28,9 +28,7 @@ trainer:
 model:
   input_channels: 128
   output_channels: 128
-  input_dim: 640
-  hidden_dim: 640
-  context_dim: 640
+  inner_dim: 640
   num_heads: 10
   mlp_ratio: 4
   patch_size: 1

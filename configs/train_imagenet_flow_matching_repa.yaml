@@ -22,8 +22,7 @@ trainer:
 model:
   input_channels: 32
   output_channels: 32
-  input_dim: 768
-  hidden_dim: 768
+  inner_dim: 768
   embedding_dim: 256
   num_heads: 12
   mlp_ratio: 4

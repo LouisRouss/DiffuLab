@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import torch
@@ -7,7 +8,7 @@ from jaxtyping import Float, Int
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
-from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock, ModulatedLastLayer
+from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock, MMDiTSingleStreamBlock, ModulatedLastLayer
 from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
@@ -29,11 +30,7 @@ class SprintDiT(Denoiser):
         input_channels (int): Number of channels of the main input x. Default: 3.
         output_channels (int | None): Number of channels to predict. If None, equals `input_channels`.
             Default: None.
-        input_dim (int): Token/patch embedding width for the image stream. Also the hidden size used
-            before the final per-patch projection. Default: 4096.
-        hidden_dim (int): Inner attention dimension for attention projections. Default: 4096.
-        embedding_dim (int): Conditioning embedding width (for timestep/labels/pooled context) used
-            by modulation layers and the last prediction layer. Default: 4096.
+        inner_dim (int): Token/patch embedding width for the stream. Default: 4096.
         num_heads (int): Number of attention heads in each block. Default: 16.
         mlp_ratio (int): Expansion ratio for the MLP in each block. Default: 4.
         patch_size (int): Side length P of square patches. Images are projected with stride P. Default: 16.
@@ -73,14 +70,14 @@ class SprintDiT(Denoiser):
         simple_dit: bool = False,
         input_channels: int = 3,
         output_channels: int | None = None,
-        input_dim: int = 768,
-        hidden_dim: int = 768,
+        inner_dim: int = 768,
+        embedding_dim: int = 768,
         num_heads: int = 12,
         mlp_ratio: int = 4,
         patch_size: int = 16,
-        context_dim: int = 768,
         encoder_depth: int = 2,
         deep_layers_depth: int = 8,
+        n_single_stream_blocks: int = 0,
         decoder_depth: int = 2,
         rope_base: int = 10_000,
         partial_rotary_factor: float = 1,
@@ -109,10 +106,10 @@ class SprintDiT(Denoiser):
         self.n_classes = n_classes
         self.classifier_free = classifier_free
 
-        self.mask_token = nn.Parameter(torch.zeros(1, 1, input_dim))
+        self.mask_token = nn.Parameter(torch.zeros(1, 1, inner_dim))
         self.drop_rate = drop_rate
 
-        heads_dim = hidden_dim // num_heads
+        heads_dim = inner_dim // num_heads
         if not self.simple_dit:
             assert self.context_embedder is not None, "for dit with text context embedder must be provided"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
@@ -124,14 +121,14 @@ class SprintDiT(Denoiser):
             if self.context_embedder.n_output == 2:
                 self.pooled_embedding = True
                 self.mlp_pooled_context = nn.Sequential(
-                    nn.Linear(self.context_embedder.output_size[0], input_dim),
+                    nn.Linear(self.context_embedder.output_size[0], embedding_dim * 2),
                     nn.SiLU(),
-                    nn.Linear(input_dim, input_dim),
+                    nn.Linear(embedding_dim * 2, embedding_dim),
                 )
-                self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim)
             else:
                 assert self.context_embedder.n_output == 1
-                self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim)
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
@@ -140,30 +137,35 @@ class SprintDiT(Denoiser):
                 ]
         else:
             self.label_embed = (
-                LabelEmbed(self.n_classes, input_dim, self.classifier_free) if self.n_classes is not None else None
+                LabelEmbed(self.n_classes, embedding_dim, self.classifier_free) if self.n_classes is not None else None
             )
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 2),  # H
                     int((partial_rotary_factor * heads_dim) // 2),  # W
                 ]
+            if n_single_stream_blocks > 0:
+                logging.warning(
+                    "n_single_stream_blocks is ignored when simple_dit=True. All blocks are single-stream DiT blocks."
+                )
+                n_single_stream_blocks = encoder_depth + deep_layers_depth + decoder_depth
+
         self.rope_axes_dim = rope_axes_dim
 
         self.time_embed = nn.Sequential(
-            nn.Linear(self.frequency_embedding, input_dim),
+            nn.Linear(self.frequency_embedding, embedding_dim),
             nn.SiLU(),
-            nn.Linear(input_dim, input_dim),
+            nn.Linear(embedding_dim, embedding_dim),
         )
 
-        self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
+        self.conv_proj = nn.Conv2d(self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size)
 
-        self.fuse = nn.Linear(input_dim * 2, input_dim)
+        self.fuse = nn.Linear(inner_dim * 2, inner_dim)
         if not self.simple_dit:
-            self.fuse_context = nn.Linear(2 * context_dim, context_dim)
-
+            self.fuse_context = nn.Linear(2 * inner_dim, inner_dim)
         self.last_layer = ModulatedLastLayer(
-            embedding_dim=input_dim,
-            hidden_size=input_dim,
+            embedding_dim=embedding_dim,
+            hidden_size=inner_dim,
             patch_size=self.patch_size,
             out_channels=self.output_channels,
         )
@@ -174,10 +176,8 @@ class SprintDiT(Denoiser):
         self.layers = nn.ModuleList(  # name compatibility for RePA
             [
                 MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
@@ -185,9 +185,8 @@ class SprintDiT(Denoiser):
                 )
                 if not self.simple_dit
                 else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
@@ -203,10 +202,8 @@ class SprintDiT(Denoiser):
         self.deep_layers = nn.ModuleList(
             [
                 MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
@@ -214,15 +211,23 @@ class SprintDiT(Denoiser):
                 )
                 if not self.simple_dit
                 else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
-                for _ in range(deep_layers_depth)
+                for _ in range(deep_layers_depth - n_single_stream_blocks)
+            ]
+            + [
+                MMDiTSingleStreamBlock(
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    rope_axes_dim=self.rope_axes_dim,
+                )
             ]
         )
 
@@ -232,10 +237,8 @@ class SprintDiT(Denoiser):
         self.decoder_layers = nn.ModuleList(
             [
                 MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
@@ -243,9 +246,8 @@ class SprintDiT(Denoiser):
                 )
                 if not self.simple_dit
                 else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,

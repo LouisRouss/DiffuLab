@@ -27,14 +27,14 @@ trainer:
 model:
   input_channels: 128
   output_channels: 128
-  input_dim: 640
-  hidden_dim: 640
-  context_dim: 640
+  inner_dim: 640
+  embedding_dim: 640
   num_heads: 16
   mlp_ratio: 3
   patch_size: 1
   encoder_depth: 3
   deep_layers_depth: 12
+  n_single_stream_blocks: 8
   decoder_depth: 3
   classifier_free: true
   rope_base: 1000

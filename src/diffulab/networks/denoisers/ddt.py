@@ -2,6 +2,7 @@
 # Some changes were made to the architecture to reuse DiT and MMDiT components
 # e.g double stream
 
+import logging
 from typing import Any
 
 import torch
@@ -11,32 +12,15 @@ from jaxtyping import Float, Int
 from torch import Tensor
 
 from diffulab.networks.denoisers.common import Denoiser, ModelOutput
-from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock
+from diffulab.networks.denoisers.mmdit import DiTBlock, MMDiTBlock, MMDiTSingleStreamBlock, ModulatedLastLayer
 from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 from diffulab.networks.utils.nn import (
     LabelEmbed,
     Modulation,
     get_cos_sin_ndim_grid,
-    modulate,
     timestep_embedding,
 )
 from diffulab.networks.utils.utils import zero_module
-
-
-class ModulatedLastLayerDDT(nn.Module):
-    def __init__(self, embedding_dim: int, hidden_size: int, patch_size: int, out_channels: int):
-        super().__init__()  # type: ignore
-        self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
-        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(embedding_dim, 2 * hidden_size, bias=True))
-
-    def forward(
-        self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size seq_len dim"]
-    ) -> Tensor:
-        alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=-1)
-        x = modulate(self.norm_final(x), scale=alpha, shift=beta)
-        x = self.linear(x)
-        return x
 
 
 class DDT(Denoiser):
@@ -53,16 +37,12 @@ class DDT(Denoiser):
         input_channels (int): Number of channels of the main input x. Default: 3.
         output_channels (int | None): Number of channels to predict. If None, equals
             `input_channels`. Default: None.
-        input_dim (int): Token/patch embedding width for both encoder and decoder streams.
+        inner_dim (int): Token/patch embedding width for both encoder and decoder streams.
             Also used as the hidden size of the last prediction layer. Default: 768.
-        hidden_dim (int): Inner attention dimension used by DiT/MMDiT attention blocks.
-            Default: 768.
         num_heads (int): Number of attention heads in each block. Default: 12.
         mlp_ratio (int): Expansion ratio for the MLP in each block. Default: 4.
         patch_size (int): Side length P of square patches. Images are projected with stride P
             in both encoder and decoder streams. Default: 16.
-        context_dim (int): Model width of contextual tokens after `context_embed` when
-            `simple_ddt=False`. Ignored when `simple_ddt=True`. Default: 1024.
         encoder_depth (int): Number of DiT/MMDiT blocks in the encoder. Default: 8.
         decoder_depth (int): Number of DiT blocks in the decoder. Default: 4.
         partial_rotary_factor (float): Fraction of each head dimension using RoPE.
@@ -88,13 +68,12 @@ class DDT(Denoiser):
         simple_ddt: bool = False,
         input_channels: int = 3,
         output_channels: int | None = None,
-        input_dim: int = 768,
-        hidden_dim: int = 768,
+        inner_dim: int = 768,
         num_heads: int = 12,
         mlp_ratio: int = 4,
         patch_size: int = 16,
-        context_dim: int = 1024,
         encoder_depth: int = 8,
+        n_single_stream_blocks: int = 0,
         decoder_depth: int = 4,
         rope_base: int = 10_000,
         partial_rotary_factor: float = 1,
@@ -109,6 +88,7 @@ class DDT(Denoiser):
         assert not (n_classes is not None and context_embedder is not None), (
             "n_classes and context_embedder cannot both be specified"
         )
+        assert n_single_stream_blocks < encoder_depth, "n_single_stream_blocks must be less than encoder_depth"
         self.simple_ddt = simple_ddt
         self.patch_size = patch_size
         self.input_channels = input_channels
@@ -122,7 +102,7 @@ class DDT(Denoiser):
         self.n_classes = n_classes
         self.classifier_free = classifier_free
 
-        heads_dim = hidden_dim // num_heads
+        heads_dim = inner_dim // num_heads
         if not self.simple_ddt:
             assert self.context_embedder is not None, "for ddt with text context embedder must be provided"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
@@ -134,14 +114,14 @@ class DDT(Denoiser):
             if self.context_embedder.n_output == 2:
                 self.pooled_embedding = True
                 self.mlp_pooled_context = nn.Sequential(
-                    nn.Linear(self.context_embedder.output_size[0], input_dim),
+                    nn.Linear(self.context_embedder.output_size[0], inner_dim * 2),
                     nn.SiLU(),
-                    nn.Linear(input_dim, input_dim),
+                    nn.Linear(inner_dim * 2, inner_dim),
                 )
-                self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim)
             else:
                 assert self.context_embedder.n_output == 1
-                self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim)
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
@@ -150,32 +130,37 @@ class DDT(Denoiser):
                 ]
         else:
             self.label_embed = (
-                LabelEmbed(self.n_classes, input_dim, self.classifier_free) if self.n_classes is not None else None
+                LabelEmbed(self.n_classes, inner_dim, self.classifier_free) if self.n_classes is not None else None
             )
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 2),  # H
                     int((partial_rotary_factor * heads_dim) // 2),  # W
                 ]
+            if n_single_stream_blocks > 0:
+                logging.warning(
+                    "n_single_stream_blocks is ignored when simple_ddt=True. All blocks are single-stream DiT blocks."
+                )
+                n_single_stream_blocks = encoder_depth
 
         self.rope_axes_dim = rope_axes_dim
-        self.last_layer = ModulatedLastLayerDDT(
-            embedding_dim=input_dim,
-            hidden_size=input_dim,
+        self.last_layer = ModulatedLastLayer(
+            embedding_dim=inner_dim,
+            hidden_size=inner_dim,
             patch_size=self.patch_size,
             out_channels=self.output_channels,
         )
         self.time_embed = nn.Sequential(
-            nn.Linear(self.frequency_embedding, input_dim),
+            nn.Linear(self.frequency_embedding, inner_dim),
             nn.SiLU(),
-            nn.Linear(input_dim, input_dim),
+            nn.Linear(inner_dim, inner_dim),
         )
 
         self.conv_proj_encoder = nn.Conv2d(
-            self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size
         )
         self.conv_proj_decoder = nn.Conv2d(
-            self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size
         )
 
         # --------------
@@ -184,10 +169,8 @@ class DDT(Denoiser):
         self.layers = nn.ModuleList(
             [
                 MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=inner_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
@@ -195,15 +178,25 @@ class DDT(Denoiser):
                 )
                 if not self.simple_ddt
                 else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=inner_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
-                for _ in range(encoder_depth)
+                for _ in range(encoder_depth - n_single_stream_blocks)
+            ]
+            + [
+                MMDiTSingleStreamBlock(
+                    inner_dim=inner_dim,
+                    embedding_dim=inner_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    rope_axes_dim=self.rope_axes_dim,
+                    use_checkpoint=use_checkpoint,
+                )
+                for _ in range(n_single_stream_blocks)
             ]
         )
 
@@ -213,9 +206,8 @@ class DDT(Denoiser):
         self.decoder_layers = nn.ModuleList(
             [
                 DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
-                    embedding_dim=input_dim,
+                    inner_dim=inner_dim,
+                    embedding_dim=inner_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
@@ -234,7 +226,7 @@ class DDT(Denoiser):
                 nn.init.constant_(module.bias, 0)
         if isinstance(module, Modulation):
             zero_module(module)
-        if isinstance(module, ModulatedLastLayerDDT):
+        if isinstance(module, ModulatedLastLayer):
             zero_module(module.adaLN_modulation)
 
     def patchify(

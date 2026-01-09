@@ -3,8 +3,7 @@ _target_: diffulab.networks.MMDiT
 simple_dit: true
 input_channels: 3
 output_channels: 3
-input_dim: 512
-hidden_dim: 512
+inner_dim: 512
 embedding_dim: 512
 num_heads: 8
 mlp_ratio: 4
