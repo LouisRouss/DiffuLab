@@ -3,34 +3,37 @@ from typing import cast
 
 import torch
 from torch import Tensor
-from transformers import Qwen2Tokenizer, Qwen3VLForConditionalGeneration
+from transformers import GPT2TokenizerFast, Idefics3ForConditionalGeneration
 
 from diffulab.networks.embedders.common import ContextEmbedder, ContextEmbedderOutput
 
 
-class QwenTextEmbedder(ContextEmbedder):
+class SmolVLMTextEmbedder(ContextEmbedder):
     def __init__(
-        self, model_id: str = "Qwen/Qwen3-VL-2B-Instruct", device: str | torch.device = "cuda", max_length: int = 1024
+        self,
+        model_id: str = "HuggingFaceTB/SmolVLM-256M-Instruct",
+        device: str | torch.device = "cuda",
+        max_length: int = 1024,
     ) -> None:
         super().__init__()
-        self.model: Qwen3VLForConditionalGeneration = Qwen3VLForConditionalGeneration.from_pretrained(  # type: ignore
+        self.model: Idefics3ForConditionalGeneration = Idefics3ForConditionalGeneration.from_pretrained(  # type: ignore
             model_id, device_map=device, dtype="auto"
         )
         self.model.eval()
         self.model.requires_grad_(False)
-        self.tokenizer: Qwen2Tokenizer = Qwen2Tokenizer.from_pretrained(model_id, device_map=device)  # type: ignore
+        self.tokenizer: GPT2TokenizerFast = GPT2TokenizerFast.from_pretrained(model_id, device_map=device)  # type: ignore
         self.prompt_template: str = self._get_prompt_template()
-        self.prompt_template_encoder_start_idx = 34
+        self.prompt_template_encoder_start_idx = 33
         self.max_length = max_length
 
-        self._output_size: tuple[int] = (self.model.config.text_config.hidden_size,)
+        self._output_size: tuple[int] = (self.model.config.text_config.hidden_size,)  # type: ignore
         self._n_output = 1
 
     def _get_prompt_template(self) -> str:
         return (
-            "<|im_start|>system\nDescribe the image by detailing the color, shape, size, texture, quantity, text, "
-            "spatial relationships of the objects and background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n"
-            "<|im_start|>assistant\n"
+            "<|im_start|>System: Describe the image by detailing the color, shape, size, texture, quantity, text, "
+            "spatial relationships of the objects and background.<end_of_utterance>\nUser: {}<end_of_utterance>\n"
+            "Assistant: "
         )
 
     def drop_conditions(self, context: list[str], p: float) -> list[str]:
@@ -45,8 +48,9 @@ class QwenTextEmbedder(ContextEmbedder):
         """
         return ["" if random.random() < p else c for c in context]
 
+    @torch._dynamo.disable  # type: ignore[reportUnknownMemberType]
     def forward(self, context: list[str], p: float = 0, force_padding: bool = False) -> ContextEmbedderOutput:
-        """Compute Qwen text embeddings.
+        """Compute smolVLM text embeddings.
 
         Args:
             context (list[str]): List of input prompt strings.

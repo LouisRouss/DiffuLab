@@ -1,38 +1,54 @@
 # configs/train_cifar10_flow_matching.yaml
 # @package _global_
 defaults:
-  - model: dit
+  - model: sprint
   - diffuser: rectified_flow
   - trainer: default
   - dataset: imagenet_repa
   - dataloader: default
   - optimizer: adamw
-  - vision_tower: dcae
+  - vision_tower: flux2
+  - embedder: precomputed
   - _self_
 
 # Override specific settings
 trainer:
-  project_name: imagenet_repa_flow_matching
-  n_epoch: 150
+  project_name: txt_to_img_imagenet_multiar_repa_flux2_sprint
+  n_epoch: 50
   precision_type: "bf16"
   p_classifier_free_guidance: 0.1
+  gradient_accumulation_step: 8
+  val_step_shift: 6.93
+  compile: true
   ema_update_after_step: 0
-  ema_update_every: 10
+  ema_update_every: 1
+  ema_rate: 0.9999
 
 model:
-  input_channels: 32
-  output_channels: 32
+  input_channels: 128
+  output_channels: 128
   inner_dim: 768
-  embedding_dim: 256
+  embedding_dim: 768
   num_heads: 12
   mlp_ratio: 4
   patch_size: 1
-  depth: 12
-  n_classes: 1000
+  encoder_depth: 2
+  deep_layers_depth: 8
+  n_single_stream_blocks: 8
+  decoder_depth: 2
   classifier_free: true
+  rope_base: 2000
+  rope_axes_dim: [16, 24, 24]
+  n_classes: null
+  simple_dit: false
+
+diffuser:
+  extra_args:
+    logits_normal: true
+    shift: 4.63
 
 dataloader:
-  batch_size: 128
+  batch_size: 64
 
 # Hydra configuration
 hydra:
@@ -43,11 +59,4 @@ hydra:
     subdir: ${hydra.job.num}
 
 perceiver_resampler:
-  use_resampler: true
-  parameters:
-    depth: 3
-    dim: 1024 # dim of the dinov2 features and projected ones
-    head_dim: 64
-    num_heads: 8
-    ff_mult: 4
-    num_latents: 256
+  use_resampler: false

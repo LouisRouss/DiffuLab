@@ -16,7 +16,7 @@ trainer:
   project_name: txt_to_img_imagenet_repa_flux2
   n_epoch: 50
   precision_type: "bf16"
-  p_classifier_free_guidance: 0.2
+  p_classifier_free_guidance: 0.1
   gradient_accumulation_step: 16
   val_step_shift: 6.93
   compile: false
@@ -28,9 +28,7 @@ trainer:
 model:
   input_channels: 128
   output_channels: 128
-  input_dim: 640
-  hidden_dim: 640
-  context_dim: 640
+  inner_dim: 640
   num_heads: 10
   mlp_ratio: 4
   patch_size: 1

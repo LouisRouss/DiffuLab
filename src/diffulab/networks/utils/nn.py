@@ -260,26 +260,26 @@ class RotaryPositionalEmbedding(nn.Module):
 
 
 def get_cos_sin_ndim_grid(
-    pos_id: Int[Tensor, "seq_len n_axes"], base: float, axes_dim: list[int]
+    pos_id: Int[Tensor, "B seq_len n_axes"], base: float, axes_dim: list[int]
 ) -> tuple[Tensor, Tensor]:
     """
     Get cos/sin for N-D grid positions.
 
     Args:
-        pos_id: [S, n_axes] positional IDs along each axis.
+        pos_id: [B, S, n_axes] positional IDs along each axis.
         base: base frequency for RoPE.
         axes_dim: list of rotary dimensions per axis.
     Returns:
-        cos: [S, dim/2]
-        sin: [S, dim/2]
+        cos: [B, S, dim/2]
+        sin: [B, S, dim/2]
     """
-    assert len(axes_dim) == pos_id.shape[1], "axes_dim length must match pos_id n_axes"
+    assert len(axes_dim) == pos_id.shape[-1], "axes_dim length must match pos_id n_axes"
     cos_chunks: list[Tensor] = []
     sin_chunks: list[Tensor] = []
 
     for axis_idx, axis_dim in enumerate(axes_dim):
         # pos along this axis: [S]
-        pos_i = pos_id[:, axis_idx].to(dtype=torch.float64)
+        pos_i = pos_id[..., axis_idx].to(dtype=torch.float64)
 
         freqs = 1.0 / (
             base
@@ -295,11 +295,11 @@ def get_cos_sin_ndim_grid(
             )
         )  # [D_i/2]
 
-        # angles: [S, D_i/2]
-        angles_i = torch.outer(pos_i, freqs)
+        # angles: [B, S, D_i/2]
+        angles_i = torch.einsum("...s,d->...sd", pos_i, freqs)
 
-        cos_i = angles_i.cos().float()  # [S, D_i/2]
-        sin_i = angles_i.sin().float()  # [S, D_i/2]
+        cos_i = angles_i.cos().float()  # [B, S, D_i/2]
+        sin_i = angles_i.sin().float()  # [B, S, D_i/2]
 
         cos_chunks.append(cos_i)
         sin_chunks.append(sin_i)
@@ -330,17 +330,17 @@ class RotaryPositionalEmbeddingNDim(nn.Module):
     @staticmethod
     def _apply_rotary(
         x: Float[Tensor, "batch_size num_head seq_len dim_rot"],  # [B, H, S, D_rot]
-        cos: Float[Tensor, "seq_len dim_rot_half"],  # [S, D_rot/2]
-        sin: Float[Tensor, "seq_len dim_rot_half"],  # [S, D_rot/2]
+        cos: Float[Tensor, "batch_size seq_len dim_rot_half"],  # [B, S, D_rot/2]
+        sin: Float[Tensor, "batch_size seq_len dim_rot_half"],  # [B, S, D_rot/2]
     ) -> Float[Tensor, "batch_size num_head seq_len dim_rot"]:
         """
         Apply rotary positional embedding to the input tensor, assuming:
         - x[..., 0::2] and x[..., 1::2] form the complex pairs
         - cos/sin are per-pair, shape [S, D_rot/2]
         """
-        # [1, 1, S, D_rot/2]
-        cos = cos[None, None, :, :]
-        sin = sin[None, None, :, :]
+        # [B, 1, S, D_rot/2]
+        cos = cos[:, None, :, :]
+        sin = sin[:, None, :, :]
 
         x_even = x[..., 0::2]  # [B, H, S, D_rot/2]
         x_odd = x[..., 1::2]  # [B, H, S, D_rot/2]
@@ -361,7 +361,7 @@ class RotaryPositionalEmbeddingNDim(nn.Module):
         q: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         k: Float[Tensor, "batch_size seq_len n_heads head_dim"],
         v: Float[Tensor, "batch_size seq_len n_heads head_dim"],
-        cos_sin: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+        cos_sin: tuple[Float[Tensor, "batch_size seq_len dim/2"], Float[Tensor, "batch_size seq_len dim/2"]],
         # pos_id: Int[Tensor, "seq_len n_axes"],
     ) -> tuple[Tensor, Tensor, Tensor]:
         """
@@ -375,8 +375,8 @@ class RotaryPositionalEmbeddingNDim(nn.Module):
             (q_rot, k_rot, v): q,k rotated on the first self.dim channels; v unchanged.
         """
         cos, sin = cos_sin  # precomputed
-        cos = cos.to(device=q.device, dtype=q.dtype)  # [S, dim/2]
-        sin = sin.to(device=q.device, dtype=q.dtype)  # [S, dim/2]
+        cos = cos.to(device=q.device, dtype=q.dtype)  # [B, S, dim/2]
+        sin = sin.to(device=q.device, dtype=q.dtype)  # [B, S, dim/2]
 
         # [B, S, H, D] -> [B, H, S, D]
         q = q.transpose(1, 2)
