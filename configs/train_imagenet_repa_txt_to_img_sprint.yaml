@@ -27,18 +27,18 @@ trainer:
 model:
   input_channels: 128
   output_channels: 128
-  inner_dim: 640
-  embedding_dim: 640
-  num_heads: 16
-  mlp_ratio: 3
+  inner_dim: 768
+  embedding_dim: 768
+  num_heads: 12
+  mlp_ratio: 4
   patch_size: 1
-  encoder_depth: 3
-  deep_layers_depth: 12
+  encoder_depth: 2
+  deep_layers_depth: 8
   n_single_stream_blocks: 8
-  decoder_depth: 3
+  decoder_depth: 2
   classifier_free: true
-  rope_base: 1000
-  rope_axes_dim: [12, 14, 14]
+  rope_base: 2000
+  rope_axes_dim: [16, 24, 24]
   n_classes: null
   simple_dit: false
 
@@ -48,7 +48,7 @@ diffuser:
     shift: 4.63
 
 dataloader:
-  batch_size: 32
+  batch_size: 64
 
 # Hydra configuration
 hydra:
