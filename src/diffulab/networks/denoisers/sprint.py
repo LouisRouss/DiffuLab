@@ -230,6 +230,7 @@ class SprintDiT(Denoiser):
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
                 )
+                for _ in range(n_single_stream_blocks)
             ]
         )
 
