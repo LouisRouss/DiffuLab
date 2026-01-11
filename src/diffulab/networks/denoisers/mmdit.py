@@ -1,5 +1,6 @@
 # Recoded from scratch from https://arxiv.org/pdf/2403.03206, if you see any error please report it to the author of the repository
 
+import logging
 from typing import Any
 
 import torch
@@ -30,8 +31,7 @@ class DiTAttention(nn.Module):
     DiTAttention is a multi-head self attention mechanism with rotary positional embeddings.
 
     Args:
-        input_dim (int): Dimension of the input.
-        dim (int): Inner Attention dimension.
+        inner_dim (int): Dimension of the input.
         num_heads (int): Number of attention heads.
         rope_axes_dim (list[int]): List of dimensions for rotary positional embeddings.
 
@@ -54,28 +54,29 @@ class DiTAttention(nn.Module):
             Returns:
                 Tensor: output tensor.
     Example:
-        >>> dit_attention = DiTAttention(input_dim=512, dim=512, num_heads=8)
+        >>> dit_attention = DiTAttention(inner_dim=512, num_heads=8)
         >>> input_tensor = torch.randn(10, 25, 512)
         >>> cos_sin_rope = (torch.randn(25, 256), torch.randn(25, 256))
         >>> output = dit_attention(input_tensor, cos_sin_rope)
 
     """
 
-    def __init__(self, input_dim: int, dim: int, num_heads: int, rope_axes_dim: list[int]) -> None:
+    def __init__(self, inner_dim: int, num_heads: int, rope_axes_dim: list[int]) -> None:
         super().__init__()  # type: ignore
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads
+        self.head_dim = inner_dim // num_heads
         self.scale = self.head_dim**-0.5
 
-        self.qkv = nn.Linear(input_dim, 3 * dim)
-        self.qk_norm = QKNorm(dim)
+        self.qkv = nn.Linear(inner_dim, 3 * inner_dim, bias=False)
+        self.qk_norm = QKNorm(inner_dim)
         self.rope = RotaryPositionalEmbeddingNDim(axes_dim=rope_axes_dim)
-        self.proj_out = nn.Linear(dim, input_dim)
+        self.proj_out = nn.Linear(inner_dim, inner_dim, bias=False)
 
     def forward(
         self,
         input: Float[Tensor, "batch_size seq_len dim"],
         cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+        attn_mask: Bool[Tensor, "batch_size seq_len"] | Int[Tensor, "batch_size seq_len"] | None = None,
     ) -> Float[Tensor, "batch_size seq_len dim"]:
         input_q, input_k, input_v = self.qkv(input).chunk(3, dim=-1)
         input_q, input_k = self.qk_norm(input_q, input_k, input_v)
@@ -93,6 +94,7 @@ class DiTAttention(nn.Module):
             key=k,
             value=v,
             scale=self.scale,
+            attn_mask=attn_mask.bool() if attn_mask is not None else None,
         )
 
         attn_output = rearrange(attn_output, "b h n d -> b n (h d)")
@@ -107,9 +109,7 @@ class MMDiTAttention(nn.Module):
     MMDiTAttention is a multi-head attention mechanism with rotary positional embeddings.
 
     Args:
-        context_dim (int): Dimension of the context input.
-        input_dim (int): Dimension of the input.
-        dim (int): Inner Attention dimension.
+        inner_dim (int): Dimension of the input.
         num_heads (int): Number of attention heads.
         rope_axes_dim (list[int]): List of dimensions for rotary positional embeddings.
 
@@ -149,31 +149,29 @@ class MMDiTAttention(nn.Module):
 
     def __init__(
         self,
-        context_dim: int,
-        input_dim: int,
-        dim: int,
+        inner_dim: int,
         num_heads: int,
         rope_axes_dim: list[int],
     ):
         super().__init__()  # type: ignore
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads
+        self.head_dim = inner_dim // num_heads
         self.scale = self.head_dim**-0.5
 
-        self.qkv_input = nn.Linear(input_dim, 3 * dim)
-        self.qkv_context = nn.Linear(context_dim, 3 * dim)
-        self.qk_norm_input = QKNorm(dim)
-        self.qk_norm_context = QKNorm(dim)
+        self.qkv_input = nn.Linear(inner_dim, 3 * inner_dim, bias=False)
+        self.qkv_context = nn.Linear(inner_dim, 3 * inner_dim, bias=False)
+        self.qk_norm_input = QKNorm(inner_dim)
+        self.qk_norm_context = QKNorm(inner_dim)
 
         self.rope = RotaryPositionalEmbeddingNDim(axes_dim=rope_axes_dim)
 
-        self.input_proj_out = nn.Linear(dim, input_dim)
-        self.context_proj_out = nn.Linear(dim, context_dim)
+        self.input_proj_out = nn.Linear(inner_dim, inner_dim, bias=False)
+        self.context_proj_out = nn.Linear(inner_dim, inner_dim, bias=False)
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len_input input_dim"],
-        context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        input: Float[Tensor, "batch_size seq_len_input inner_dim"],
+        context: Float[Tensor, "batch_size seq_len_context inner_dim"],
         cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
         attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> tuple[Float[Tensor, "batch_size seq_len input_dim"], Float[Tensor, "batch_size seq_len context_dim"]]:
@@ -247,8 +245,7 @@ class DiTBlock(nn.Module):
 
     def __init__(
         self,
-        input_dim: int,
-        hidden_dim: int,
+        inner_dim: int,
         embedding_dim: int,
         num_heads: int,
         mlp_ratio: int,
@@ -256,23 +253,23 @@ class DiTBlock(nn.Module):
         use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
-        self.modulation = Modulation(embedding_dim, input_dim)
-        self.norm_1 = nn.LayerNorm(input_dim)
-        self.attention = DiTAttention(input_dim, hidden_dim, num_heads, rope_axes_dim=rope_axes_dim)
-        self.norm_2 = nn.LayerNorm(input_dim)
+        self.modulation = Modulation(embedding_dim, inner_dim)
+        self.norm_1 = nn.LayerNorm(inner_dim)
+        self.attention = DiTAttention(inner_dim, num_heads, rope_axes_dim=rope_axes_dim)
+        self.norm_2 = nn.LayerNorm(inner_dim)
         self.mlp_input = nn.Sequential(
-            nn.Linear(input_dim, mlp_ratio * input_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * input_dim, input_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.use_checkpoint = use_checkpoint
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len embedding_dim"],
+        input: Float[Tensor, "batch_size seq_len inner_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
         cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
-    ) -> Float[Tensor, "batch_size seq_len input_dim"]:
+    ) -> Float[Tensor, "batch_size seq_len inner_dim"]:
         """
         Forward pass of the DiTBlock applying modulation and attention mechanisms.
         Args:
@@ -318,9 +315,7 @@ class MMDiTBlock(nn.Module):
     attention, and multi-layer perceptron (MLP) operations on input and context tensors.
 
     Args:
-        context_dim (int): Dimension of the context tensor.
-        input_dim (int): Dimension of the input tensor.
-        hidden_dim (int): Dimension of the hidden layer in the attention mechanism.
+        inner_dim (int): Dimension of the input tensor.
         embedding_dim (int): Dimension of the embedding used in modulation.
         num_heads (int): Number of attention heads.
         mlp_ratio (int): Ratio used to determine the size of the MLP layers.
@@ -340,7 +335,7 @@ class MMDiTBlock(nn.Module):
                 Tuple[Tensor, Tensor]: The modulated input and context tensors.
 
     Example:
-        >>> mmdit_block = MMDiTBlock(context_dim=512, input_dim=512, hidden_dim=512, embedding_dim=512, num_heads=8, mlp_ratio=4)
+        >>> mmdit_block = MMDiTBlock(inner_dim=512, embedding_dim=512, num_heads=8, mlp_ratio=4, rope_axes_dim=[256])
         >>> input_tensor = torch.randn(10, 25, 512)
         >>> y = torch.randn(10, 512)
         >>> context_tensor = torch.randn(10, 32, 512)
@@ -352,9 +347,7 @@ class MMDiTBlock(nn.Module):
 
     def __init__(
         self,
-        context_dim: int,
-        input_dim: int,
-        hidden_dim: int,
+        inner_dim: int,
         embedding_dim: int,
         num_heads: int,
         mlp_ratio: int,
@@ -362,34 +355,34 @@ class MMDiTBlock(nn.Module):
         use_checkpoint: bool = False,
     ):
         super().__init__()  # type: ignore
-        self.modulation_context = Modulation(embedding_dim, context_dim)
-        self.modulation_input = Modulation(embedding_dim, input_dim)
+        self.modulation_context = Modulation(embedding_dim, inner_dim)
+        self.modulation_input = Modulation(embedding_dim, inner_dim)
 
-        self.context_norm_1 = nn.LayerNorm(context_dim)
-        self.input_norm_1 = nn.LayerNorm(input_dim)
+        self.context_norm_1 = nn.LayerNorm(inner_dim)
+        self.input_norm_1 = nn.LayerNorm(inner_dim)
 
-        self.attention = MMDiTAttention(context_dim, input_dim, hidden_dim, num_heads, rope_axes_dim=rope_axes_dim)
+        self.attention = MMDiTAttention(inner_dim, num_heads, rope_axes_dim=rope_axes_dim)
 
-        self.context_norm_2 = nn.LayerNorm(context_dim)
-        self.input_norm_2 = nn.LayerNorm(input_dim)
+        self.context_norm_2 = nn.LayerNorm(inner_dim)
+        self.input_norm_2 = nn.LayerNorm(inner_dim)
 
         self.mlp_context = nn.Sequential(
-            nn.Linear(context_dim, mlp_ratio * context_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * context_dim, context_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.mlp_input = nn.Sequential(
-            nn.Linear(input_dim, mlp_ratio * input_dim * 2),
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
             PackedSwiGLU(),
-            nn.Linear(mlp_ratio * input_dim, input_dim),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
         )
         self.use_checkpoint = use_checkpoint
 
     def forward(
         self,
-        input: Float[Tensor, "batch_size seq_len_input embedding_dim"],
+        input: Float[Tensor, "batch_size seq_len_input inner_dim"],
         y: Float[Tensor, "batch_size embedding_dim"],
-        context: Float[Tensor, "batch_size seq_len_context context_dim"],
+        context: Float[Tensor, "batch_size seq_len_context inner_dim"],
         cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
         attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
     ) -> tuple[
@@ -466,16 +459,92 @@ class MMDiTBlock(nn.Module):
         return modulated_input, modulated_context
 
 
+class MMDiTSingleStreamBlock(nn.Module):
+    def __init__(
+        self,
+        inner_dim: int,
+        embedding_dim: int,
+        num_heads: int,
+        mlp_ratio: int,
+        rope_axes_dim: list[int],
+        use_checkpoint: bool = False,
+    ):
+        super().__init__()  # type: ignore
+        self.mlp = nn.Sequential(
+            nn.Linear(inner_dim, mlp_ratio * inner_dim * 2, bias=False),
+            PackedSwiGLU(),
+            nn.Linear(mlp_ratio * inner_dim, inner_dim, bias=False),
+        )
+        self.attention = DiTAttention(inner_dim, num_heads, rope_axes_dim=rope_axes_dim)
+        self.modulation = nn.Sequential(nn.SiLU(), nn.Linear(embedding_dim, 3 * inner_dim))
+        self.norm = nn.LayerNorm(inner_dim)
+        self.use_checkpoint = use_checkpoint
+
+    def forward(
+        self,
+        input: Float[Tensor, "batch_size seq_len inner_dim"],
+        y: Float[Tensor, "batch_size embedding_dim"],
+        context: Float[Tensor, "batch_size seq_len inner_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+    ) -> tuple[
+        Float[Tensor, "batch_size seq_len_input inner_dim"], Float[Tensor, "batch_size seq_len_context inner_dim"]
+    ]:
+        return (
+            checkpoint(self._forward, *(input, y, context, cos_sin_rope, attn_mask), use_reentrant=False)
+            if self.use_checkpoint
+            else self._forward(input, y, context, cos_sin_rope, attn_mask)
+        )  # type: ignore
+
+    def _forward(
+        self,
+        input: Float[Tensor, "batch_size seq_len inner_dim"],
+        y: Float[Tensor, "batch_size embedding_dim"],
+        context: Float[Tensor, "batch_size seq_len inner_dim"],
+        cos_sin_rope: tuple[Float[Tensor, "seq_len dim/2"], Float[Tensor, "seq_len dim/2"]],
+        attn_mask: Bool[Tensor, "batch_size seq_len_context"] | Int[Tensor, "batch_size seq_len_context"] | None = None,
+    ):
+        latents = torch.cat([context, input], dim=1)
+        if attn_mask is not None:
+            attn_mask = torch.cat(
+                [
+                    attn_mask.bool(),
+                    torch.ones(attn_mask.size(0), input.size(1), device=attn_mask.device).bool(),
+                ],
+                dim=1,
+            )
+            attn_mask = attn_mask[:, None, None, :]
+
+        modulation = self.modulation(y)
+        if modulation.dim() == 2:
+            modulation = modulation[:, None, :]
+        alpha, beta, gamma = modulation.chunk(3, dim=-1)
+        modulated_latents = modulate(self.norm(latents), scale=alpha, shift=beta)
+
+        latents = (
+            latents
+            + (
+                self.attention(modulated_latents, cos_sin_rope=cos_sin_rope, attn_mask=attn_mask)
+                + self.mlp(modulated_latents)
+            )
+            * gamma
+        )
+        return latents[:, context.size(1) :, :], latents[:, : context.size(1), :]
+
+
 class ModulatedLastLayer(nn.Module):
     def __init__(self, embedding_dim: int, hidden_size: int, patch_size: int, out_channels: int):
         super().__init__()  # type: ignore
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
-        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
-        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(embedding_dim, 2 * hidden_size, bias=True))
+        self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels)
+        self.adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(embedding_dim, 2 * hidden_size))
 
     def forward(self, x: Float[Tensor, "batch_size seq_len dim"], vec: Float[Tensor, "batch_size dim"]) -> Tensor:
-        alpha, beta = self.adaLN_modulation(vec).chunk(2, dim=1)
-        x = modulate(self.norm_final(x), scale=alpha[:, None, :], shift=beta[:, None, :])
+        modulation = self.adaLN_modulation(vec)
+        if modulation.dim() == 2:
+            modulation = modulation[:, None, :]
+        alpha, beta = modulation.chunk(2, dim=-1)
+        x = modulate(self.norm_final(x), scale=alpha, shift=beta)
         x = self.linear(x)
         return x
 
@@ -499,9 +568,7 @@ class MMDiT(Denoiser):
         input_channels (int): Number of channels of the main input x. Default: 3.
         output_channels (int | None): Number of channels to predict. If None, equals `input_channels`.
             Default: None.
-        input_dim (int): Token/patch embedding width for the image stream. Also the hidden size used
-            before the final per-patch projection. Default: 4096.
-        hidden_dim (int): Inner attention dimension for attention projections. Default: 4096.
+        inner_dim (int): Token/patch embedding width for the stream. Default: 4096.
         embedding_dim (int): Conditioning embedding width (for timestep/labels/pooled context) used
             by modulation layers and the last prediction layer. Default: 4096.
         num_heads (int): Number of attention heads in each block. Default: 16.
@@ -539,14 +606,13 @@ class MMDiT(Denoiser):
         simple_dit: bool = False,
         input_channels: int = 3,
         output_channels: int | None = None,
-        input_dim: int = 4096,
-        hidden_dim: int = 4096,
+        inner_dim: int = 4096,
         embedding_dim: int = 4096,
         num_heads: int = 16,
         mlp_ratio: int = 4,
         patch_size: int = 16,
         depth: int = 38,
-        context_dim: int = 4096,
+        n_single_stream_blocks: int = 0,
         rope_base: int = 10_000,
         partial_rotary_factor: float = 1,
         rope_axes_dim: list[int] | None = None,
@@ -573,7 +639,7 @@ class MMDiT(Denoiser):
         self.n_classes = n_classes
         self.classifier_free = classifier_free
 
-        heads_dim = hidden_dim // num_heads
+        heads_dim = inner_dim // num_heads
         if not self.simple_dit:
             assert self.context_embedder is not None, "for MMDiT context embedder must be provided"
             assert isinstance(self.context_embedder.output_size, tuple) and all(
@@ -585,14 +651,14 @@ class MMDiT(Denoiser):
             if self.context_embedder.n_output == 2:
                 self.pooled_embedding = True
                 self.mlp_pooled_context = nn.Sequential(
-                    nn.Linear(self.context_embedder.output_size[0], embedding_dim),
+                    nn.Linear(self.context_embedder.output_size[0], embedding_dim * 2),
                     nn.SiLU(),
-                    nn.Linear(embedding_dim, embedding_dim),
+                    nn.Linear(embedding_dim * 2, embedding_dim),
                 )
-                self.context_embed = nn.Linear(self.context_embedder.output_size[1], context_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[1], inner_dim, bias=False)
             else:
                 assert self.context_embedder.n_output == 1
-                self.context_embed = nn.Linear(self.context_embedder.output_size[0], context_dim)
+                self.context_embed = nn.Linear(self.context_embedder.output_size[0], inner_dim, bias=False)
             if rope_axes_dim is None:
                 rope_axes_dim = [
                     int((partial_rotary_factor * heads_dim) // 3),  # L for text, set to 0 for image tokens
@@ -609,11 +675,16 @@ class MMDiT(Denoiser):
                     int((partial_rotary_factor * heads_dim) // 2),  # H
                     int((partial_rotary_factor * heads_dim) // 2),  # W
                 ]
+            if n_single_stream_blocks > 0:
+                logging.warning(
+                    "n_single_stream_blocks is ignored when simple_dit=True. All blocks are single-stream DiT blocks."
+                )
+                n_single_stream_blocks = depth
 
         self.rope_axes_dim = rope_axes_dim
         self.last_layer = ModulatedLastLayer(
             embedding_dim=embedding_dim,
-            hidden_size=input_dim,
+            hidden_size=inner_dim,
             patch_size=self.patch_size,
             out_channels=self.output_channels,
         )
@@ -623,14 +694,14 @@ class MMDiT(Denoiser):
             nn.Linear(embedding_dim, embedding_dim),
         )
 
-        self.conv_proj = nn.Conv2d(self.input_channels, input_dim, kernel_size=self.patch_size, stride=self.patch_size)
+        self.conv_proj = nn.Conv2d(
+            self.input_channels, inner_dim, kernel_size=self.patch_size, stride=self.patch_size, bias=False
+        )
 
         self.layers = nn.ModuleList(
             [
                 MMDiTBlock(
-                    context_dim=context_dim,
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
+                    inner_dim=inner_dim,
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
@@ -639,15 +710,25 @@ class MMDiT(Denoiser):
                 )
                 if not self.simple_dit
                 else DiTBlock(
-                    input_dim=input_dim,
-                    hidden_dim=hidden_dim,
+                    inner_dim=inner_dim,
                     embedding_dim=embedding_dim,
                     num_heads=num_heads,
                     mlp_ratio=mlp_ratio,
                     rope_axes_dim=self.rope_axes_dim,
                     use_checkpoint=use_checkpoint,
                 )
-                for _ in range(depth)
+                for _ in range(depth - n_single_stream_blocks)
+            ]
+            + [
+                MMDiTSingleStreamBlock(
+                    inner_dim=inner_dim,
+                    embedding_dim=embedding_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    rope_axes_dim=self.rope_axes_dim,
+                    use_checkpoint=use_checkpoint,
+                )
+                for _ in range(n_single_stream_blocks)
             ]
         )
 
@@ -751,7 +832,7 @@ class MMDiT(Denoiser):
             dim=-1,
         ).view(-1, 3)
 
-        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0)
+        pos_ids = torch.cat([text_pos_ids, img_pos_ids], dim=0).unsqueeze(0).repeat(x.size(0), 1, 1)
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         features: list[Tensor] | None = [] if intermediate_features else None
@@ -786,14 +867,22 @@ class MMDiT(Denoiser):
         if self.label_embed is not None:
             emb = emb + self.label_embed(y, p)
 
-        # pos_ids: [S, n_axes] positional IDs along each axis for rope
-        pos_ids = torch.stack(
-            torch.meshgrid(
-                [torch.arange(self.grid_size[0], device=x.device), torch.arange(self.grid_size[1], device=x.device)],
-                indexing="ij",
-            ),
-            dim=-1,
-        ).view(-1, 2)
+        # pos_ids: [B, S, n_axes] positional IDs along each axis for rope
+        pos_ids = (
+            torch.stack(
+                torch.meshgrid(
+                    [
+                        torch.arange(self.grid_size[0], device=x.device),
+                        torch.arange(self.grid_size[1], device=x.device),
+                    ],
+                    indexing="ij",
+                ),
+                dim=-1,
+            )
+            .view(-1, 2)
+            .unsqueeze(0)
+            .repeat(x.size(0), 1, 1)
+        )
         cos_sin_rope = get_cos_sin_ndim_grid(pos_ids, base=self.rope_base, axes_dim=self.rope_axes_dim)
 
         # Pass through each layer sequentially

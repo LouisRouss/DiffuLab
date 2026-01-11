@@ -1,0 +1,3 @@
+_target_: diffulab.networks.PrecomputedEmbedder
+path_null_embedding: "/path/to/null_embedding.pt"
+null_embedding_seq_len: 7

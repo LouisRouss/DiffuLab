@@ -1,5 +1,4 @@
-# MMDiT model configuration
-_target_: diffulab.networks.MMDiT
+_target_: diffulab.networks.SprintDiT
 simple_dit: true
 input_channels: 3
 output_channels: 3
@@ -8,7 +7,10 @@ embedding_dim: 512
 num_heads: 8
 mlp_ratio: 4
 patch_size: 2
-depth: 10
+encoder_depth: 2
+deep_layers_depth: 8
+decoder_depth: 2
 n_classes: 10
 classifier_free: false
 use_checkpoint: false
+drop_rate: 0.75

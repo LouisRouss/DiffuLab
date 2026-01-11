@@ -1,5 +1,4 @@
-from typing import Any, Callable, TypedDict
-from weakref import WeakKeyDictionary
+from typing import Any, TypedDict
 
 import torch
 from jaxtyping import Float
@@ -11,13 +10,6 @@ from diffulab.networks.repa.common import REPA
 from diffulab.networks.repa.dinov2 import DinoV2
 from diffulab.networks.repa.perceiver_resampler import PerceiverResampler
 from diffulab.training.losses.common import LossFunction
-
-try:
-    from torch._dynamo import disable as _dynamo_disable  # type: ignore
-except Exception:
-
-    def _dynamo_disable(fn: Any) -> Any:
-        return fn
 
 
 class ResamplerParams(TypedDict):
@@ -82,9 +74,9 @@ class RepaLoss(LossFunction):
         self,
         repa_encoder: str = "dinov2",
         encoder_args: dict[str, Any] = {},
-        alignment_layer: int = 8,
+        alignment_layer: int = 8,  # 0 for last layer
         denoiser_dimension: int = 256,
-        hidden_dim: int = 256,
+        hidden_dim: int = 1024,
         load_dino: bool = True,  # whether to load the DINO model weights, if precomputed features are used no need to load it
         embedding_dim: int = 768,  # dimension of the DINO features
         use_resampler: bool = False,  # whether to use the perceiver resampler
@@ -118,74 +110,59 @@ class RepaLoss(LossFunction):
                 **resampler_params,
             )
         self.alignment_layer = alignment_layer
-        self._handles: "WeakKeyDictionary[nn.Module, RemovableHandle]" = WeakKeyDictionary()
-        self._features: "WeakKeyDictionary[nn.Module, torch.Tensor]" = WeakKeyDictionary()
-        self._active_model: nn.Module | None = None
+        self._handles: dict[int, RemovableHandle] = {}
+        self._captured_features: dict[int, torch.Tensor] = {}
+        self._active_model_id: int | None = None
         self._hook_layer_idx = self.alignment_layer - 1
         self.coeff = coeff
 
-    @_dynamo_disable
-    def _make_forward_hook(self, key_model: MMDiT) -> Callable[[nn.Module, tuple[Any, ...], torch.Tensor], None]:
-        def _hook(_mod: nn.Module, _inp: tuple[Any, ...], out: torch.Tensor):
-            self._features[key_model] = out
+    def _make_hook(self, model_id: int):
+        """Create a hook that stores features keyed by model id."""
+
+        def _hook(_mod: nn.Module, _inp: tuple[Any, ...], out: torch.Tensor) -> None:
+            self._captured_features[model_id] = out
 
         return _hook
 
-    def _attach_once(self, model: MMDiT) -> None:
-        if model in self._handles:
+    def _attach_hook(self, model: MMDiT) -> None:
+        """Attach the forward hook to the target layer of the model (once per model)."""
+        model_id = id(model)
+        if model_id in self._handles:
             return
+
         layer = model.layers[self._hook_layer_idx]
-        handle = layer.register_forward_hook(self._make_forward_hook(model))  # type: ignore
-        self._handles[model] = handle
+        handle = layer.register_forward_hook(self._make_hook(model_id))  # type: ignore
+        self._handles[model_id] = handle
 
     def set_model(self, model: MMDiT) -> None:  # type: ignore
         """Register the model to capture features from a specific layer.
 
         This attaches a forward hook to the specified ``alignment_layer`` of the
-        provided model (only once). A forward pass on ``model`` must be executed
-        after calling this method so that features are captured before computing
-        the loss.
+        provided model (only once per model). A forward pass on ``model`` must be
+        executed after calling this method so that features are captured before
+        computing the loss.
 
         Args:
             model (MMDiT): The model whose intermediate features will be
                 aligned to the encoder features.
         """
-        self._attach_once(model)
-        self._active_model = model
+        self._attach_hook(model)
+        self._active_model_id = id(model)
 
     def _unregister_all(self) -> None:
-        for h in list(self._handles.values()):
-            h.remove()
+        for handle in self._handles.values():
+            handle.remove()
         self._handles.clear()
-        self._features.clear()
-        self._active_model = None
+        self._captured_features.clear()
+        self._active_model_id = None
 
     def forward(
         self,
         x0: Float[Tensor, "batch 3 H W"] | None = None,
         dst_features: Float[Tensor, "batch seq_len n_dim"] | None = None,
     ) -> Tensor:
-        """Compute the REPA cosine-similarity loss.
-
-        Either provide input images via ``x0`` to compute destination features
-        with the encoder, or pass precomputed ``dst_features`` directly.
-
-        Args:
-            x0 (Tensor): Input images of shape ``[B, 3, H, W]`` used to compute encoder
-                features when an encoder is available.
-            dst_features (Tensor): Precomputed encoder features of shape ``[B, S, D]``.
-                If provided, ``x0`` is ignored.
-
-        Returns:
-            Tensor: A scalar tensor containing the REPA loss.
-
-        Raises:
-            RuntimeError: If no captured features are available for the active
-                model. Ensure ``set_model(...)`` was called and a forward pass
-                on the model was executed first.
-            AssertionError: If neither ``x0`` nor ``dst_features`` is provided.
-        """
-        if self._active_model is None or self._active_model not in self._features:
+        """Compute the REPA cosine-similarity loss."""
+        if self._active_model_id is None or self._active_model_id not in self._captured_features:
             raise RuntimeError(
                 "REPA: no captured features for the active model. Did you call set_model(...) and run a forward pass?"
             )
@@ -193,12 +170,10 @@ class RepaLoss(LossFunction):
         if dst_features is None:
             assert self.repa_encoder is not None, "REPA encoder must be initialized to compute features."
             with torch.no_grad():
-                dst_features = self.repa_encoder(
-                    x0
-                )  # batch size seqlen embedding_dim # SEE HOW TO HANDLE THE PRE COMPUTING OF FEATURES
+                dst_features = self.repa_encoder(x0)
         assert dst_features is not None, "Destination features must be provided or computed."
 
-        src_features = self._features[self._active_model]
+        src_features = self._captured_features[self._active_model_id]
         if isinstance(src_features, tuple):
             src_features = src_features[0]
         projected_src_features: Tensor = self.proj(src_features)
